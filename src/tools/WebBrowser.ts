@@ -29,9 +29,9 @@ export class WebBrowser {
     private profileName: string;
     private profileHistoryPath?: string;
     private headlessMode: boolean = true;
-    private lastNavigatedUrl?: string;
+    public lastNavigatedUrl?: string;
     private tuner?: RuntimeTuner;
-    private browserEngine: BrowserEngine;
+    public browserEngine: BrowserEngine;
     private lightpandaEndpoint: string;
     private stateManager: BrowserStateManager;
     private _visionAnalyzer?: (screenshotPath: string, prompt: string) => Promise<string>;
@@ -1782,6 +1782,22 @@ export class WebBrowser {
                     await this.page!.click(finalSelector, { force: true, timeout: 3000 });
                     clicked = true;
                     logger.debug(`Browser: Force click succeeded for ${selector}`);
+                    
+                    // Extra step for Puppeteer: if it's contenteditable, ensure focus and caret
+                    if (this.browserEngine === 'puppeteer') {
+                        await this.p.evaluate((sel: string) => {
+                            const el = document.querySelector(sel) as HTMLElement;
+                            if (el && (el.getAttribute('contenteditable') === 'true' || el.tagName === 'BODY')) {
+                                el.focus();
+                                const range = document.createRange();
+                                const selection = window.getSelection();
+                                range.selectNodeContents(el);
+                                range.collapse(false); // End of content
+                                selection?.removeAllRanges();
+                                selection?.addRange(range);
+                            }
+                        }, finalSelector).catch(() => {});
+                    }
                 } catch (e2) {
                     lastError = e2;
                     logger.debug(`Browser: Force click failed for ${selector}: ${e2}`);
@@ -1889,50 +1905,106 @@ export class WebBrowser {
             const useSlowTyping = settings?.useSlowTyping || false;
             const slowTypingDelay = settings?.slowTypingDelay || 50;
 
-            // MULTI-STRATEGY TYPE: try progressively more approaches
             let typed = false;
             let lastError: any;
 
-            // Strategy 1: Playwright fill() — fast, works on standard inputs/textareas
-            if (!useSlowTyping) {
+            if (this.browserEngine === 'puppeteer') {
                 try {
-                    await this.page!.fill(finalSelector, text, { timeout: 5000 });
-                    typed = true;
-                } catch (e) {
-                    lastError = e;
-                    logger.debug(`Browser: fill() failed for ${selector}: ${e}`);
-                }
-            }
+                    // Puppeteer Strategy: Click to focus, then use keyboard.type
+                    // This is more reliable for Google Docs and custom editors
+                    await this.p.click(finalSelector).catch(() => {});
+                    await this.p.focus(finalSelector).catch(() => {});
+                    
+                    // Force focus via evaluate as well
+                    await this.p.evaluate((sel: string) => {
+                        const el = document.querySelector(sel) as HTMLElement;
+                        if (el) {
+                            el.focus();
+                            // If it's contenteditable, ensure it has focus and maybe click it again
+                            if (el.getAttribute('contenteditable') === 'true' || el.tagName === 'BODY') {
+                                const range = document.createRange();
+                                const sel = window.getSelection();
+                                range.selectNodeContents(el);
+                                range.collapse(false);
+                                sel?.removeAllRanges();
+                                sel?.addRange(range);
+                            }
+                        }
+                    }, finalSelector);
 
-            // Strategy 2: Click + keyboard.type() — works for custom inputs, contenteditable
-            if (!typed) {
-                try {
-                    // Try clicking with force to focus the element
-                    await this.page!.click(finalSelector, { force: true, timeout: 3000 });
-                    // Clear existing content first
-                    await this.page!.keyboard.press('Control+a');
-                    await this.page!.keyboard.press('Backspace');
-                    await this.page!.keyboard.type(text, { delay: slowTypingDelay });
-                    typed = true;
-                    logger.debug(`Browser: Click+type succeeded for ${selector}`);
+                    // Clear existing if it's a standard input/textarea or contenteditable
+                    const isInput = await this.p.evaluate((sel: string) => {
+                        const el = document.querySelector(sel);
+                        return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el?.getAttribute('contenteditable') === 'true';
+                    }, finalSelector);
 
-                    // Auto-learn: this domain needs slow typing
-                    if (this.lastNavigatedUrl && this.tuner) {
-                        try {
-                            const domain = new URL(this.lastNavigatedUrl).hostname.replace('www.', '');
-                            this.tuner.tuneBrowserForDomain(domain, { useSlowTyping: true }, 'Auto-learned: fill() failed');
-                        } catch {}
+                    if (isInput) {
+                        await this.p.keyboard.down('Control');
+                        await this.p.keyboard.press('a');
+                        await this.p.keyboard.up('Control');
+                        await this.p.keyboard.press('Backspace');
+                        await this.p.waitForTimeout(100);
                     }
+
+                    // For Google Docs, sometimes we need to click and just start typing
+                    await this.p.keyboard.type(text, { delay: slowTypingDelay });
+                    
+                    // Fallback for custom editors that don't react to keyboard.type() correctly
+                    const verified = await this.verifyFieldValue(finalSelector, text);
+                    if (!verified) {
+                        await this.p.evaluate(({ sel, val }) => {
+                            const el = document.querySelector(sel) as HTMLElement;
+                            if (el) {
+                                if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+                                    el.value = val;
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                } else if (el.getAttribute('contenteditable') === 'true') {
+                                    el.innerText = val;
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                }
+                            }
+                        }, { sel: finalSelector, val: text });
+                    }
+                    
+                    typed = true;
                 } catch (e) {
                     lastError = e;
-                    logger.debug(`Browser: Click+type failed for ${selector}: ${e}`);
+                }
+            } else {
+                // Playwright
+                // Strategy 1: Playwright fill() — fast, works on standard inputs/textareas
+                if (!useSlowTyping) {
+                    try {
+                        await this.page!.fill(finalSelector, text, { timeout: 5000 });
+                        typed = true;
+                    } catch (e) {
+                        lastError = e;
+                        logger.debug(`Browser: fill() failed for ${selector}: ${e}`);
+                    }
+                }
+
+                // Strategy 2: Click + keyboard.type() — works for custom inputs, contenteditable
+                if (!typed) {
+                    try {
+                        // Try clicking with force to focus the element
+                        await this.page!.click(finalSelector, { force: true, timeout: 3000 });
+                        // Clear existing content first
+                        await this.page!.keyboard.press('Control+a');
+                        await this.page!.keyboard.press('Backspace');
+                        await this.page!.keyboard.type(text, { delay: slowTypingDelay });
+                        typed = true;
+                        logger.debug(`Browser: Click+type succeeded for ${selector}`);
+                    } catch (e) {
+                        lastError = e;
+                    }
                 }
             }
 
-            // Strategy 3: JS-based focus + input event dispatch — for highly custom components
+            // Strategy 3: JS-based fallback — for highly custom components (cross-engine)
             if (!typed) {
                 try {
-                    const jsTyped = await this.page!.evaluate(({ sel, val }: { sel: string; val: string }) => {
+                    const jsTyped = await this.p.evaluate(({ sel, val }: { sel: string; val: string }) => {
                         const el = document.querySelector(sel) as HTMLElement;
                         if (!el) return false;
                         el.scrollIntoView({ block: 'center', behavior: 'instant' });
@@ -1941,7 +2013,7 @@ export class WebBrowser {
                             el.value = val;
                             el.dispatchEvent(new Event('input', { bubbles: true }));
                             el.dispatchEvent(new Event('change', { bubbles: true }));
-                        } else if (el.isContentEditable) {
+                        } else if (el.getAttribute('contenteditable') === 'true' || (el as any).isContentEditable) {
                             el.textContent = val;
                             el.dispatchEvent(new Event('input', { bubbles: true }));
                         } else {

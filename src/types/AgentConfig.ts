@@ -191,6 +191,8 @@ export const AgentConfigSchema = z.object({
     autopilotNoQuestions: coerceBool.default(false),
     autopilotNoQuestionsAllow: z.array(z.string()).default([]),
     autopilotNoQuestionsDeny: z.array(z.string()).default([]),
+    timeCapsuleMaxSteps: coerceNumber.default(500),
+    timeCapsuleMaxMessages: coerceNumber.default(100),
     progressFeedbackEnabled: coerceBool.default(true),
     progressFeedbackStepInterval: coerceNumber.default(4),
     progressFeedbackForceInitial: coerceBool.default(true),

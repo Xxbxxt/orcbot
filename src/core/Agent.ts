@@ -49,6 +49,7 @@ import { BookLogManager } from '../memory/BookLogManager';
 import { registerBookLogSkills } from '../skills/bookLogTools';
 import { registerChannelManagementSkills } from '../skills/channelManagement';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
+import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -92,6 +93,7 @@ export class Agent {
     public tforce: TForceSystem;
     public bookLog: BookLogManager;
     public channelRegistry: ChannelRegistry;
+    public blockReviewer: BlockReviewer;
     public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
@@ -285,6 +287,7 @@ export class Agent {
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.decisionEngine.setBookLog(this.bookLog);
         this.simulationEngine = new SimulationEngine(this.llm);
+        this.blockReviewer = new BlockReviewer(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json', {
             completedTTL: this.config.get('actionQueueCompletedTTL'),
             failedTTL: this.config.get('actionQueueFailedTTL'),
@@ -849,7 +852,32 @@ export class Agent {
             private registerInternalSkills() {
                 registerBookLogSkills(this);
                 registerChannelManagementSkills(this);
-        
+
+                this.skills.registerSkill({
+                    name: 'create_time_capsule',
+                    description: 'Starts a high-intensity, time-bounded "Time Capsule" task. In this mode, standard step limits and hard breaks are relaxed to allow the agent to go "all-in" on a complex task within a specific time window. (Admin only).',
+                    usage: 'create_time_capsule({ goal: string, duration_minutes: number })',
+                    handler: async (args: any) => {
+
+                        if (!this.isUserAdmin(args)) {
+                            return 'Error: Only admin users can create Time Capsules. This is a high-intensity mode reserved for authorized usage.';
+                        }
+                        const goal = args.goal;
+
+                        const duration_minutes = args.duration_minutes || 60;
+                        const limitMs = duration_minutes * 60 * 1000;
+                        const priority = 10; // High priority
+
+                        await this.pushTask(`[TIME CAPSULE: ${duration_minutes}m] ${goal}`, priority, {
+                            isTimeCapsule: true,
+                            timeLimitMs: limitMs,
+                            capsuleStartedAt: Date.now()
+                        });
+
+                        return `Time Capsule created for ${duration_minutes} minutes. Task: "${goal}". Going all-in now.`;
+                    }
+                });
+
                 // ═══════════════════════════════════════════            // Channel Messaging & Reaction Skills
         // Workers don't have channel connections — skip these.
         // ═══════════════════════════════════════════
@@ -4478,8 +4506,24 @@ Output JSON now:`;
                         if (res.startsWith('Error') || res.startsWith('Failed')) break;
                     }
 
+                    // VERIFICATION STEP: Take a fresh snapshot and confirm if the goal was actually met
+                    await this.browser.wait(500); // Small settle
                     const finalSnapshot = await this.browser.getSemanticSnapshot();
-                    return `Performed actions for goal: "${goal}"\n\nResults:\n${results.join('\n')}\n\n--- Page after perform ---\n${finalSnapshot}`;
+                    
+                    const verificationPrompt = `I was trying to achieve this goal: "${goal}"
+I performed these actions:
+${results.join('\n')}
+
+NEW PAGE STATE:
+${finalSnapshot.slice(0, 5000)}
+
+Did the actions actually result in the goal being achieved? 
+If typing was involved, check if the value is visible or if the page transitioned correctly.
+Respond with: "VERIFIED: <reason>" or "FAILED: <reason>"`;
+
+                    const verification = await this.llm.callFast(verificationPrompt, "You are a quality assurance expert. Verify if the browser goal was met.");
+                    
+                    return `Performed actions for goal: "${goal}"\n\nResults:\n${results.join('\n')}\n\nVerification: ${verification}\n\n--- Page after perform ---\n${finalSnapshot}`;
                 } catch (e) {
                     return `Failed to perform goal "${goal}": ${e}`;
                 }
@@ -7714,6 +7758,52 @@ The plugin handles all logic internally. See the plugin source for implementatio
         return false;
     }
 
+    /**
+     * REVIEW GATE for hard blocks or restrictions.
+     * Uses an LLM to decide if the agent should continue with a new strategy or stop.
+     */
+    private async reviewHardBlock(
+        action: Action,
+        error: string,
+        currentStep: number,
+        history: string,
+        failureType?: string,
+        lastToolUsed?: string
+    ): Promise<ReviewResult> {
+        try {
+            const task = action.payload?.description || 'Unknown task';
+            const context = {
+                actionId: action.id,
+                currentStep,
+                browserUrl: this.browser.lastNavigatedUrl,
+                browserEngine: this.browser.browserEngine,
+                failureType,
+                lastToolUsed
+            };
+
+            const result = await this.blockReviewer.reviewBlock(task, history, error, context);
+            
+            if (result.verdict === 'CONTINUE') {
+                logger.info(`BlockReviewer: Decision = CONTINUE — ${result.reasoning}`);
+                if (result.suggestedStrategy) {
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}-reviewer-strategy`,
+                        type: 'short',
+                        content: `[SYSTEM: BLOCK REVIEWER STRATEGY: ${result.suggestedStrategy}]`,
+                        metadata: { actionId: action.id, step: currentStep, strategy: result.suggestedStrategy }
+                    });
+                }
+            } else {
+                logger.warn(`BlockReviewer: Decision = STOP — ${result.reasoning}`);
+            }
+
+            return result;
+        } catch (e) {
+            logger.error(`Agent: Hard block review failed: ${e}`);
+            return { verdict: 'STOP', reasoning: `Reviewer failed: ${e}` };
+        }
+    }
+
     private async reviewForcedTermination(
         action: Action,
         reason: 'message_budget' | 'skill_frequency' | 'max_steps',
@@ -7736,51 +7826,20 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 return 'terminate';
             }
 
-            const recentContext = this.memory.getRecentContext();
-            const stepHistory = recentContext
-                .filter(m => m.content?.includes(action.id) || m.metadata?.actionId === action.id)
-                .map(m => m.content)
-                .join('\n')
-                .slice(-2000); // Last 2000 chars of step history for this action
+            const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+            const review = await this.reviewHardBlock(action, `Forced Termination: ${reason}. Details: ${details}`, currentStep, history);
 
-            const deliverySummary = deliveryContext
-                ? `Messages sent: ${deliveryContext.messagesSent}, Successful delivery: ${deliveryContext.anyUserDeliverySuccess}, Substantive deliveries: ${deliveryContext.substantiveDeliveriesSent}`
-                : 'Delivery status: unknown';
-
-            const reviewPrompt = `You are a task completion reviewer. A hard safety guardrail is about to TERMINATE a task. Your job is to decide if the task is truly done or if it should continue.
-
-ACTION ID: ${action.id}
-TASK: "${taskDescription}"
-TERMINATION REASON: ${reason} — ${details}
-CURRENT STEP: ${currentStep}
-DELIVERY STATUS: ${deliverySummary}
-
-RECENT STEP HISTORY (Focus ONLY on Action ${action.id}):
-${stepHistory || 'No step history available.'}
-
-RULES:
-- Focus ONLY on Action ${action.id}. Ignore "COMPLETED" status from previous actions or historical context.
-- If Action ${action.id} has already DELIVERED a SUBSTANTIVE result to the user (Substantive deliveries > 0), return "terminate".
-- If Action ${action.id} is a RESEARCH or DEEP WORK task and meaningful progress has been made but the FINAL RESULT hasn't been sent yet, return "continue".
-- If the agent is stuck in a loop for Action ${action.id} (same exact calls with same results), return "terminate".
-- If the agent hasn't delivered ANY substantive results for Action ${action.id} yet but has gathered data, return "continue".
-- Prefer "continue" when in doubt — it's better to let the agent wrap up than to leave the user hanging.
-
-Respond with ONLY valid JSON:
-{ "decision": "continue" | "terminate", "reason": "brief explanation" }`;
-
-            const response = await this.llm.callFast(reviewPrompt, 'You are a task reviewer. Respond only with valid JSON.');
-            const match = response.match(/\{[\s\S]*\}/);
-            if (match) {
-                const parsed = JSON.parse(match[0]);
-                const decision = parsed.decision === 'continue' ? 'continue' : 'terminate';
-                logger.info(`Agent: Forced termination review (${reason}): ${decision} — ${parsed.reason || 'no reason'}`);
-                return decision;
+            if (review.verdict === 'CONTINUE') {
+                logger.info(`Agent: Forced termination review (${reason}): CONTINUE — ${review.reasoning}`);
+                return 'continue';
             }
+
+            logger.warn(`Agent: Forced termination review (${reason}): TERMINATE — ${review.reasoning}`);
+            return 'terminate';
         } catch (e) {
-            logger.debug(`Agent: Forced termination review failed: ${e}. Defaulting to terminate.`);
+            logger.error(`Agent: Forced termination review failed: ${e}`);
+            return 'terminate';
         }
-        return 'terminate';
     }
 
     /**
@@ -11707,6 +11766,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const action = this.actionQueue.getNext();
         if (!action) return;
 
+        let forceBreak = false; // Declared here for the entire method scope
         this.isBusy = true;
         this.currentActionId = action.id;
         this.currentActionStartAt = Date.now();
@@ -11893,13 +11953,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 };
             };
 
+            const isTimeCapsule = action.payload?.isTimeCapsule === true;
+            const timeCapsuleLimitMs = action.payload?.timeLimitMs || 0;
+            const capsuleStartedAt = action.payload?.capsuleStartedAt || actionStartedAtMs;
+
             // Dynamic limits driven by task complexity classification
             const rawConfigMaxSteps = Number(this.config.get('maxStepsPerAction') || 30);
             const rawConfigMaxMessages = Number(this.config.get('maxMessagesPerAction') || 8);
+            const tcMaxSteps = Number(this.config.get('timeCapsuleMaxSteps') || 500);
+            const tcMaxMessages = Number(this.config.get('timeCapsuleMaxMessages') || 100);
+
             const configMaxSteps = Math.max(15, Number.isFinite(rawConfigMaxSteps) ? rawConfigMaxSteps : 30);
             const configMaxMessages = Math.max(6, Number.isFinite(rawConfigMaxMessages) ? rawConfigMaxMessages : 8);
 
-            if (rawConfigMaxSteps < 15 || rawConfigMaxMessages < 6) {
+            if (!isTimeCapsule && (rawConfigMaxSteps < 15 || rawConfigMaxMessages < 6)) {
                 logger.warn(`Agent: Runtime limits were too low (steps=${rawConfigMaxSteps}, messages=${rawConfigMaxMessages}). Applying safety floor to prevent premature looping (steps=${configMaxSteps}, messages=${configMaxMessages}).`);
             }
 
@@ -11908,8 +11975,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 simple: { steps: 12, messages: 4 },
                 standard: { steps: configMaxSteps, messages: configMaxMessages },
                 complex: { steps: configMaxSteps + 10, messages: Math.max(configMaxMessages, 12) },
+                timeCapsule: { steps: tcMaxSteps, messages: tcMaxMessages }
             };
-            const limits = COMPLEXITY_LIMITS[taskComplexity] || COMPLEXITY_LIMITS.standard;
+            const activeComplexity = isTimeCapsule ? 'timeCapsule' : taskComplexity;
+            const limits = COMPLEXITY_LIMITS[activeComplexity] || COMPLEXITY_LIMITS.standard;
             const MAX_STEPS = limits.steps;
             const MAX_MESSAGES = limits.messages;
             const isResearchTask = taskComplexity === 'complex';
@@ -11980,7 +12049,23 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
-            while (currentStep < MAX_STEPS) {
+            while (currentStep < limits.steps) {
+                // Time Capsule check: if we've reached the time limit, break
+                if (isTimeCapsule && timeCapsuleLimitMs > 0) {
+                    const elapsed = Date.now() - (capsuleStartedAt || actionStartedAtMs);
+                    if (elapsed >= timeCapsuleLimitMs) {
+                        logger.warn(`Agent: Time Capsule limit reached (${Math.round(elapsed / 1000 / 60)}m). Forcing termination review.`);
+                        const review = await this.reviewForcedTermination(
+                            action, 
+                            'max_steps', 
+                            currentStep, 
+                            `Time Capsule duration (${Math.round(timeCapsuleLimitMs / 1000 / 60)}m) expired.`,
+                            { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
+                        );
+                        if (review === 'terminate') break;
+                    }
+                }
+
                 currentStep++;
                 stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
@@ -12166,8 +12251,25 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (!hasDeepToolThisTurn) {
                         consecutiveNonDeepTurns++;
                         if (consecutiveNonDeepTurns >= 8) {
-                            logger.warn(`Agent: Detected planning loop (8 turns without deep action). Terminating action ${action.id}.`);
-                            break;
+                            logger.warn(`Agent: Detected planning loop (8 turns without deep action) in action ${action.id}. Triggering Hard Block Review.`);
+                            
+                            const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+                            const review = await this.reviewHardBlock(
+                                action, 
+                                `Planning Loop: 8 consecutive turns without a "Deep" (interaction) tool.`,
+                                currentStep,
+                                history,
+                                'Planning Loop'
+                            );
+
+                            if (review.verdict === 'STOP') {
+                                logger.warn(`Agent: Hard Block Reviewer decided to STOP action ${action.id} due to planning loop. Reason: ${review.reasoning}`);
+                                forceBreak = true;
+                                break;
+                            } else {
+                                logger.info(`Agent: Hard Block Reviewer decided to CONTINUE action ${action.id} despite planning loop. Strategy: ${review.suggestedStrategy}`);
+                                consecutiveNonDeepTurns = 0; // Reset counter
+                            }
                         }
                     } else {
                         consecutiveNonDeepTurns = 0;
@@ -12305,7 +12407,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         }
                     }
 
-                    let forceBreak = false;
+                    forceBreak = false;
                     let sentMessageCountInThisStep = 0;
                     let firstSentMessageInThisStep = '';
                     let toolsBlockedByCooldown = 0;
@@ -12585,13 +12687,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // Track consecutive failures per skill
                             skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
                             if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
-                                logger.warn(`Agent: Skill '${toolCall.name}' failed ${MAX_CONSECUTIVE_FAILURES} consecutive times in action ${action.id}. Aborting skill.`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-skill-failure-limit`,
-                                    type: 'short',
-                                    content: `[SYSTEM: Skill '${toolCall.name}' has thrown errors ${MAX_CONSECUTIVE_FAILURES} times in a row. Options:\n1. Use tweak_skill("${toolCall.name}", "<describe what keeps failing>") to generate a patched plugin replacement that loads immediately — this is the PREFERRED recovery for built-in skills with API/argument issues.\n2. Try a completely different approach or fallback skill.\n3. Inform the user the method is not working.]`,
-                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
-                                });
+                                logger.warn(`Agent: Skill '${toolCall.name}' failed ${MAX_CONSECUTIVE_FAILURES} consecutive times in action ${action.id}. Triggering Hard Block Review.`);
+                                
+                                const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+                                const review = await this.reviewHardBlock(action, String(toolResult), currentStep, history);
+
+                                if (review.verdict === 'STOP') {
+                                    logger.warn(`Agent: Hard Block Reviewer decided to STOP action ${action.id}. Reason: ${review.reasoning}`);
+                                    forceBreak = true;
+                                    break;
+                                } else {
+                                    // CONTINUE with suggested strategy
+                                    logger.info(`Agent: Hard Block Reviewer decided to CONTINUE action ${action.id}. Strategy: ${review.suggestedStrategy}`);
+                                    // Reset failure count so we can try the new strategy
+                                    skillFailCounts[toolCall.name] = 0;
+                                }
                             }
 
                             // PROGRESS FEEDBACK: Let user know we hit an error but are recovering.
@@ -13198,8 +13308,24 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (toolsWereFiltered && goalsNotMet) {
                         noToolsRetryCount++;
                         if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
-                            logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for filtered tools. Terminating action ${action.id}.`);
-                            break;
+                            logger.warn(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for filtered tools in action ${action.id}. Triggering Hard Block Review.`);
+                            
+                            const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+                            const review = await this.reviewHardBlock(
+                                action, 
+                                `Tool Validation Error: ${MAX_NO_TOOLS_RETRIES} consecutive attempts with invalid/filtered tool parameters.`,
+                                currentStep,
+                                history,
+                                'Tool Validation Error'
+                            );
+
+                            if (review.verdict === 'STOP') {
+                                logger.error(`Agent: Hard Block Reviewer decided to STOP action ${action.id} due to invalid tool calls. Reason: ${review.reasoning}`);
+                                break;
+                            } else {
+                                logger.info(`Agent: Hard Block Reviewer decided to CONTINUE action ${action.id} despite tool errors. Strategy: ${review.suggestedStrategy}`);
+                                noToolsRetryCount = 0; // Reset counter
+                            }
                         }
                         logger.warn(`Agent: ${(decision as any).toolsFiltered} tool(s) were filtered by validator but goals_met=false. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
 
