@@ -108,6 +108,46 @@ export class WebBrowser {
         this.traceSnapshots = debugOptions?.traceSnapshots !== false;
     }
 
+    private async setupPage(page: Page): Promise<void> {
+        // Selective resource blocking — only block tracking/ads, allow images and fonts
+        // since many sites need them for CAPTCHAs, icon-fonts, and layout
+        await page.route('**/*', route => {
+            const type = route.request().resourceType();
+            const url = route.request().url();
+
+            // Block known ad/tracking domains (never needed for functionality)
+            if (
+                url.includes('google-analytics') || url.includes('googletagmanager.com') ||
+                url.includes('doubleclick') || url.includes('facebook.com/tr') ||
+                url.includes('connect.facebook.net') || url.includes('analytics.') ||
+                url.includes('adservice.google') || url.includes('pagead2.googlesyndication')
+            ) {
+                return route.abort();
+            }
+
+            // Only block media (video/audio) — images and fonts are needed for
+            // CAPTCHA rendering, icon-font buttons, and layout-dependent sites
+            if (this._resourceBlockingEnabled && type === 'media') {
+                return route.abort();
+            }
+
+            route.continue();
+        });
+
+        // Capture console logs for debugging agent visibility
+        page.on('console', msg => {
+            const type = msg.type();
+            const text = msg.text();
+            // Only keep warnings and errors to reduce noise, unless it's explicitly logged info
+            if (['error', 'warning'].includes(type) || (text.length < 200)) {
+                this._consoleLogs.push(`[Console ${type}] ${text.slice(0, 300)}`);
+                if (this._consoleLogs.length > 50) this._consoleLogs.shift();
+            }
+        });
+
+        await this.ensureTracing();
+    }
+
     private async ensureBrowser(headlessOverride?: boolean) {
         // Lightpanda is always headless - ignore override for it
         if (this.browserEngine === 'lightpanda') {
@@ -122,7 +162,19 @@ export class WebBrowser {
             await this.close();
         }
 
-        if (!this.browser) {
+        // Check if we already have an active context/browser and page
+        if ((this.browser || this.context) && this._page && !this._page.isClosed()) {
+            return;
+        }
+
+        // If context exists but page is closed, just open a new one
+        if (this.context && (!this._page || this._page.isClosed())) {
+            this._page = await this.context.newPage();
+            await this.setupPage(this._page);
+            return;
+        }
+
+        if (!this.browser && !this.context) {
             // Use --disable-blink-features=AutomationControlled to reduce detection
             const profileRoot = this.profileDir || path.join(os.homedir(), '.orcbot', 'browser-profiles');
             const profileName = this.profileName || 'default';
@@ -133,8 +185,9 @@ export class WebBrowser {
             this.profileDir = profileRoot;
             this.profileName = profileName;
 
-            // Clean up stale Chromium lock files left by crashes / unclean shutdowns
+            // Clean up stale Chromium lock files and crash artifacts left by unclean shutdowns
             this.cleanStaleLockFiles(userDataDir);
+            this.cleanCrashArtifacts(userDataDir);
 
             // Configure viewport/UA based on mode
             const isMobile = this._viewportMode === 'mobile';
@@ -317,44 +370,7 @@ export class WebBrowser {
             });
 
             this._page = await this.context.newPage();
-            
-            // Selective resource blocking — only block tracking/ads, allow images and fonts
-            // since many sites need them for CAPTCHAs, icon-fonts, and layout
-            await this._page.route('**/*', route => {
-                const type = route.request().resourceType();
-                const url = route.request().url();
-
-                // Block known ad/tracking domains (never needed for functionality)
-                if (
-                    url.includes('google-analytics') || url.includes('googletagmanager.com') ||
-                    url.includes('doubleclick') || url.includes('facebook.com/tr') ||
-                    url.includes('connect.facebook.net') || url.includes('analytics.') ||
-                    url.includes('adservice.google') || url.includes('pagead2.googlesyndication')
-                ) {
-                    return route.abort();
-                }
-
-                // Only block media (video/audio) — images and fonts are needed for
-                // CAPTCHA rendering, icon-font buttons, and layout-dependent sites
-                if (this._resourceBlockingEnabled && type === 'media') {
-                    return route.abort();
-                }
-
-                route.continue();
-            });
-
-            // Capture console logs for debugging agent visibility
-            this._page.on('console', msg => {
-                const type = msg.type();
-                const text = msg.text();
-                // Only keep warnings and errors to reduce noise, unless it's explicitly logged info
-                if (['error', 'warning'].includes(type) || (text.length < 200)) {
-                    this._consoleLogs.push(`[Console ${type}] ${text.slice(0, 300)}`);
-                    if (this._consoleLogs.length > 50) this._consoleLogs.shift();
-                }
-            });
-
-            await this.ensureTracing();
+            await this.setupPage(this._page);
         }
     }
 
@@ -712,29 +728,20 @@ export class WebBrowser {
     private async waitForStablePage(timeout = 10000) {
         if (!this._page) return;
         try {
-            // Phase 1: Wait for basic load events (fast failover)
-            await Promise.all([
-                this._page.waitForLoadState('load', { timeout: Math.min(timeout, 5000) }),
-                this._page.waitForLoadState('domcontentloaded', { timeout: Math.min(timeout, 5000) }).catch(() => {})
-            ]);
+            // Phase 1: Wait for basic load events
+            // Focus on 'load' as the primary signal, with a shorter timeout for 'networkidle'
+            await this._page.waitForLoadState('load', { timeout: Math.min(timeout, 5000) });
+            
+            // Phase 2: Brief network idle wait (optional but helps with hydration)
+            await this._page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
         } catch (e) {
-            // Ignore timeouts here, we rely on DOM settle next
+            // Ignore timeouts, we'll proceed anyway
         }
 
-        // Phase 2: Event-driven DOM Settle (The "Safer" Wait)
-        // Waits until the page actually stops changing.
-        await this.waitForDomSettle(400, Math.min(timeout, 8000));
-
-        // Phase 3: Final check for meaningful content (SPA empty shell detection)
-        // If DOM settled but page is still empty, wait a bit longer to see if it hydrates
-        try {
-            const bodyLength = await this._page.evaluate(() => document.body?.innerText?.length || 0).catch(() => 0);
-            if (bodyLength < 50) {
-                // Page seems empty, give it one last chance (maybe a slow API call triggers render)
-                logger.debug('Browser: Page seems empty after settle, waiting extra...');
-                await this.waitForDomSettle(1000, 4000); 
-            }
-        } catch {}
+        // Phase 3: Short DOM settle (debounce)
+        // Standard Puppeteer/Playwright scripts often just use a fixed sleep or networkidle.
+        // We'll use a very short settle wait.
+        await this.waitForDomSettle(200, 3000);
     }
 
     public async navigate(url: string, waitSelectors: string[] = [], allowHeadfulRetry: boolean = true): Promise<string> {
@@ -1546,6 +1553,17 @@ export class WebBrowser {
     private async resolveSelector(selector: string): Promise<string | null> {
         if (!/^\d+$/.test(selector)) return selector;
 
+        await this.ensureBrowser();
+        if (!this._page) return null;
+
+        // Recovery for blank pages (common in SPAs or after crashes)
+        let url = this._page.url();
+        if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
+            logger.warn(`Browser: resolveSelector detected blank page, reloading ${this.lastNavigatedUrl}`);
+            await this._page.goto(this.lastNavigatedUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+            await this.waitForStablePage(5000);
+        }
+
         const refSelector = `[data-orcbot-ref="${selector}"]`;
 
         // Fast path: ref attribute still present
@@ -1553,51 +1571,61 @@ export class WebBrowser {
         if (exists) return refSelector;
 
         // Slow path: SPA re-rendered and cleared data-orcbot-ref attributes.
-        // Re-run the same selector logic that getSemanticSnapshot uses and re-attach refs.
+        // We'll try to re-attach refs based on the same discovery logic used in getSemanticSnapshot.
+        // This is necessary because many modern sites (React/Vue) blow away custom attributes on update.
         logger.debug(`Browser: Ref ${selector} not found in DOM, re-attaching refs...`);
-        const reattached = await this.page!.evaluate((targetRef: number) => {
-            const selectors = [
+        const reattachResult = await this.page!.evaluate((targetRef: number) => {
+            const interactiveSelectors = [
                 'a', 'button', 'input', 'select', 'textarea', 'summary',
-                '[contenteditable="true"]', '[tabindex]:not([tabindex="-1"])',
+                '[contenteditable="true"]',
+                '[tabindex]:not([tabindex="-1"])',
                 '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
-                '[role="switch"]', '[role="menuitem"]', '[role="tab"]', '[role="combobox"]',
-                '[role="listbox"]', '[role="option"]', '[role="textbox"]', '[role="searchbox"]',
-                '[onclick]', '[onmousedown]', '[onkeydown]'
+                '[role="switch"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
+                '[role="menuitemradio"]', '[role="tab"]', '[role="tablist"]',
+                '[role="combobox"]', '[role="listbox"]', '[role="option"]',
+                '[role="textbox"]', '[role="searchbox"]', '[role="spinbutton"]',
+                '[role="slider"]', '[role="progressbar"]', '[role="scrollbar"]',
+                '[role="tree"]', '[role="treeitem"]', '[role="grid"]', '[role="row"]',
+                '[role="cell"]', '[role="gridcell"]', '[role="columnheader"]', '[role="rowheader"]',
+                '[role="dialog"]', '[role="alertdialog"]', '[role="tooltip"]',
+                '[onclick]', '[onmousedown]', '[onmouseup]', '[onkeydown]', '[onkeyup]'
             ];
-            const elements = Array.from(document.querySelectorAll(selectors.join(','))) as HTMLElement[];
-            const visible = elements.filter(el => {
+
+            const elements = Array.from(document.querySelectorAll(interactiveSelectors.join(','))) as HTMLElement[];
+            const visibleElements = elements.filter(el => {
                 const rect = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                const isVisible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                if (!isVisible) return false;
+
+                // Check if element is actually on screen
+                if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) {
+                    return false;
+                }
+                return true;
             });
+
             let counter = 1;
-            for (const el of visible) {
+            let found = false;
+            for (const el of visibleElements) {
                 el.setAttribute('data-orcbot-ref', counter.toString());
-                if (counter === targetRef) return true;
+                if (counter === targetRef) {
+                    found = true;
+                }
                 counter++;
             }
-            return false;
-        }, parseInt(selector)).catch(() => false);
 
-        if (reattached) {
-            logger.debug(`Browser: Successfully re-attached ref ${selector}`);
+            const allRefs = Array.from(document.querySelectorAll('[data-orcbot-ref]')).map(el => el.getAttribute('data-orcbot-ref'));
+
+            return { found, count: visibleElements.length, title: document.title, allRefs };
+        }, parseInt(selector)).catch((e) => ({ found: false, count: 0, error: String(e), allRefs: [] }));
+
+        if (reattachResult && 'found' in reattachResult && reattachResult.found) {
+            logger.debug(`Browser: Re-attached ref ${selector} (${reattachResult.count} elements)`);
             return refSelector;
         }
 
-        // Second fallback: refresh semantic snapshot to re-attach refs, then re-check
-        // DISABLED: This causes reload loops on "blank" SPAs. Let the agent fail and retry cleanly.
-        /*
-        logger.warn(`Browser: Could not re-attach ref ${selector} — refreshing snapshot`);
-        try {
-            await this.getSemanticSnapshot();
-            const existsAfter = await this.page!.$(refSelector).catch(() => null);
-            if (existsAfter) return refSelector;
-        } catch (e) {
-            logger.debug(`Browser: Snapshot refresh failed while re-attaching ref ${selector}: ${e}`);
-        }
-        */
-
-        logger.warn(`Browser: Ref ${selector} is stale — element may no longer exist`);
+        logger.warn(`Browser: Ref ${selector} is stale. Found ${reattachResult && 'count' in reattachResult ? reattachResult.count : 0} elements. Error: ${reattachResult && 'error' in reattachResult ? reattachResult.error : 'none'}`);
         return null;
     }
 
@@ -1710,8 +1738,9 @@ export class WebBrowser {
 
             try {
                 // Reduced timeout to failover to force-click faster (1.5s instead of 5s)
-                await this.page!.click(finalSelector, { timeout: 1500 });
+                await this.page!.click(finalSelector, { timeout: 2000 });
                 clicked = true;
+                logger.debug(`Browser: Standard click succeeded for ${selector}`);
             } catch (e1) {
                 lastError = e1;
                 logger.debug(`Browser: Standard click failed for ${selector}: ${e1}`);
@@ -1725,27 +1754,34 @@ export class WebBrowser {
                     lastError = e2;
                     logger.debug(`Browser: Force click failed for ${selector}: ${e2}`);
 
-                    // Strategy 3: JavaScript click (bypasses Playwright entirely — works for custom web components)
+            // Strategy 3: JavaScript click (bypasses Playwright entirely — works for custom web components)
+            try {
+                const jsResult = await this._page!.evaluate(({ sel, ref }: { sel: string; ref: string }) => {
+                    // Try the specific ref-selector first, then the numeric ref directly
+                    const el = (document.querySelector(sel) || document.querySelector(`[data-orcbot-ref="${ref}"]`)) as HTMLElement;
+                    if (!el) return { success: false, error: 'Element not found in DOM', html: document.body.innerHTML.slice(0, 1000) };
                     try {
-                        const jsClicked = await this.page!.evaluate((sel: string) => {
-                            const el = document.querySelector(sel) as HTMLElement;
-                            if (!el) return false;
-                            // Scroll into view first
-                            el.scrollIntoView({ block: 'center', behavior: 'instant' });
-                            el.click();
-                            return true;
-                        }, finalSelector);
-
-                        if (jsClicked) {
-                            clicked = true;
-                            logger.debug(`Browser: JS click succeeded for ${selector}`);
-                        } else {
-                            lastError = new Error('Element not found for JS click');
-                        }
-                    } catch (e3) {
-                        lastError = e3;
-                        logger.debug(`Browser: JS click also failed for ${selector}: ${e3}`);
+                        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                        el.click();
+                        return { success: true };
+                    } catch (err) {
+                        return { success: false, error: String(err) };
                     }
+                }, { sel: finalSelector, ref: selector });
+
+                if (jsResult.success) {
+                    clicked = true;
+                    logger.debug(`Browser: JS click succeeded for ${selector}`);
+                } else {
+                    lastError = new Error(`JS click failed: ${jsResult.error}`);
+                    if (jsResult.html) {
+                        logger.debug(`Browser: DOM state during JS click failure: ${jsResult.html}`);
+                    }
+                }
+            } catch (e3) {
+                lastError = e3;
+                logger.debug(`Browser: JS click evaluation failed for ${selector}: ${e3}`);
+            }
                 }
             }
 
@@ -2337,6 +2373,14 @@ export class WebBrowser {
             await this.ensureBrowser();
             if (!this._page) return 'Error: No browser page.';
 
+            // Recovery for blank pages (common in SPAs or after crashes)
+            let url = this._page.url();
+            if ((!url || url === 'about:blank') && this.lastNavigatedUrl) {
+                logger.warn(`Browser: extractContent detected blank page, reloading ${this.lastNavigatedUrl}`);
+                await this._page.goto(this.lastNavigatedUrl, { waitUntil: 'load', timeout: 20000 }).catch(() => {});
+                await this.waitForStablePage(5000);
+            }
+
             const result = await this._page.evaluate(() => {
                 // Remove noise elements
                 const noiseSelectors = [
@@ -2423,7 +2467,9 @@ export class WebBrowser {
                 return { title, url, text: cleaned, length: cleaned.length };
             });
 
-            if (!result || result.length < 20) {
+            if (!result || !result.text || result.text.length < 20) {
+                const debugInfo = result ? ` (title="${result.title}", textLen=${result.text?.length || 0})` : ' (no result)';
+                logger.warn(`Browser: extractContent failed to find meaningful text${debugInfo}`);
                 return 'Error: Could not extract meaningful content from this page.';
             }
 
