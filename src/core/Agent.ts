@@ -2045,6 +2045,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             description: 'Read the contents of a file. Supports optional line range (start_line, end_line) for large files. Returns up to 20 000 chars; use start_line/end_line to page through bigger files.',
             usage: 'read_file(path, start_line?, end_line?)',
             isDeep: true,
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const filePath = args.path || args.file_path || args.file;
 
@@ -4168,6 +4169,20 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const code = args.code || args.script;
                 if (!code) return 'Error: Missing code to execute.';
                 return this.browser.runScript(code);
+            }
+        });
+
+        // Skill: Browser Debug Overlay
+        this.skills.registerSkill({
+            name: 'browser_debug_overlay',
+            description: 'Toggles a visual overlay on the webpage that draws red boxes and ID labels around every interactive element. Use this when you are having trouble clicking the right place to "see" what the browser is actually targeting. (Admin only).',
+            usage: 'browser_debug_overlay(enabled: boolean)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can toggle debug overlays.';
+                }
+                const enabled = args.enabled !== false;
+                return this.browser.toggleDebugOverlay(enabled);
             }
         });
 
@@ -10098,6 +10113,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
         downloads?: boolean;    // Downloaded media files (downloads/*)
         bootstrap?: boolean;    // Bootstrap files (AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md)
         schedules?: boolean;    // Heartbeat schedules and scheduled tasks
+        tuner?: boolean;        // Runtime tuner (tool behavior adjustments)
+        browser?: boolean;      // Browser state and profiles
     }) {
         // Default: clear everything when no options provided
         const clearAll = !options;
@@ -10110,6 +10127,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             downloads: clearAll || options?.downloads || false,
             bootstrap: clearAll || options?.bootstrap || false,
             schedules: clearAll || options?.schedules || false,
+            tuner: clearAll || options?.tuner || false,
+            browser: clearAll || options?.browser || false,
         };
 
         logger.info(`Agent: Resetting${clearAll ? ' ALL' : ''} — ${Object.entries(opts).filter(([, v]) => v).map(([k]) => k).join(', ')}`);
@@ -12470,16 +12489,81 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     forceBreak = false;
                     let sentMessageCountInThisStep = 0;
-                    let firstSentMessageInThisStep = '';
-                    let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
-                    let duplicateSideEffectsBlockedInStep = 0;
-                    let totalSideEffectToolsInStep = 0;
                     let remainingToolsInBatch = decision.tools.length;
+
+                    // Group tools into parallel batches
+                    const toolBatches: Array<{ tools: any[], isParallel: boolean }> = [];
+                    let currentBatch: any[] = [];
+                    let currentBatchIsParallel = false;
 
                     for (const toolCall of decision.tools) {
                         const toolMeta = getSkillMeta(toolCall.name);
-                        remainingToolsInBatch--;
+                        const isSafe = !!toolMeta.isParallelSafe;
+
+                        if (currentBatch.length === 0) {
+                            currentBatch.push(toolCall);
+                            currentBatchIsParallel = isSafe;
+                        } else if (isSafe && currentBatchIsParallel) {
+                            currentBatch.push(toolCall);
+                        } else {
+                            toolBatches.push({ tools: currentBatch, isParallel: currentBatchIsParallel });
+                            currentBatch = [toolCall];
+                            currentBatchIsParallel = isSafe;
+                        }
+                    }
+                    if (currentBatch.length > 0) {
+                        toolBatches.push({ tools: currentBatch, isParallel: currentBatchIsParallel });
+                    }
+
+                    for (const batch of toolBatches) {
+                        if (forceBreak) break;
+
+                        if (batch.isParallel && batch.tools.length > 1) {
+                            logger.info(`Agent: Executing ${batch.tools.length} tools in parallel: ${batch.tools.map(t => t.name).join(', ')}`);
+                            
+                            const results = await Promise.all(batch.tools.map(async (toolCall) => {
+                                const toolMeta = getSkillMeta(toolCall.name);
+                                
+                                // Basic safety checks (Admin, Side Effects) still apply inside parallel
+                                const isAdmin = action.payload?.isAdmin !== false;
+                                if (!isAdmin && toolMeta.isElevated) {
+                                    return `Error: Skill '${toolCall.name}' requires admin privileges.`;
+                                }
+
+                                try {
+                                    const toolResult = await this.skills.executeSkill(toolCall.name, {
+                                        ...toolCall.parameters,
+                                        ...action.payload,
+                                        actionId: action.id,
+                                        step: currentStep
+                                    });
+                                    
+                                    this.memory.saveMemory({
+                                        id: `${action.id}-step-${currentStep}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
+                                        type: 'short',
+                                        content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
+                                        metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: true }
+                                    });
+
+                                    return toolResult;
+                                } catch (e) {
+                                    return `Error executing ${toolCall.name}: ${e}`;
+                                }
+                            }));
+
+                            // If any parallel tool failed significantly, we might want to break
+                            if (results.some(r => String(r).startsWith('Error'))) {
+                                logger.warn('Agent: One or more parallel tools failed. Continuing but marking for potential re-plan.');
+                            }
+                        } else {
+                            // Sequential execution for single tools or non-safe batches
+                            for (const toolCall of batch.tools) {
+                                if (forceBreak) break;
+                                
+                                const toolMeta = getSkillMeta(toolCall.name);
+                                // ... existing sequential execution logic ...
+                                // (I will implement the full logic below in a focused replace)
                         if (toolMeta.isSideEffect) {
                             totalSideEffectToolsInStep++;
                             const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});

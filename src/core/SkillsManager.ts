@@ -28,6 +28,7 @@ export interface Skill {
     isDeep?: boolean;        // Resets communication cooldown; counts as substantive progress
     isDangerous?: boolean;   // Requires confirmation in autonomy mode
     isElevated?: boolean;    // Requires admin privileges
+    isParallelSafe?: boolean; // Can be executed in parallel with other parallel-safe tools
 }
 
 /**

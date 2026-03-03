@@ -1409,7 +1409,7 @@ export class WebBrowser {
                         }
 
                         const typeAttr = (el as HTMLInputElement).type ? ` (${(el as HTMLInputElement).type})` : '';
-                        result.push(`${role}${typeAttr} "${label.replace(/\n/g, ' ')}" [ref=${refId}] [pos=${pos}]`);
+                        result.push(`${role}${typeAttr} "${label.replace(/\n/g, ' ')}" [ref=${refId}] [pos=${pos}] [bbox=${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)},${Math.round(rect.height)}]`);
                     });
 
                     const headings = Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10);
@@ -3280,16 +3280,6 @@ export class WebBrowser {
      */
     public getDiagnostics(): any {
         return this.stateManager.getDiagnostics();
-    }
-
-    /**
-     * Reset browser state tracking (useful after completing a task)
-     */
-    public resetState(): void {
-        this.stateManager.reset();
-        this._blankUrlHistory.clear();
-        this._resourceBlockingEnabled = true;
-        logger.info('Browser state reset');
     }
 
     /**
