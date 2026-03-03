@@ -24,8 +24,7 @@ async function provision() {
     const agentId = `saas_${params.customerName.toLowerCase().replace(/\s+/g, '_')}_${uuidv4().slice(0, 8)}`;
     const baseDir = path.join(os.homedir(), '.orcbot', 'orchestrator', 'instances', agentId);
     
-    console.log(`
-🚀 Provisioning SaaS Bot for ${params.customerName}...`);
+    console.log(`\n🚀 Provisioning SaaS Bot for ${params.customerName}...`);
     console.log(`📂 Creating isolated directory: ${baseDir}`);
 
     if (!fs.existsSync(baseDir)) {
@@ -50,25 +49,62 @@ async function provision() {
         agentRole: params.blueprint,
         telegramToken: params.token,
         allowWorkerChannels: true,
+        telegramAutoReplyEnabled: true,
+        whatsappAutoReplyEnabled: true,
+        discordAutoReplyEnabled: true,
+        slackAutoReplyEnabled: true,
+        emailAutoReplyEnabled: true,
         adminUsers: {
             telegram: [params.userId]
         },
         safeMode: params.blueprint === 'architect' ? false : true,
         sudoMode: params.blueprint === 'architect' ? true : false,
         modelName: 'gemini-2.0-flash', // Default to fast/cheap for SaaS
-        systemPromptSuffix: `
-
-CUSTOMER_CONTEXT: This bot is owned and managed by ${params.customerName}. Always prioritize their goals.`
+        systemPromptSuffix: `\n\nCUSTOMER_CONTEXT: This bot is owned and managed by ${params.customerName}. Always prioritize their goals.`
     };
 
     fs.writeFileSync(path.join(baseDir, 'orcbot.config.yaml'), yaml.stringify(config));
     console.log(`⚙️  Configured: orcbot.config.yaml (Locked to User: ${params.userId})`);
 
-    // 4. Update Orchestrator Registry (Optional but helpful for visibility)
-    console.log(`
-✅ SUCCESS: SaaS Bot "${agentId}" is ready!`);
-    console.log(`
-Next steps:`);
+    // 4. Register in agents.json so Orchestrator sees it
+    const registryPath = path.join(os.homedir(), '.orcbot', 'orchestrator', 'agents.json');
+    let registry: any[] = [];
+    if (fs.existsSync(registryPath)) {
+        try {
+            registry = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+        } catch (e) {
+            console.error(`Warning: Failed to read registry at ${registryPath}: ${e}`);
+        }
+    }
+
+    // Check if already exists
+    if (!registry.find(a => a.id === agentId)) {
+        registry.push({
+            id: agentId,
+            name: config.agentName,
+            role: config.agentRole,
+            parentId: 'primary',
+            capabilities: ['execute', 'browse', 'web_search', 'read_file'],
+            status: 'idle',
+            currentTask: null,
+            createdAt: new Date().toISOString(),
+            lastActiveAt: new Date().toISOString(),
+            memoryPath: path.join(baseDir, 'memory.json'),
+            profilePath: path.join(baseDir, 'profile.json')
+        });
+        
+        // Ensure memory file exists
+        if (!fs.existsSync(path.join(baseDir, 'memory.json'))) {
+            fs.writeFileSync(path.join(baseDir, 'memory.json'), JSON.stringify({ short: [], episodic: [], semantic: [] }, null, 2));
+        }
+
+        fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+        console.log(`📝 Registered in: ${registryPath}`);
+    }
+
+    // 5. Final Success Message
+    console.log(`\n✅ SUCCESS: SaaS Bot "${agentId}" is ready!`);
+    console.log(`\nNext steps:`);
     console.log(`1. Run 'orcbot agent start ${agentId}' to activate.`);
     console.log(`2. The customer can now message their bot at @YourBotHandle.`);
 }

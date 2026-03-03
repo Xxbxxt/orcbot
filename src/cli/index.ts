@@ -6185,6 +6185,151 @@ async function showConfigMenu() {
     await showConfigMenu();
 }
 
+/**
+ * Fetch and display skills from the community vault (github.com/fredabila/orcbot-skills).
+ */
+async function showCommunitySkillsMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🌐', 'Community Skills');
+    console.log(gray('  Fetching latest skills from fredabila/orcbot-skills...'));
+
+    try {
+        const repoUrl = 'https://github.com/fredabila/orcbot-skills';
+        const apiUrl = 'https://api.github.com/repos/fredabila/orcbot-skills/contents/skills';
+        
+        // Use global fetch (Node 18+)
+        const response = await fetch(apiUrl, {
+            headers: { 'User-Agent': 'OrcBot-CLI' }
+        });
+
+        if (!response.ok) {
+            throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+        }
+
+        const items = await response.json() as any[];
+        const skills = items.filter(item => item.type === 'dir').map(item => item.name);
+
+        if (skills.length === 0) {
+            console.log(yellow('\n  No skills found in the community repository.'));
+            await waitKeyPress();
+            return;
+        }
+
+        console.log(dim(`\n  Found ${skills.length} community skills in the vault:\n`));
+
+        const choices = skills.map(name => ({
+            name: `  📦 ${bold(name)}`,
+            value: name
+        }));
+        choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
+        choices.push({ name: dim('  ← Back'), value: 'back' });
+
+        const { selection } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'selection',
+                message: 'Select a community skill:',
+                choices,
+                pageSize: 15
+            }
+        ]);
+
+        if (selection === 'back') return;
+
+        // --- New Submenu for Skill Actions ---
+        const skillName = selection;
+        const skillUrl = `${repoUrl}/tree/main/skills/${skillName}`;
+        const rawSkillUrl = `https://raw.githubusercontent.com/fredabila/orcbot-skills/main/skills/${skillName}/SKILL.md`;
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: `Skill: ${bold(skillName)}`,
+                choices: [
+                    { name: `  📖 ${bold('View Details')} ${dim('(Description & Requirements)')}`, value: 'view' },
+                    { name: `  📥 ${bold('Install Skill')} ${dim('to this OrcBot')}`, value: 'install' },
+                    new inquirer.Separator(),
+                    { name: dim('  ← Back to list'), value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'back') return showCommunitySkillsMenu();
+
+        if (action === 'view') {
+            console.log(gray('\n  Fetching skill details...'));
+            try {
+                const res = await fetch(rawSkillUrl);
+                if (!res.ok) throw new Error(`Could not fetch SKILL.md (${res.status})`);
+                const content = await res.text();
+                const parsed = agent.skills.parseSkillMd(content);
+
+                if (parsed) {
+                    console.clear();
+                    banner();
+                    sectionHeader('📖', `Skill: ${skillName}`);
+                    
+                    console.log(`\n  ${bold('Description:')}`);
+                    console.log(`  ${parsed.meta.description}\n`);
+
+                    if (parsed.meta.orcbot?.triggerPatterns) {
+                        console.log(`  ${bold('Auto-Activation Patterns:')}`);
+                        parsed.meta.orcbot.triggerPatterns.forEach(p => console.log(`  - ${dim(p)}`));
+                        console.log('');
+                    }
+
+                    if (parsed.meta.allowedTools) {
+                        const tools = Array.isArray(parsed.meta.allowedTools) ? parsed.meta.allowedTools : [parsed.meta.allowedTools];
+                        console.log(`  ${bold('Allowed Tools:')}`);
+                        tools.forEach(t => console.log(`  - ${dim(t)}`));
+                        console.log('');
+                    }
+
+                    if (parsed.meta.metadata) {
+                        console.log(`  ${bold('Metadata:')}`);
+                        Object.entries(parsed.meta.metadata).forEach(([k, v]) => console.log(`  - ${k}: ${dim(String(v))}`));
+                        console.log('');
+                    }
+
+                    const { proceed } = await inquirer.prompt([
+                        { type: 'confirm', name: 'proceed', message: 'Install this skill now?', default: true }
+                    ]);
+                    if (!proceed) return showCommunitySkillsMenu();
+                } else {
+                    console.log(yellow('\n  This skill uses a loose format. Full content:'));
+                    console.log(dim(content.split('\n').slice(0, 10).join('\n') + '...'));
+                    const { proceed } = await inquirer.prompt([
+                        { type: 'confirm', name: 'proceed', message: 'Install anyway?', default: true }
+                    ]);
+                    if (!proceed) return showCommunitySkillsMenu();
+                }
+            } catch (e: any) {
+                console.log(red(`\n  Failed to load preview: ${e.message}`));
+                await waitKeyPress();
+                return showCommunitySkillsMenu();
+            }
+        }
+
+        // Proceed to installation
+        console.log(`\n📦 Installing "${skillName}" from community vault...`);
+        const result = await agent.skills.installSkillFromUrl(skillUrl);
+        
+        if (result.success) {
+            console.log(green(`\n✅ ${result.message}`));
+        } else {
+            console.log(red(`\n❌ ${result.message}`));
+        }
+        await waitKeyPress();
+
+    } catch (e: any) {
+        console.log(red(`\n❌ Failed to fetch community skills: ${e.message}`));
+        console.log(dim(`   You can manually install from: https://github.com/fredabila/orcbot-skills`));
+        await waitKeyPress();
+    }
+}
+
 async function showSkillsMenu() {
     console.clear();
     banner();
@@ -6234,6 +6379,10 @@ async function showSkillsMenu() {
     // Section: Core Skills
     choices.push(new inquirer.Separator(gradient(`  ─── Core Skills (${coreSkills.length}) ─────────────`, [c.gray, c.gray])));
     choices.push({ name: `  📋 ${bold('Show all ' + coreSkills.length + ' core skills')}`, value: 'list_core' });
+
+    // Section: Community
+    choices.push(new inquirer.Separator(gradient('  ─── Community ────────────────────', [c.magenta, c.gray])));
+    choices.push({ name: `  🌐 ${bold('Browse Community Skills')} ${dim('(orcbot-skills)')}`, value: 'browse_community' });
 
     // Actions
     choices.push(new inquirer.Separator(gradient('  ─── Actions ──────────────────────', [c.green, c.gray])));
@@ -6357,6 +6506,12 @@ async function showSkillsMenu() {
             console.log(`    Usage: ${s.usage}\n`);
         }
         await waitKeyPress();
+        return showSkillsMenu();
+    }
+
+    // ── Browse Community Skills ──
+    if (selection === 'browse_community') {
+        await showCommunitySkillsMenu();
         return showSkillsMenu();
     }
 

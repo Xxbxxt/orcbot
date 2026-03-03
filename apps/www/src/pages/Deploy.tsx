@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import Header from '../components/Header';
 import '../index.css';
 import './Deploy.css';
 
@@ -17,7 +18,6 @@ const providers: { id: Provider; name: string; icon: string; available: boolean 
 function Deploy() {
   const [selectedProvider, setSelectedProvider] = useState<Provider>('docker');
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const copyToClipboard = (text: string, index: number) => {
     navigator.clipboard.writeText(text);
@@ -175,37 +175,9 @@ ufw enable`,
       <div className="backdrop" />
       <div className="noise-overlay" />
 
-      <header className="deploy-header">
-        <div className="deploy-header-bg">
-          <div className="gradient-orb orb-1" />
-          <div className="gradient-orb orb-2" />
-        </div>
+      <Header scrolled={true} />
 
-        <nav className="nav">
-          <Link to="/" className="logo">
-            <span className="logo-icon">▲</span>
-            <span className="logo-text">OrcBot</span>
-          </Link>
-          <button
-            className="mobile-toggle"
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            aria-label="Toggle menu"
-          >
-            <span className={`hamburger ${mobileMenuOpen ? 'open' : ''}`} />
-          </button>
-          <div className={`nav-center ${mobileMenuOpen ? 'open' : ''}`}>
-            <Link to="/">Home</Link>
-            <Link to="/#capabilities">Capabilities</Link>
-            <Link to="/deploy" className="active">Deploy</Link>
-            <Link to="/robotics">Robotics</Link>
-          </div>
-          <div className="nav-end">
-            <a className="nav-btn primary" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-              GitHub
-            </a>
-          </div>
-        </nav>
+      <header className="deploy-header">
 
         <div className="deploy-hero-grid">
           <div className="deploy-hero-copy">

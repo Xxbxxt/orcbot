@@ -38,9 +38,9 @@ export interface AgentSkillMeta {
     name: string;
     description: string;
     license?: string;
-    compatibility?: string;
+    compatibility?: string | string[];
     metadata?: Record<string, string>;
-    allowedTools?: string;
+    allowedTools?: string | string[];
     // OrcBot extensions
     orcbot?: {
         autoActivate?: boolean;           // Activate by default on startup
@@ -413,87 +413,137 @@ export class SkillsManager {
      * Parse a SKILL.md file into frontmatter metadata and body instructions.
      */
     public parseSkillMd(content: string): { meta: AgentSkillMeta; body: string } | null {
-        const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-        if (!fmMatch) return null;
+        // More tolerant regex for frontmatter (handles trailing spaces after ---)
+        const fmMatch = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/);
+        
+        if (!fmMatch) {
+            // FALLBACK: Parse loose Markdown if no frontmatter found
+            const lines = content.split(/\r?\n/);
+            let name = '';
+            let description = '';
+            
+            // Try to find first H1 heading for name
+            for (const line of lines) {
+                const h1Match = line.match(/^#\s+(.*)$/);
+                if (h1Match) {
+                    name = h1Match[1].trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                    break;
+                }
+            }
+
+            // Try to find first non-empty, non-heading paragraph for description
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---')) {
+                    description = trimmed;
+                    if (description.length > 200) description = description.slice(0, 197) + '...';
+                    break;
+                }
+            }
+
+            if (name && description) {
+                return {
+                    meta: { name, description } as AgentSkillMeta,
+                    body: content.trim()
+                };
+            }
+            return null;
+        }
 
         const fmText = fmMatch[1];
         const body = fmMatch[2].trim();
 
-        // Simple YAML parser for frontmatter (avoids adding yaml dependency to this module)
-        const meta: any = {};
-        let currentKey = '';
-        let inOrcbot = false;
-        let inArray = false;
-        let arrayKey = '';
-        const orcbot: any = {};
-        const metadataMap: Record<string, string> = {};
-        let inMetadata = false;
+        const meta: any = {
+            metadata: {},
+            orcbot: {}
+        };
+        
+        let currentSection: any = meta;
+        let currentArray: any[] | null = null;
+        let currentArrayKey = '';
 
-        for (const line of fmText.split('\n')) {
-            const trimmed = line.trimEnd();
+        const lines = fmText.split(/\r?\n/);
+        for (const line of lines) {
+            const trimmedLine = line.trimEnd();
+            if (!trimmedLine) continue;
 
-            // Array item
-            if (trimmed.match(/^\s+-\s+/)) {
-                const val = trimmed.replace(/^\s+-\s+/, '').replace(/^['"]|['"]$/g, '');
-                if (inArray && arrayKey) {
-                    if (inOrcbot) {
-                        if (!orcbot[arrayKey]) orcbot[arrayKey] = [];
-                        orcbot[arrayKey].push(val);
-                    }
+            // Array item (e.g., "  - item")
+            const arrayMatch = trimmedLine.match(/^\s*-\s+(.*)$/);
+            if (arrayMatch) {
+                const val = arrayMatch[1].trim().replace(/^['"]|['"]$/g, '');
+                if (currentArray) {
+                    currentArray.push(val);
+                } else if (currentArrayKey) {
+                    if (!currentSection[currentArrayKey]) currentSection[currentArrayKey] = [];
+                    currentSection[currentArrayKey].push(val);
                 }
                 continue;
             }
 
-            inArray = false;
+            // Reset array context when we hit a new key
+            currentArray = null;
+            currentArrayKey = '';
 
-            // Nested key detection
-            if (trimmed.match(/^\s{2,}\w/)) {
-                const kvMatch = trimmed.match(/^\s+(\w[\w-]*)\s*:\s*(.*)/);
-                if (kvMatch) {
-                    const k = kvMatch[1].trim();
-                    const v = kvMatch[2].trim().replace(/^['"]|['"]$/g, '');
-                    if (inOrcbot) {
-                        if (!v) {
-                            inArray = true;
-                            arrayKey = k;
-                        } else if (v === 'true') orcbot[k] = true;
-                        else if (v === 'false') orcbot[k] = false;
-                        else orcbot[k] = v;
-                    } else if (inMetadata) {
-                        metadataMap[k] = v;
-                    }
-                }
-                continue;
-            }
+            // Nested key (e.g., "  key: value")
+            const nestedMatch = trimmedLine.match(/^(\s+)(\w[\w-]*)\s*:\s*(.*)$/);
+            if (nestedMatch) {
+                const indent = nestedMatch[1].length;
+                const key = nestedMatch[2].trim();
+                const value = nestedMatch[3].trim().replace(/^['"]|['"]$/g, '');
 
-            inOrcbot = false;
-            inMetadata = false;
-
-            const kvMatch = trimmed.match(/^(\w[\w-]*)\s*:\s*(.*)/);
-            if (kvMatch) {
-                currentKey = kvMatch[1].trim();
-                const rawVal = kvMatch[2].trim().replace(/^['"]|['"]$/g, '');
-
-                if (currentKey === 'orcbot') {
-                    inOrcbot = true;
-                    continue;
-                }
-                if (currentKey === 'metadata') {
-                    inMetadata = true;
+                // Determine section based on parent key (orcbot or metadata)
+                // Note: This is still a simplified parser, assuming only one level of nesting for orcbot/metadata
+                if (key === 'orcbot' || key === 'metadata') {
+                    // This case is handled by top-level key detection
                     continue;
                 }
 
-                if (!rawVal) {
-                    inArray = true;
-                    arrayKey = currentKey;
+                if (!value) {
+                    currentArrayKey = key;
                 } else {
-                    meta[currentKey] = rawVal;
+                    const boolVal = value.toLowerCase();
+                    if (boolVal === 'true') currentSection[key] = true;
+                    else if (boolVal === 'false') currentSection[key] = false;
+                    else if (!isNaN(Number(value)) && value !== '') currentSection[key] = Number(value);
+                    else currentSection[key] = value;
                 }
+                continue;
+            }
+
+            // Top-level key (e.g., "key: value")
+            const topMatch = trimmedLine.match(/^(\w[\w-]*)\s*:\s*(.*)$/);
+            if (topMatch) {
+                const key = topMatch[1].trim();
+                const value = topMatch[2].trim().replace(/^['"]|['"]$/g, '');
+
+                if (key === 'orcbot') {
+                    currentSection = meta.orcbot;
+                    continue;
+                }
+                if (key === 'metadata') {
+                    currentSection = meta.metadata;
+                    continue;
+                }
+
+                // Switch back to root meta if we find another top-level key
+                currentSection = meta;
+
+                if (!value) {
+                    currentArrayKey = key;
+                } else {
+                    const boolVal = value.toLowerCase();
+                    if (boolVal === 'true') currentSection[key] = true;
+                    else if (boolVal === 'false') currentSection[key] = false;
+                    else if (!isNaN(Number(value)) && value !== '') currentSection[key] = Number(value);
+                    else currentSection[key] = value;
+                }
+                continue;
             }
         }
 
-        if (Object.keys(orcbot).length > 0) meta.orcbot = orcbot;
-        if (Object.keys(metadataMap).length > 0) meta.metadata = metadataMap;
+        // Cleanup empty sections
+        if (Object.keys(meta.orcbot).length === 0) delete meta.orcbot;
+        if (Object.keys(meta.metadata).length === 0) delete meta.metadata;
 
         if (!meta.name || !meta.description) return null;
 
@@ -677,22 +727,84 @@ export class SkillsManager {
     }
 
     /**
+     * Classify task intent and match relevant skills using an LLM.
+     * This provides a much smarter matching strategy than regex/keywords.
+     */
+    public async classifySkillsWithLLM(taskDescription: string, llm: any): Promise<AgentSkill[]> {
+        if (!llm) return this.matchSkillsForTask(taskDescription);
+
+        const availableSkills = Array.from(this.agentSkills.values()).map(s => ({
+            name: s.meta.name,
+            description: s.meta.description
+        }));
+
+        if (availableSkills.length === 0) return [];
+
+        const systemPrompt = `You are a skill router for an AI agent. 
+Given a user's task, identify which of the following skills are highly relevant and should be activated.
+
+Available skills:
+${availableSkills.map(s => `- ${s.name}: ${s.description}`).join('\n')}
+
+Rules:
+- Return ONLY a JSON array of skill names. Example: ["web-scraper", "news-finder"]
+- Only select skills that are truly relevant to the core intent of the task.
+- If no skills are relevant, return an empty array [].
+- Return ONLY the JSON array, no explanation.`;
+
+        const userPrompt = `Task: "${taskDescription}"`;
+
+        try {
+            const response = await llm.call(userPrompt, systemPrompt);
+            const match = response.match(/\[[\s\S]*?\]/);
+            if (!match) return this.matchSkillsForTask(taskDescription);
+
+            const skillNames = JSON.parse(match[0]) as string[];
+            const matches: AgentSkill[] = [];
+            
+            for (const name of skillNames) {
+                const skill = this.agentSkills.get(name);
+                if (skill) matches.push(skill);
+            }
+
+            // If LLM returned nothing but task seems to have intent, fallback to regex
+            if (matches.length === 0 && taskDescription.length > 10) {
+                return this.matchSkillsForTask(taskDescription);
+            }
+
+            return matches;
+        } catch (e) {
+            logger.warn(`SkillsManager: LLM skill classification failed, falling back to regex: ${e}`);
+            return this.matchSkillsForTask(taskDescription);
+        }
+    }
+
+    /**
      * Match agent skills to a task description (for auto-activation).
      */
     public matchSkillsForTask(taskDescription: string): AgentSkill[] {
-        const lower = taskDescription.toLowerCase();
+        const lowerTask = taskDescription.toLowerCase();
+        const taskWords = lowerTask.split(/\W+/).filter(w => w.length > 2);
         const matches: AgentSkill[] = [];
         const matched = new Set<string>();
 
+        const stopwords = new Set(['this', 'that', 'with', 'from', 'your', 'have', 'please', 'could']);
+
         for (const skill of this.agentSkills.values()) {
-            // Strongest signal: task mentions the skill name directly
-            if (lower.includes(skill.meta.name.toLowerCase())) {
+            const skillName = skill.meta.name.toLowerCase();
+            const skillNameParts = skillName.split('-');
+
+            // 1. Exact name or partial name match (e.g., "web-scraper" matches "web scraper")
+            const nameMentioned = lowerTask.includes(skillName) || 
+                                  skillNameParts.every(part => lowerTask.includes(part));
+            
+            if (nameMentioned) {
                 matches.push(skill);
                 matched.add(skill.meta.name);
                 continue;
             }
 
-            // Check trigger patterns
+            // 2. Check trigger patterns
             let triggeredByPattern = false;
             if (skill.meta.orcbot?.triggerPatterns) {
                 for (const pattern of skill.meta.orcbot.triggerPatterns) {
@@ -706,17 +818,39 @@ export class SkillsManager {
                     } catch (e) { /* invalid regex, skip */ }
                 }
                 if (triggeredByPattern) continue;
-                // Fall through to fuzzy matching if no pattern matched
             }
 
-            // Fuzzy match: check if description keywords overlap with task
-            if (!matched.has(skill.meta.name)) {
-                const descWords = skill.meta.description.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-                const matchCount = descWords.filter(w => lower.includes(w)).length;
-                if (matchCount >= 3 || (matchCount >= 2 && descWords.length <= 8)) {
-                    matches.push(skill);
-                    matched.add(skill.meta.name);
-                }
+            // 3. Robust fuzzy match: check overlap between task words and description/name words
+            const descWords = skill.meta.description.toLowerCase().split(/\W+/).filter(w => w.length > 3 && !stopwords.has(w));
+            const allSkillWords = [...new Set([...skillNameParts, ...descWords])];
+            
+            let overlapCount = 0;
+            for (const sWord of allSkillWords) {
+                // Check if any task word matches or is a prefix/suffix of the skill word, or vice-versa
+                const hasMatch = taskWords.some(tWord => {
+                    // Exact match
+                    if (tWord === sWord) return true;
+                    // Stem match (share a prefix of at least 4 chars)
+                    if (tWord.length >= 4 && sWord.length >= 4) {
+                        const commonPrefixLen = 4;
+                        if (tWord.slice(0, commonPrefixLen) === sWord.slice(0, commonPrefixLen)) {
+                            // Ensure they are not completely different words (e.g. "place" and "play")
+                            // by checking if their lengths are somewhat similar
+                            if (Math.abs(tWord.length - sWord.length) <= 5) return true;
+                        }
+                    }
+                    return false;
+                });
+                if (hasMatch) overlapCount++;
+            }
+
+            // Heuristic: match if there's significant overlap
+            // - If description is short, 1 solid match might be enough
+            // - Otherwise, require at least 2 matches
+            const threshold = allSkillWords.length <= 5 ? 1 : 2;
+            if (overlapCount >= threshold) {
+                matches.push(skill);
+                matched.add(skill.meta.name);
             }
         }
 

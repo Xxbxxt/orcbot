@@ -595,7 +595,15 @@ ${this.repoContext}`,
             // Reset non-sticky skills so stale context doesn't leak across actions
             this.skills.deactivateNonStickySkills();
 
-            const matchedSkills = this.skills.matchSkillsForTask(taskDescription);
+            // SMART ACTIVATION: Use LLM to classify skills if available, otherwise fallback to regex
+            let matchedSkills: any[] = [];
+            try {
+                matchedSkills = await this.skills.classifySkillsWithLLM(taskDescription, this.llm);
+            } catch (e) {
+                logger.warn(`DecisionEngine: LLM skill classification failed: ${e}`);
+                matchedSkills = this.skills.matchSkillsForTask(taskDescription);
+            }
+
             for (const matched of matchedSkills) {
                 if (!matched.activated) {
                     this.skills.activateAgentSkill(matched.meta.name);

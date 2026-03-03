@@ -245,9 +245,18 @@ class AgentWorkerProcess {
         process.env.ORCBOT_CONFIG_PATH = workerConfigPath;
         process.env.ORCBOT_DATA_DIR = workerDir;
 
-        // Initialize the Agent in worker mode (skips channels, orchestration skills, AgenticUser)
+        // Initialize the Agent in worker mode
         this.agent = new Agent({ isWorker: true });
         this.isRunning = true;
+
+        // SaaS MODE: If worker channels are allowed, start the autonomous loop and listeners
+        const allowWorkerChannels = this.agent.config.get('allowWorkerChannels') === true;
+        if (allowWorkerChannels) {
+            logger.info(`Worker ${config.agentId}: Standalone mode enabled (allowWorkerChannels=true). Starting autonomous loop...`);
+            this.agent.start().catch(e => {
+                logger.error(`Worker ${config.agentId}: Failed to start autonomous loop: ${e}`);
+            });
+        }
 
         logger.info(`Worker ${config.agentId}: Initialized as "${config.name}" with role "${config.role}"`);
         this.send({ type: 'ready', payload: { agentId: config.agentId, name: config.name } });

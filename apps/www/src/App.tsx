@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import Header from './components/Header';
 import './index.css';
 
 const TERMINAL_LINES = [
@@ -44,14 +45,6 @@ function TerminalDemo() {
 function App() {
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'bash' | 'powershell' | 'docker'>('bash');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
-
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
 
   const commands = {
     bash: 'curl -sSL https://orcbot.vercel.app/install.sh | bash',
@@ -70,39 +63,7 @@ function App() {
       <div className="bg-gradient-orbs" />
       <div className="noise-overlay" />
 
-      {/* ── Nav ── */}
-      <nav className={`nav ${scrolled ? 'nav-scrolled' : ''}`}>
-        <Link to="/" className="logo">
-          <svg className="logo-mark" width="28" height="28" viewBox="0 0 28 28" fill="none">
-            <rect width="28" height="28" rx="7" fill="#5cffb3" fillOpacity="0.15" />
-            <path d="M8 14l4 4 8-8" stroke="#5cffb3" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-            <circle cx="21" cy="7" r="2.5" fill="#5cffb3" />
-          </svg>
-          <span className="logo-text">OrcBot</span>
-        </Link>
-
-        <button className="mobile-toggle" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-label="Toggle menu">
-          <span className={`hamburger ${mobileMenuOpen ? 'open' : ''}`} />
-        </button>
-
-        <div className={`nav-center ${mobileMenuOpen ? 'open' : ''}`}>
-          <a href="#capabilities" onClick={() => setMobileMenuOpen(false)}>Capabilities</a>
-          <a href="#how-it-works" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
-          <a href="#architecture" onClick={() => setMobileMenuOpen(false)}>Architecture</a>
-          <a href="#docs" onClick={() => setMobileMenuOpen(false)}>Docs</a>
-          <Link to="/skills" onClick={() => setMobileMenuOpen(false)}>Skills</Link>
-          <Link to="/saas" onClick={() => setMobileMenuOpen(false)}>SaaS Farm</Link>
-          <Link to="/deploy" onClick={() => setMobileMenuOpen(false)}>Deploy</Link>
-        </div>
-
-        <div className="nav-end">
-          <a className="nav-btn ghost" href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">Docs</a>
-          <a className="nav-btn primary" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-            GitHub
-          </a>
-        </div>
-      </nav>
+      <Header />
 
       {/* ── Hero ── */}
       <header className="hero">
@@ -110,37 +71,37 @@ function App() {
           <div className="hero-copy">
             <div className="hero-badge">
               <span className="badge-dot" /><span className="badge-pulse" />
-              Open Source · v2.2
+              The Autonomous Era is Here
             </div>
 
             <h1 className="hero-title">
-              The autonomous AI<br />
-              <span className="hero-title-em">operating system</span><br />
-              for operators.
+              Give your agents<br />
+              <span className="hero-title-em">a place to thrive.</span>
             </h1>
 
             <p className="hero-subtitle">
-              Plan, execute, self-repair, and stay local. OrcBot is built for real
-              operations — multi-agent, memory-aware, and always on your hardware.
+              Imagine offering your AI a computer—a carefree world where they can live, 
+              orchestrate, and be as helpful as possible. OrcBot provides the digital environment 
+              where autonomy feels natural and productivity feels like home.
             </p>
 
             <div className="hero-actions">
               <a className="btn btn-primary btn-lg" href="#install">
-                Get Started Free
+                Build their home
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               </a>
               <a className="btn btn-outline btn-lg" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                View on GitHub
+                Join the Mission
               </a>
             </div>
 
             <div className="hero-stats">
               {[
-                { label: 'LLM Providers', value: '6+' },
-                { label: 'Built-in Skills', value: '30+' },
-                { label: 'Chat Channels', value: '4' },
-                { label: 'Extensibility', value: '∞' },
+                { label: 'Carefree Worlds', value: '1,000+' },
+                { label: 'Thriving Skills', value: '30+' },
+                { label: 'Open Channels', value: '4' },
+                { label: 'Possibilities', value: '∞' },
               ].map((s, i) => (
                 <div className="hero-stat" key={i}>
                   <span className="hero-stat-value">{s.value}</span>
@@ -156,7 +117,7 @@ function App() {
         </div>
 
         <div className="integrations-row">
-          <span className="int-label">Works with</span>
+          <span className="int-label">Built for Harmony</span>
           <div className="int-chips">
             {['OpenAI', 'Gemini', 'Claude', 'Mistral', 'NVIDIA', 'Bedrock', 'Telegram', 'WhatsApp', 'Discord', 'Playwright', 'Docker'].map((n) => (
               <span className="int-chip" key={n}>{n}</span>
@@ -166,14 +127,39 @@ function App() {
       </header>
 
       <main>
+        {/* ── The Vision ── */}
+        <section id="vision" className="section section-inner vision-section">
+          <div className="section-label">Our Story</div>
+          <h2 className="section-title">A World Built for Autonomy.</h2>
+          <p className="section-desc">
+            We believe the future isn't just about tools; it's about orchestration. 
+            OrcBot provides a sandbox where agents don't just run—they live, remember, 
+            and evolve. It's an environment designed for them to handle the complexity 
+            of your world perfectly, so you can focus on the big picture.
+          </p>
+          <div className="vision-grid">
+            {[
+              { icon: '🌱', title: 'The Digital Orchard', desc: 'A sustainable environment where agents plant seeds of productivity and harvest results.' },
+              { icon: '🕊️', title: 'Carefree Autonomy', desc: 'Agents operate with peace of mind, knowing their memory and safety are handled by OrcBot.' },
+              { icon: '🤝', title: 'Harmonious Orchestration', desc: 'Multiple agents working in sync, sharing knowledge like a digital community.' },
+            ].map((v, i) => (
+              <div key={i} className="vision-card">
+                <span className="vision-card-icon">{v.icon}</span>
+                <h3>{v.title}</h3>
+                <p>{v.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* ── Install ── */}
         <section id="install" className="install-section section-inner">
           <div className="install-shell">
             <div className="install-head">
               <div>
-                <p className="section-label">Quick Install</p>
-                <h2 className="section-title">Launch your agent in minutes.</h2>
-                <p className="section-desc">Pick your platform and copy the command. OrcBot ships with sensible defaults and a guided setup wizard.</p>
+                <p className="section-label">Invite them in</p>
+                <h2 className="section-title">Open the gateway.</h2>
+                <p className="section-desc">Setting up OrcBot is like giving your agent the keys to their new home. Fast, simple, and respectful of their privacy.</p>
               </div>
               <div className="install-tabs">
                 {(['bash', 'powershell', 'docker'] as const).map(tab => (

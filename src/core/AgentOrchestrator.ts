@@ -72,6 +72,9 @@ export class AgentOrchestrator extends EventEmitter {
         this.ensureDataDir();
         this.load();
         this.registerPrimaryAgent();
+
+        // Auto-cleanup old tasks on startup to prevent 'piling up'
+        this.cleanupOldTasks(3);
     }
 
     private ensureDataDir(): void {

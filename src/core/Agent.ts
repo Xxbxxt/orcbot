@@ -9266,7 +9266,7 @@ REFLECTION: <1-2 sentences>`;
             // If we have idle workers, delegate research to them instead
             if (availableAgents.length > 0 && runningWorkers.length > 0) {
                 logger.info(`Agent: Delegating heartbeat research to ${availableAgents.length} available worker(s)`);
-                this.delegateHeartbeatResearch(availableAgents);
+                await this.delegateHeartbeatResearch(availableAgents);
             } else {
                 // No workers, do it ourselves but be efficient
                 this.pushTask(proactivePrompt, 2, { isHeartbeat: true }, 'autonomy');
@@ -10651,7 +10651,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         logger.info('Agent: All channels initialized');
 
         // Start the dual-lane parallel worker pool (unless we are a dedicated single-task worker)
-        if (!this.isWorker) {
+        if (!this.isWorker || allowWorkerChannels) {
             this.startWorkerPool();
         }
     }
