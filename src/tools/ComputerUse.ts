@@ -154,7 +154,14 @@ export class ComputerUse {
         await page.screenshot({ path: savePath, type: 'png', fullPage: false });
         this.lastScreenshot = savePath;
 
-        const viewport = page.viewportSize();
+        // Engine-agnostic viewport detection
+        let viewport: { width: number; height: number } | null = null;
+        if (typeof (page as any).viewportSize === 'function') {
+            viewport = (page as any).viewportSize();
+        } else if (typeof (page as any).viewport === 'function') {
+            viewport = (page as any).viewport();
+        }
+
         if (viewport) {
             this.screenSize = { width: viewport.width, height: viewport.height };
         }

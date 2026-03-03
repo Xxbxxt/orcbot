@@ -4110,6 +4110,22 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
             }
         });
 
+        // Skill: Browser Run Script (Web Scratchpad)
+        this.skills.registerSkill({
+            name: 'browser_run_script',
+            description: 'Web Scratchpad: Execute custom JavaScript/Puppeteer code directly on the active browser page. Provides access to "page" (Puppeteer Page) and "browser" (Puppeteer Browser). Use this for complex custom logic, multi-step actions, or data extraction that standard tools cannot handle. (Admin only).',
+            usage: 'browser_run_script(code)',
+            isDeep: true,
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can execute custom browser scripts for security reasons.';
+                }
+                const code = args.code || args.script;
+                if (!code) return 'Error: Missing code to execute.';
+                return this.browser.runScript(code);
+            }
+        });
+
         // Skill: Browser Navigate
         this.skills.registerSkill({
             name: 'browser_navigate',

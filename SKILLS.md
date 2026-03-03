@@ -62,6 +62,7 @@ This file lists the available skills for the agent.
 - **browser_vision(prompt?)**: [BROWSER/WEB AUTOMATION] Analyze the current page using vision.
 - **browser_solve_captcha()**: [BROWSER/WEB AUTOMATION] Solve detected CAPTCHA.
 - **browser_run_js(script)**: [BROWSER/WEB AUTOMATION] Execute custom JavaScript on the current page.
+- **browser_run_script(code)**: [BROWSER/WEB AUTOMATION] Web Scratchpad: Execute custom JavaScript/Puppeteer code directly on the active browser page. Provides access to "page" and "browser" objects. (Admin only).
 - **browser_back()**: [BROWSER/WEB AUTOMATION] Navigate back to the previous page.
 - **browser_scroll(direction, amount?)**: [BROWSER/WEB AUTOMATION] Scroll the page up or down.
 - **browser_hover(selector)**: [BROWSER/WEB AUTOMATION] Hover over an element to trigger menus or tooltips.

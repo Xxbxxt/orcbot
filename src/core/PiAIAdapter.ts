@@ -153,6 +153,9 @@ export async function piAiCall(
     let model: any;
     try {
         model = getModel(piProvider, piModel);
+        if (!model) {
+            throw new Error(`getModel returned undefined for ${piProvider}/${piModel}`);
+        }
     } catch (e) {
         throw new Error(`PiAIAdapter: Unknown model "${piModel}" for provider "${piProvider}": ${(e as Error).message}`);
     }
@@ -196,6 +199,9 @@ export async function piAiCallWithTools(
     let model: any;
     try {
         model = getModel(piProvider, piModel);
+        if (!model) {
+            throw new Error(`getModel returned undefined for ${piProvider}/${piModel}`);
+        }
     } catch (e) {
         throw new Error(`PiAIAdapter: Unknown model "${piModel}" for provider "${piProvider}": ${(e as Error).message}`);
     }
@@ -214,13 +220,21 @@ export async function piAiCallWithTools(
     if (apiCreds.project) callOpts.project = apiCreds.project;
     if (apiCreds.location) callOpts.location = apiCreds.location;
 
-    const response = await complete(model, context, callOpts);
+    try {
+        const response = await complete(model, context, callOpts);
 
-    return {
-        content: extractPiAiText(response),
-        toolCalls: extractPiAiToolCalls(response),
-        raw: response,
-    };
+        return {
+            content: extractPiAiText(response),
+            toolCalls: extractPiAiToolCalls(response),
+            raw: response,
+        };
+    } catch (e) {
+        logger.error(`PiAIAdapter: complete() crashed for provider=${piProvider}, model=${piModel}. Error: ${(e as Error).message}`);
+        // Log keys being used (masking for safety)
+        const maskedKey = apiCreds.apiKey ? `${apiCreds.apiKey.slice(0, 4)}...${apiCreds.apiKey.slice(-4)}` : 'MISSING';
+        logger.error(`PiAIAdapter: Context info — API Key: ${maskedKey}, BaseURL: ${apiCreds.baseUrl || 'default'}`);
+        throw e;
+    }
 }
 
 /** Centralized text extraction from PI AI response, handling text, thinking, and errors. */

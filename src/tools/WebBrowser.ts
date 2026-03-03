@@ -866,7 +866,11 @@ export class WebBrowser {
             if (bodyTextLength < 50) {
                 // Give modern sites extra time to hydrate if they're truly empty
                 await this._page.waitForTimeout(3000);
-                await this._page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+            if (this.browserEngine === 'puppeteer') {
+                await (this._page as PuppeteerPage).waitForNetworkIdle({ timeout: 8000 }).catch(() => {});
+            } else {
+                await (this._page as Page).waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+            }
             }
 
             const effectiveWaitSelectors = [...waitSelectors];
@@ -1699,7 +1703,12 @@ export class WebBrowser {
                 const backoff = Math.min(baseDelayMs * attempt, 1200);
                 logger.debug(`Browser: ${operationName} attempt ${attempt}/${attempts} failed; retrying in ${backoff}ms: ${error}`);
                 if (this.page) {
-                    await this.page.waitForLoadState('domcontentloaded', { timeout: backoff }).catch(() => {});
+                    if (this.browserEngine === 'puppeteer') {
+                        await (this._page as PuppeteerPage).waitForNavigation({ waitUntil: 'domcontentloaded', timeout: backoff }).catch(() => {});
+                    } else {
+                        await (this._page as Page).waitForLoadState('domcontentloaded', { timeout: backoff }).catch(() => {});
+                    }
+
                     await this.page.waitForFunction(() => document.readyState !== 'loading', undefined, { timeout: backoff }).catch(() => {});
                 }
             }
@@ -2108,10 +2117,14 @@ export class WebBrowser {
             }
             
             try {
-                await this.page!.hover(finalSelector, { timeout: 5000 });
+                if (this.browserEngine === 'puppeteer') {
+                    await (this._page as PuppeteerPage).hover(finalSelector);
+                } else {
+                    await (this.page!).hover(finalSelector, { timeout: 5000 });
+                }
             } catch {
-                // Fallback: force hover via JS
-                await this.page!.evaluate((sel: string) => {
+                // Fallback: force hover via JS (cross-engine)
+                await this.p.evaluate((sel: string) => {
                     const el = document.querySelector(sel) as HTMLElement;
                     if (el) {
                         el.scrollIntoView({ block: 'center', behavior: 'instant' });
@@ -2120,10 +2133,36 @@ export class WebBrowser {
                     }
                 }, finalSelector);
             }
-            await this.page!.waitForTimeout(500); // Wait for hover effects/tooltips/menus
+            await this.p.waitForTimeout(500); // Wait for hover effects/tooltips/menus
             return `Successfully hovered over: ${selector}`;
         } catch (e) {
             return `Failed to hover over ${selector}: ${e}`;
+        }
+    }
+
+    /**
+     * Executes a custom JavaScript/Puppeteer script on the page.
+     * Provides 'page', 'browser', and 'logger' to the script context.
+     * Use this for complex custom logic that standard tools can't handle.
+     */
+    public async runScript(code: string): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page available.';
+
+            logger.info('Browser: Running custom script (Web Scratchpad)');
+            
+            // We wrap the user code in an async block and provide 'page', 'browser', and 'logger'
+            const scriptFunc = new Function('page', 'browser', 'logger', `
+                return (async () => {
+                    ${code}
+                })();
+            `);
+
+            const result = await scriptFunc(this._page, this.browser, logger);
+            return `Script executed successfully. Result: ${JSON.stringify(result || 'No return value')}`;
+        } catch (e) {
+            return `Script execution failed: ${e}`;
         }
     }
 

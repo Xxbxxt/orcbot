@@ -50,18 +50,21 @@ export class BrowserHelper implements PromptHelper {
     getPrompt(ctx: PromptHelperContext): string {
         return `BROWSER & WEB NAVIGATION:
 1. **READ FIRST (CRITICAL)**: When you need to gather information from a page, ALWAYS prefer \`browser_extract_content()\` or \`http_fetch(url)\` first. They are 10x faster and more reliable than semantic snapshots. Only use snapshots if you need to interact (click/type).
-2. **BARE URL RULE**: When a user sends you a URL with no instructions, you MUST:
-    1. Navigate immediately with \`browser_navigate\`
-    2. Extract content with \`browser_extract_content\`
-    3. Summarize the site and key findings for the user.
-    4. Propose next steps if the site is interactive.
-3. **Convenient Browsing (PREFERRED)**: Avoid micromanaging refs and selectors:
-    - \`browser_perform(goal)\`: Best for multi-step tasks (e.g. "login", "search for X").
-    - \`browser_extract_data(selector)\`: Best for getting lists, tables, or structured results (like news headlines or search results).
-    - \`browser_click_text(text)\`: Click buttons/links by their visible text.
-    - \`browser_type_into_label(label, text)\`: Fill forms by their labels.
-4. **Semantic Navigation (Fallback)**: Use only for precision. Elements are role "Label" [ref=N]. Use \`ref=N\` as selector.
-5. **Wait for Success**: Pages can be slow. Use \`browser_wait(2000)\` if a page looks blank or incomplete before trying \`browser_examine_page()\`.
-6. **User Communication**: Send a status update every 2 steps. Tell them which site you're on and what you're seeing.`;
+2. **BARE URL RULE**: When a user sends you a URL, you MUST:
+    1. Navigate immediately with \`browser_navigate\` or use \`http_fetch\`.
+    2. **NEVER** navigate to the same URL twice in a row. If you are already on the page, proceed to interaction.
+    3. **NEVER** use \`write_file\` or \`run_command\` to "draft" web content locally instead of performing the action on the site.
+    4. If the task is to "write X here [URL]", you MUST type directly into the site via the browser.
+3. **Convenient Browsing (PREFERRED)**: Puppeteer requires active element focus. High-level tools handle this best:
+    - \`browser_perform(goal)\`: **STRONGLY PREFERRED** for multi-step tasks (e.g. "type the article into the doc"). It uses advanced focus/caret logic.
+    - \`browser_type_into_label(label, text)\`: Best for standard forms.
+    - \`browser_click_text(text)\`: Best for navigation.
+4. **Complex Editors (Google Docs/Sheets)**: These sites use custom rendering.
+    - **DO NOT** just navigate and wait.
+    - You MUST click the main editing area first to trigger the caret.
+    - If standard typing fails, \`browser_perform\` will automatically try a JS-injection fallback.
+5. **Wait for Success**: If a page looks blank, use \`browser_wait(3000)\` then \`browser_examine_page()\` to refresh your view.
+6. **User Communication**: Send a status update every 2 steps. Tell them which site you're on and what you're seeing.
+`;
     }
 }
