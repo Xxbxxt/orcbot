@@ -133,6 +133,15 @@ export class PromptRouter {
                 continue;
             }
 
+            // In LEAN mode, we want to strip away heavy organizational and context helpers
+            // to save tokens and focus purely on tactical execution.
+            if (context.isLeanMode && !helper.alwaysActive) {
+                const leanAllowedHelpers = ['browser', 'development', 'media', 'research', 'polling', 'scheduling'];
+                if (!leanAllowedHelpers.includes(helper.name)) {
+                    continue;
+                }
+            }
+
             const isActive = helper.alwaysActive || helper.shouldActivate(context);
 
             if (isActive) {

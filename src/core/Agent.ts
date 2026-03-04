@@ -489,6 +489,17 @@ export class Agent {
         }
     }
 
+    private isSequentialUIComponent(skillName: string): boolean {
+        const sequentialSkills = ['telegram_send_buttons', 'telegram_send_poll', 'telegram_edit_message', 'telegram_react'];
+        return sequentialSkills.includes(skillName);
+    }
+
+    private buildSideEffectKey(skillName: string, metadata: any): string {
+        const target = metadata.chatId || metadata.jid || metadata.channelId || metadata.to || metadata.recipient || 'global';
+        const content = metadata.message || metadata.text || metadata.caption || metadata.body || '';
+        return `${skillName}:${target}:${content.slice(0, 100)}`;
+    }
+
     private shouldUseGoogleComputerUse(): boolean {
         const enabled = !!this.config.get('googleComputerUseEnabled');
         if (!enabled) return false;
@@ -4393,7 +4404,7 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                         logger.info('browser_type: Gemini Computer Use succeeded');
                         return cuResult;
                     }
-                    logger.warn(`browser_type: Gemini Computer Use failed, falling back to Playwright. Result: ${cuResult}`);
+                    logger.warn(`browser_type: Gemini Computer Use failed, falling back to Puppeteer. Result: ${cuResult}`);
                 }
 
                 return this.browser.type(selectorStr, text);
@@ -4551,13 +4562,14 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
                 const snapshot = await this.browser.getSemanticSnapshot();
                 const prompt = `I need to achieve this goal on the current web page: "${goal}"
 
-CURRENT PAGE SNAPSHOT:
+CURRENT PAGE SNAPSHOT (elements with [ref=ID] and [bbox=x,y,w,h]):
 ${snapshot}
 
 Instructions:
-1. Break down the goal into 1-3 immediate tool calls.
-2. You can use: click(ref), type(ref, text), press(key), wait(ms), scroll(dir).
+1. Break down the goal into 1-5 immediate tool calls.
+2. You can use: click(ref), type(ref, text), press(key), wait(ms), scroll(dir), hover(ref).
 3. Output ONLY a JSON array of actions to perform.
+4. Use the [bbox] coordinates to confirm spatial layout if helpful.
 Example: [{"tool": "type", "ref": "12", "text": "my search"}, {"tool": "press", "key": "Enter"}]
 
 Output JSON now:`;
@@ -4577,6 +4589,7 @@ Output JSON now:`;
                         else if (action.tool === 'press') res = await this.browser.press(action.key);
                         else if (action.tool === 'wait') res = await this.browser.wait(action.ms || 1000);
                         else if (action.tool === 'scroll') res = await this.browser.scrollPage(action.dir || 'down');
+                        else if (action.tool === 'hover') res = await this.browser.hover(action.ref);
                         
                         results.push(`- ${action.tool}(${action.ref || action.key || ''}): ${res.split('\n')[0]}`);
                         if (res.startsWith('Error') || res.startsWith('Failed')) break;
@@ -11502,6 +11515,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     public async pushTask(description: string, priority: number = 5, metadata: any = {}, lane: 'user' | 'autonomy' = 'user') {
+        let finalDescription = description;
+        if (lane === 'user' && /^\s*(\/lean|\[LEAN\]|\/fast|\[FAST\])\s+/i.test(finalDescription)) {
+            finalDescription = finalDescription.replace(/^\s*(\/lean|\[LEAN\]|\/fast|\[FAST\])\s+/i, '');
+            metadata.isLeanMode = true;
+            logger.info('Agent: Lean mode activated for task. Heavy context and RAG will be bypassed.');
+        }
+
         if (lane === 'user' && metadata?.source && !metadata?.sessionScopeId) {
             metadata.sessionScopeId = this.resolveSessionScopeId(metadata.source, {
                 sourceId: metadata.sourceId,
@@ -12027,10 +12047,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 return { 
                     isResearch: s?.isResearch ?? isResearchDefault, 
                     isDeep: s?.isDeep ?? isDeepDefault, 
-                    isSideEffect: s?.isSideEffect ?? isSideEffectDefault, 
-                    isDangerous: s?.isDangerous ?? isDangerousDefault, 
-                    isElevated: s?.isElevated ?? isElevatedDefault 
+                    isSideEffect: s?.isSideEffect ?? isSideEffectDefault,
+                    isSend: s?.isSideEffect ?? isSideEffectDefault,
+                    isDangerous: s?.isDangerous ?? isDangerousDefault,
+                    isElevated: s?.isElevated ?? isElevatedDefault,
+                    isParallelSafe: !!s?.isParallelSafe
                 };
+
             };
 
             const isTimeCapsule = action.payload?.isTimeCapsule === true;
@@ -12062,6 +12085,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const MAX_STEPS = limits.steps;
             const MAX_MESSAGES = limits.messages;
             const isResearchTask = taskComplexity === 'complex';
+            const isChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email'].includes((action.payload?.source || '').toString().toLowerCase());
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = this.config.get('maxToolRepeats') || 5; 
             const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 20;
@@ -12386,18 +12410,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     lastStepToolSignatures = currentStepSignatures;
 
                     // 4. SKILL FREQUENCY LOOP DETECTION
-                    // Track how many times each skill is called across the entire action
                     for (const t of decision.tools) {
                         skillCallCounts[t.name] = (skillCallCounts[t.name] || 0) + 1;
                         recentSkillNames.push(t.name);
-                        // Build a short fingerprint: name + key argument (e.g., command, url, query)
                         const meta = t.metadata || {};
                         const argHint = (meta.command || meta.url || meta.query || meta.message || meta.path || '').toString().slice(0, 80);
                         recentSkillSignatures.push(`${t.name}:${argHint}`);
                     }
 
-                    // Research tools (web_search, browser_*, extract_article) get a higher ceiling
-                    // because they legitimately need many calls with different queries for deep research.
                     const overusedSkill = Object.entries(skillCallCounts).find(([skillName, count]) => {
                         const meta = getSkillMeta(skillName);
                         const limit = meta.isResearch ? MAX_RESEARCH_SKILL_REPEATS : MAX_SKILL_REPEATS;
@@ -12413,107 +12433,72 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                         logger.warn(`Agent: Skill '${skillName}' called ${callCount} times in action ${action.id}${isResearchTool ? ' (research tool, higher limit)' : ''}.`);
 
-                        // REVIEW GATE: Ask the review layer before killing the task
                         const reviewResult = await this.reviewForcedTermination(
                             action, 'skill_frequency', currentStep,
-                            `Skill '${skillName}' called ${callCount} times. ${isResearchTool ? 'This is a research tool that has hit even the extended ceiling.' : 'Non-research tool exceeded call limit.'} Fail count: ${failCount}. Task: ${action.payload?.description?.slice(0, 200)}`
+                            `Skill '${skillName}' called ${callCount} times. ${isResearchTool ? 'This is a research tool that has hit even the extended ceiling.' : 'Non-research tool exceeded call limit.'} Fail count: ${failCount}.`
                         );
 
                         if (reviewResult === 'continue') {
-                            // Review says task isn't done — inject pivot guidance instead of killing
                             logger.info(`Agent: Review layer says task is NOT done despite skill overuse. Injecting pivot guidance.`);
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-skill-pivot-guidance`,
                                 type: 'short',
-                                content: `[SYSTEM: You have called '${skillName}' ${callCount} times. STOP using '${skillName}' — you MUST try a completely different approach. ${skillName === 'list_agents' ? 'The agent status is already clear from your previous checks. Do NOT check the agent list again.' : ''} ${isResearchTool ? 'If web_search isn\'t finding what you need, try browser_navigate to visit specific sites directly. If browser isn\'t working, try a different search query strategy or compile what you already have.' : 'Switch to a different tool or method entirely.'} Compile and deliver whatever results you have gathered so far.]`,
+                                content: `[SYSTEM: You have called '${skillName}' ${callCount} times. STOP using '${skillName}' — you MUST try a completely different approach. Compile and deliver whatever results you have gathered so far.]`,
                                 metadata: { actionId: action.id, skill: skillName, callCount, step: currentStep }
                             });
-                            // Ban the overused skill for the rest of this action
-                            skillCallCounts[skillName] = 0; // Reset so it can be used sparingly
-                            // Don't break — let the agent continue with a different approach
+                            skillCallCounts[skillName] = 0;
                         } else {
-                            // Review layer confirms we should stop
                             await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
-                            lastUserDeliveryAtMs = Date.now();
-
-                            // Trigger selective self-improvement analysis for all tool classes.
-                            // The analyzer can still choose not to create a skill.
-                            if (skillName) {
-                                if (skillExists && failCount > 0) {
-                                    logger.info(`Agent: Skill '${skillName}' exists but keeps failing (${failCount} errors). Not creating a new skill — this is a parameter issue.`);
-                                    this.memory.saveMemory({
-                                        id: `${action.id}-step-${currentStep}-skill-loop-guidance`,
-                                        type: 'short',
-                                        content: `[SYSTEM: You called '${skillName}' ${callCount} times but it kept failing. Options:\n1. WRONG PARAMETERS — review the skill usage and retry with corrected args.\n2. SKILL BUG — if the skill itself is broken (e.g. argument shape mismatch, API quirk), use tweak_skill("${skillName}", "<description of the problem>") to auto-generate a patched replacement that will be loaded immediately.\n3. INFORM USER — if neither option is feasible, tell the user what went wrong.]`,
-                                        metadata: { actionId: action.id, skill: skillName, failures: failCount }
-                                    });
-                                } else {
-                                    await this.triggerSkillCreationForFailure(
-                                        typeof action.payload === 'string' ? action.payload : JSON.stringify(action.payload),
-                                        skillName,
-                                        `Skill called ${callCount} times without progress`,
-                                        action
-                                    );
-                                }
-                            }
+                            forceBreak = true;
                             break;
                         }
                     }
 
                     // 5. PATTERN-BASED LOOP DETECTION
-                    // Detect repeating patterns like [manage_config, run_command, manage_config, run_command]
-                    // BUT only break if the arguments are also the same — different args = different work.
                     if (recentSkillNames.length >= 6) {
                         const last6Names = recentSkillNames.slice(-6);
                         const namePattern2 = `${last6Names[0]},${last6Names[1]}`;
-                        const nameRepeating = `${last6Names[2]},${last6Names[3]}` === namePattern2 && `${last6Names[4]},${last6Names[5]}` === namePattern2;
-
-                        if (nameRepeating) {
-                            // Names repeat — but are the arguments also the same?
+                        if (`${last6Names[2]},${last6Names[3]}` === namePattern2 && `${last6Names[4]},${last6Names[5]}` === namePattern2) {
                             const last6Sigs = recentSkillSignatures.slice(-6);
                             const sigPattern2 = `${last6Sigs[0]}|${last6Sigs[1]}`;
-                            const sigsIdentical = `${last6Sigs[2]}|${last6Sigs[3]}` === sigPattern2 && `${last6Sigs[4]}|${last6Sigs[5]}` === sigPattern2;
-
-                            if (sigsIdentical) {
-                                // Same skills with same arguments 3x = genuine loop
-                                logger.warn(`Agent: Detected repeating skill+args pattern [${namePattern2}] x3 in action ${action.id}. Breaking loop.`);
-                                await this.sendProgressFeedback(action, 'recovering', 'Detected repeating pattern. Trying a different approach...');
-                                lastUserDeliveryAtMs = Date.now();
+                            if (`${last6Sigs[2]}|${last6Sigs[3]}` === sigPattern2 && `${last6Sigs[4]}|${last6Sigs[5]}` === sigPattern2) {
+                                logger.warn(`Agent: Detected repeating pattern x3 in action ${action.id}. Breaking loop.`);
                                 break;
-                            } else {
-                                // Same skill names but different arguments — not a loop, just sequential work
-                                logger.debug(`Agent: Skill name pattern [${namePattern2}] repeats but args differ — allowing (sequential work, not a loop).`);
                             }
                         }
                     }
 
                     forceBreak = false;
                     let sentMessageCountInThisStep = 0;
+                    let firstSentMessageInThisStep = '';
+                    let toolsBlockedByCooldown = 0;
                     let totalSendToolsInStep = 0;
+                    let duplicateSideEffectsBlockedInStep = 0;
+                    let totalSideEffectToolsInStep = 0;
                     let remainingToolsInBatch = decision.tools.length;
 
                     // Group tools into parallel batches
-                    const toolBatches: Array<{ tools: any[], isParallel: boolean }> = [];
-                    let currentBatch: any[] = [];
+                    const toolBatches = [];
+                    let currentBatchTools = [];
                     let currentBatchIsParallel = false;
 
                     for (const toolCall of decision.tools) {
                         const toolMeta = getSkillMeta(toolCall.name);
                         const isSafe = !!toolMeta.isParallelSafe;
 
-                        if (currentBatch.length === 0) {
-                            currentBatch.push(toolCall);
+                        if (currentBatchTools.length === 0) {
+                            currentBatchTools.push(toolCall);
                             currentBatchIsParallel = isSafe;
                         } else if (isSafe && currentBatchIsParallel) {
-                            currentBatch.push(toolCall);
+                            currentBatchTools.push(toolCall);
                         } else {
-                            toolBatches.push({ tools: currentBatch, isParallel: currentBatchIsParallel });
-                            currentBatch = [toolCall];
+                            toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
+                            currentBatchTools = [toolCall];
                             currentBatchIsParallel = isSafe;
                         }
                     }
-                    if (currentBatch.length > 0) {
-                        toolBatches.push({ tools: currentBatch, isParallel: currentBatchIsParallel });
+                    if (currentBatchTools.length > 0) {
+                        toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
                     }
 
                     for (const batch of toolBatches) {
@@ -12522,1024 +12507,160 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         if (batch.isParallel && batch.tools.length > 1) {
                             logger.info(`Agent: Executing ${batch.tools.length} tools in parallel: ${batch.tools.map(t => t.name).join(', ')}`);
                             
-                            const results = await Promise.all(batch.tools.map(async (toolCall) => {
+                            const parallelResults = await Promise.all(batch.tools.map(async (toolCall) => {
                                 const toolMeta = getSkillMeta(toolCall.name);
-                                
-                                // Basic safety checks (Admin, Side Effects) still apply inside parallel
                                 const isAdmin = action.payload?.isAdmin !== false;
-                                if (!isAdmin && toolMeta.isElevated) {
-                                    return `Error: Skill '${toolCall.name}' requires admin privileges.`;
-                                }
+                                if (!isAdmin && toolMeta.isElevated) return `Error: Skill '${toolCall.name}' requires admin privileges.`;
 
                                 try {
-                                    const toolResult = await this.skills.executeSkill(toolCall.name, {
-                                        ...toolCall.parameters,
-                                        ...action.payload,
-                                        actionId: action.id,
-                                        step: currentStep
-                                    });
-                                    
+                                    const toolResult = await this.skills.executeSkill(toolCall.name, { ...toolCall.parameters, ...action.payload, actionId: action.id, step: currentStep });
                                     this.memory.saveMemory({
                                         id: `${action.id}-step-${currentStep}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
                                         type: 'short',
                                         content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
                                         metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: true }
                                     });
-
                                     return toolResult;
-                                } catch (e) {
-                                    return `Error executing ${toolCall.name}: ${e}`;
-                                }
+                                } catch (e) { return `Error executing ${toolCall.name}: ${e}`; }
                             }));
-
-                            // If any parallel tool failed significantly, we might want to break
-                            if (results.some(r => String(r).startsWith('Error'))) {
-                                logger.warn('Agent: One or more parallel tools failed. Continuing but marking for potential re-plan.');
-                            }
+                            remainingToolsInBatch -= batch.tools.length;
                         } else {
-                            // Sequential execution for single tools or non-safe batches
                             for (const toolCall of batch.tools) {
                                 if (forceBreak) break;
-                                
+                                remainingToolsInBatch--;
                                 const toolMeta = getSkillMeta(toolCall.name);
-                                // ... existing sequential execution logic ...
-                                // (I will implement the full logic below in a focused replace)
-                        if (toolMeta.isSideEffect) {
-                            totalSideEffectToolsInStep++;
-                            const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
-                            if (successfulSideEffectKeys.has(sideEffectKey)) {
-                                duplicateSideEffectsBlockedInStep++;
-                                logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' with equivalent intent in action ${action.id}`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-sideeffect-duplicate-blocked`,
-                                    type: 'short',
-                                    content: `[SYSTEM: BLOCKED duplicate side-effect call for '${toolCall.name}'. Equivalent target/payload already succeeded in this action. Do NOT resend. Continue with next unfinished step or complete.]`,
-                                    metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, duplicateSideEffect: true }
-                                });
-                                continue;
-                            }
-                        }
 
-                        if (blockedFailedTools.has(toolCall.name)) {
-                            logger.warn(`Agent: Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-tool-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: TOOL BLOCKED — '${toolCall.name}' already failed repeatedly in this action. Do NOT call it again unless strategy changed fundamentally. Use a different tool/workflow now.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, toolBlocked: true }
-                            });
-                            continue;
-                        }
+                                if (toolMeta.isSend) {
+                                    totalSendToolsInStep++;
+                                    if (sentMessageCountInThisStep > 0 && !this.isSequentialUIComponent(toolCall.name)) {
+                                        toolsBlockedByCooldown++;
+                                        logger.info(`Agent: Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`);
+                                        continue;
+                                    }
+                                }
 
-                        const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
-                        if (blockedFailedSignatures.has(toolSignature)) {
-                            logger.warn(`Agent: Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-signature-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: BLOCKED REPEATED FAILURE — '${toolCall.name}' with the same parameters already failed in this action. Do NOT retry this exact call. Choose different parameters or a different approach.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, signatureBlocked: true }
-                            });
-                            continue;
-                        }
+                                if (toolMeta.isSideEffect) {
+                                    totalSideEffectToolsInStep++;
+                                    const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolCall.metadata || {});
+                                    if (successfulSideEffectKeys.has(sideEffectKey)) {
+                                        duplicateSideEffectsBlockedInStep++;
+                                        logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' in action ${action.id}`);
+                                        continue;
+                                    }
+                                }
 
-                        // Reset cooldown if a deep tool (search, command, browser interaction) is used
-                        if (toolMeta.isDeep) {
-                            deepToolExecutedSinceLastMessage = true;
-                        }
-
-                        if (toolCall.name === 'send_telegram' || toolCall.name === 'send_whatsapp' || toolCall.name === 'send_discord' || toolCall.name === 'send_slack' || toolCall.name === 'send_gateway_chat' ||
-                            toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll') {
-                            const isStructuredSend = toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
-                            // For structured messages (buttons/polls) include their payload in the key so that
-                            // same caption text + different buttons/options is NOT treated as a duplicate.
-                            const structuredSuffix = isStructuredSend
-                                ? '|' + JSON.stringify(toolCall.metadata?.buttons ?? toolCall.metadata?.options ?? [])
-                                : '';
-                            const currentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || '').trim()) + structuredSuffix;
-                            totalSendToolsInStep++;
-
-                            // 0. HALLUCINATION / TEMPLATE PLACEHOLDER GUARD
-                            // Block messages containing {{PLACEHOLDER}} or similar template syntax — these are fabricated, not real data.
-                            const templatePlaceholderPattern = /\{\{[A-Z_]+\}\}|\[\[\w+\]\]|<<[A-Z_]+>>|\{%.*?%\}/;
-                            if (templatePlaceholderPattern.test(currentMessage)) {
-                                logger.warn(`Agent: Blocked hallucinated message in action ${action.id}. Message contains template placeholders: "${currentMessage.slice(0, 120)}..."`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-blocked-hallucination`,
-                                    type: 'short',
-                                    content: `[SYSTEM: BLOCKED hallucinated message. Your message contained template placeholders like {{VARIABLE}} instead of real data. You MUST use ACTUAL data from tool results. If the browser returned blank pages, switch to web_search instead of fabricating results. NEVER send messages with placeholder text to the user.]`,
-                                    metadata: { actionId: action.id, step: currentStep }
-                                });
-                                toolsBlockedByCooldown++;
-                                continue;
-                            }
-
-                            // 1. Block exact duplicates across any step in this action
-                            if (sentMessagesInAction.includes(currentMessage)) {
-                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Action-wide duplicate).`);
-                                toolsBlockedByCooldown++;
-                                continue;
-                            }
-
-                            // 1.5 Block semantic near-duplicates (same intent/wording drift)
-                            if (this.isSemanticallyDuplicateOutboundMessage(currentMessage, sentMessagesInAction)) {
-                                logger.warn(`Agent: Blocked semantically duplicate message in action ${action.id}.`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-blocked-semantic-duplicate`,
-                                    type: 'short',
-                                    content: `[SYSTEM: BLOCKED semantic duplicate message. Your outbound message is too similar to one already sent in this action. Send only NEW information or conclude the task.]`,
-                                    metadata: { actionId: action.id, step: currentStep, semanticDuplicateBlocked: true }
-                                });
-                                toolsBlockedByCooldown++;
-                                continue;
-                            }
-
-                            // 2. Communication Cooldown: Block if no new deep info since last message
-                            // Exceptions: 
-                            // - Step 1 is mandatory (Greeter)
-                            // - If no message has been sent yet in this action (first reply must get through)
-                            // - If 15+ steps have passed without an update (Status update for long tasks)
-                            // - Structured interactive messages (buttons/polls) ARE the substantive delivery;
-                            //   they must never be blocked by the cooldown regardless of prior text sends.
-                            // - If every message sent so far in this action was just a short acknowledgement/reassurance,
-                            //   we allow one more message (the actual answer) even without new deep tool data.
-                            const isOnlyAckSoFar = messagesSent > 0 && sentMessagesInAction.every(msg => this.isLikelyAcknowledgementMessage(msg));
-                            
-                            if (!isStructuredSend && currentStep > 1 && messagesSent > 0 && !deepToolExecutedSinceLastMessage && stepsSinceLastMessage < 15 && !isOnlyAckSoFar) {
-                                logger.warn(`Agent: Blocked redundant message in action ${action.id} (Communication Cooldown - No new deep data).`);
-                                toolsBlockedByCooldown++;
-                                continue;
-                            }
-
-                            // 3. Block double-messages in a single step
-                            if (sentMessageCountInThisStep > 0) {
-                                const allowSubstantiveFollowUp =
-                                    sentMessageCountInThisStep === 1 &&
-                                    this.isLikelyAcknowledgementMessage(firstSentMessageInThisStep) &&
-                                    this.isSubstantiveFollowUpMessage(currentMessage) &&
-                                    !sentMessagesInAction.includes(currentMessage);
-
-                                if (!allowSubstantiveFollowUp) {
-                                    logger.warn(`Agent: Blocked redundant message in action ${action.id} (Already sent message in this step).`);
-                                    toolsBlockedByCooldown++;
+                                if (blockedFailedTools.has(toolCall.name)) {
+                                    logger.warn(`Agent: Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`);
                                     continue;
                                 }
 
-                                logger.info(`Agent: Allowing one substantive follow-up message after acknowledgement in step ${currentStep} for action ${action.id}.`);
-                            }
-
-                            // 3.5 Clarification loop guard: avoid asking semantically the same
-                            // question again when we already resumed with user clarification context.
-                            const resumedWithMergedContext = !!action.payload?.resumedWithMergedContext;
-                            if (
-                                resumedWithMergedContext &&
-                                this.messageContainsQuestion(currentMessage) &&
-                                this.isRepeatedClarificationQuestion(currentMessage, sentMessagesInAction) &&
-                                !deepToolExecutedSinceLastMessage
-                            ) {
-                                logger.warn(`Agent: Blocked repeated clarification question in action ${action.id}.`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-repeated-clarification-blocked`,
-                                    type: 'short',
-                                    content: `[SYSTEM: BLOCKED repeated clarification question. The user already provided clarification in this thread. Do NOT ask the same question again — proceed using the latest user answer and execute the task.]`,
-                                    metadata: { actionId: action.id, step: currentStep, resumedWithMergedContext: true }
-                                });
-                                toolsBlockedByCooldown++;
-                                continue;
-                            }
-
-                            sentMessageCountInThisStep++;
-                            if (!firstSentMessageInThisStep) {
-                                firstSentMessageInThisStep = currentMessage;
-                            }
-
-                            // 4. QUESTION DETECTION: If message contains a question, pause and wait for response
-                            if (this.messageContainsQuestion(currentMessage)) {
-                                logger.info(`Agent: Message contains question. Will pause after sending to wait for user response.`);
-                                // Only pause if we actually still need the user's answer to make progress.
-                                // If goals are already met, do not block the queue in a waiting state.
-                                if (!decision.verification?.goals_met) {
-                                    forceBreak = true;
+                                const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
+                                if (blockedFailedSignatures.has(toolSignature)) {
+                                    logger.warn(`Agent: Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`);
+                                    continue;
                                 }
-                            }
-                        }
 
-                        // 3. SAFETY GATING (Autonomy Lane)
-                        // Autonomous background tasks cannot run dangerous commands without explicit user permission.
-                        // sudoMode: true bypasses this restriction (full trust)
-                        const sudoMode = this.config.get('sudoMode');
-                        if (!sudoMode && action.lane === 'autonomy' && toolMeta.isDangerous) {
-                            logger.warn(`Agent: Blocked dangerous tool ${toolCall.name} in autonomy lane.`);
+                                if (toolMeta.isDeep) {
+                                    deepToolExecutedSinceLastMessage = true;
+                                }
 
-                            // If we have a Telegram, notify the user
-                            if (this.telegram && this.config.get('telegramToken')) {
-                                // Find a chatID to notify (from config or last known?)
-                                // For now, we rely on the Agent self-correcting strategy or just logging.
-                            }
-
-                            const allowedChannels = Array.isArray(this.config.get('autonomyAllowedChannels')) ? this.config.get('autonomyAllowedChannels') as string[] : [];
-                            
-                            let denial = `[PERMISSION DENIED] You are in AUTONOMY MODE. You cannot use '${toolCall.name}' directly.`;
-                            
-                            if (allowedChannels.length > 0) {
-                                denial += `\nSystem Policy requires you to ASK the user for permission first.\nAction: Use a messaging skill (e.g., 'send_${allowedChannels[0]}') to explain what you want to do and ask for approval.`;
-                            } else {
-                                denial += `\nFurthermore, you are NOT allowed to message the user autonomously (autonomyAllowedChannels is empty). You must ABORT this task immediately since you cannot ask for permission. Do not attempt to use messaging tools.`;
-                            }
-
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-denial`,
-                                type: 'short',
-                                content: denial
-                            });
-                            // We don't execute the skill. We continue to next loop iteration, effectively "skipping" this tool but logging the denial.
-                            // The agent will see this in memory next turn.
-                            continue;
-                        }
-
-                        // 4. ADMIN PERMISSION GATING
-                        // Non-admin users (external users not in adminUsers config) cannot use elevated skills.
-                        // This is a hard block — the LLM should have been told not to attempt these,
-                        // but this is defense-in-depth in case it does.
-                        const isAdmin = action.payload?.isAdmin !== false;
-                        if (!isAdmin && toolMeta.isElevated) {
-                            logger.warn(`Agent: BLOCKED elevated skill '${toolCall.name}' for non-admin user ${action.payload?.senderName || action.payload?.userId || 'unknown'} (${action.payload?.source}).`);
-
-                            // Send a polite denial message to the user via the appropriate channel
-                            const source = action.payload?.source;
-                            const sourceId = action.payload?.sourceId;
-                            const denialMsg = `Sorry, you don't have permission to do that. This action requires admin privileges.`;
-
-                            if (source === 'telegram' && this.telegram && sourceId) {
-                                try { await this.telegram.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
-                            } else if (source === 'discord' && this.discord && sourceId) {
-                                try { await this.discord.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
-                            } else if (source === 'whatsapp' && this.whatsapp && sourceId) {
-                                try { await this.whatsapp.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
-                            } else if (source === 'slack' && this.slack && sourceId) {
-                                try { await this.slack.sendMessage(sourceId, denialMsg); messagesSent++; } catch (e) { /* best effort */ }
-                            }
-
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-admin-denied`,
-                                type: 'short',
-                                content: `[SYSTEM: PERMISSION DENIED — '${toolCall.name}' is an elevated skill. User "${action.payload?.senderName || 'unknown'}" is NOT an admin. The user has been informed. Do NOT attempt other elevated skills. Only use messaging and search skills for this user.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, denied: true }
-                            });
-                            forceBreak = true; // Stop trying — non-admin users get one denial then we exit
-                            break;
-                        }
-
-
-                        // logger.info(`Executing skill: ${toolCall.name}`); // Redundant, SkillsManager logs this
-                        const channelPolicy = this.evaluateChannelToolPolicy(action, toolCall.name);
-                        if (!channelPolicy.allowed) {
-                            logger.warn(`Agent: Blocked channel tool '${toolCall.name}' for action ${action.id}: ${channelPolicy.reason}`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-channel-policy-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: CHANNEL POLICY BLOCKED '${toolCall.name}'. Reason: ${channelPolicy.reason}. Config-level channel policy takes precedence over context/heartbeat/tool suggestions. Use only tools that match the action source channel and enabled channels.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, denied: true }
-                            });
-                            continue;
-                        }
-
-                        // HARD BLOCK: Prevent duplicate generate_image calls within the same action.
-                        // If an image was already generated (and optionally delivered), skip this call entirely.
-                        if (toolCall.name === 'generate_image' && imageGeneratedInAction) {
-                            logger.warn(`Agent: BLOCKED duplicate generate_image in action ${action.id}. Image already generated${imageDeliveredInAction ? ' and delivered' : ''}.`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-generate_image-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: generate_image BLOCKED — image was already generated in this action${generatedImagePath ? ` at ${generatedImagePath}` : ''}. ${imageDeliveredInAction ? 'Image was already delivered. Task is COMPLETE — set goals_met=true.' : `Use send_file(jid, "${generatedImagePath}") to deliver it.`}]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: 'generate_image', blocked: true }
-                            });
-                            continue; // Skip execution, move to next tool
-                        }
-
-                        const toolStartedAt = Date.now();
-                        let toolResult;
-                        let executionError: unknown;
-                        try {
-                            toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
-                            // Reset failure counter on success
-                            skillFailCounts[toolCall.name] = 0;
-                        } catch (e) {
-                            executionError = e;
-                            logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
-                            toolResult = `Error executing skill ${toolCall.name}: ${e}`;
-
-                            // Track consecutive failures per skill
-                            skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
-                            if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
-                                logger.warn(`Agent: Skill '${toolCall.name}' failed ${MAX_CONSECUTIVE_FAILURES} consecutive times in action ${action.id}. Triggering Hard Block Review.`);
-                                
-                                const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
-                                const review = await this.reviewHardBlock(action, String(toolResult), currentStep, history);
-
-                                if (review.verdict === 'STOP') {
-                                    logger.warn(`Agent: Hard Block Reviewer decided to STOP action ${action.id}. Reason: ${review.reasoning}`);
-                                    forceBreak = true;
-                                    break;
-                                } else {
-                                    // CONTINUE with suggested strategy
-                                    logger.info(`Agent: Hard Block Reviewer decided to CONTINUE action ${action.id}. Strategy: ${review.suggestedStrategy}`);
-                                    // Reset failure count so we can try the new strategy
+                                const toolStartedAt = Date.now();
+                                let toolResult;
+                                let executionError;
+                                try {
+                                    toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
                                     skillFailCounts[toolCall.name] = 0;
-                                }
-                            }
-
-                            // PROGRESS FEEDBACK: Let user know we hit an error but are recovering.
-                            // Do NOT fire for channel send skills — you can't tell the user
-                            // "send_telegram failed" by calling send_telegram again.
-                            const sendSkillNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll', 'send_email'];
-                            if (!sendSkillNames.includes(toolCall.name)) {
-                                await this.sendProgressFeedback(action, 'error', `${toolCall.name} failed`);
-                                lastUserDeliveryAtMs = Date.now();
-                            }
-                        }
-
-                        // CLARIFICATION HANDLING: Break sequence if agent is asking for info
-                        if (toolCall.name === 'request_supporting_data') {
-                            const question = toolCall.metadata?.question || toolCall.metadata?.text || 'I need more information to proceed.';
-
-                            // Send clarification to appropriate channel
-                            if (this.telegram && action.payload.source === 'telegram') {
-                                await this.telegram.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
-                            } else if (this.whatsapp && action.payload.source === 'whatsapp') {
-                                await this.whatsapp.sendMessage(action.payload.sourceId, `❓ Clarification Needed: ${question}`);
-                            } else if (this.discord && action.payload.source === 'discord') {
-                                await this.discord.sendMessage(action.payload.sourceId, `❓ **Clarification Needed**: ${question}`);
-                            } else if (this.slack && action.payload.source === 'slack') {
-                                await this.slack.sendMessage(action.payload.sourceId, `❓ *Clarification Needed*: ${question}`);
-                            }
-
-                            logger.info(`Agent: Clarification requested. Pausing action ${action.id} - waiting for user response.`);
-
-                            // Mark action as waiting (not completed) so it won't be re-picked until user replies
-                            this.actionQueue.updateStatus(action.id, 'waiting');
-
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-clarification`,
-                                type: 'short',
-                                content: `[SYSTEM: Agent requested clarification: "${question}". Action PAUSED. Waiting for user response.]`,
-                                metadata: { waitingForClarification: true, actionId: action.id, question }
-                            });
-
-                            // Set a flag to skip the normal completion logic
-                            waitingForClarification = true;
-                            forceBreak = true;
-                            break;
-                        }
-
-                        // Determine if the result indicates an error using STRUCTURED checks first,
-                        // then fall back to string scanning for unstructured results.
-                        const resultString = JSON.stringify(toolResult) || '';
-
-                        // Structured check: if result is an object with explicit success/error fields, trust those
-                        const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
-                        let resultIndicatesError: boolean;
-
-                        if (hasStructuredResult && 'success' in toolResult) {
-                            // Plugin returned { success: true/false, ... } — trust the explicit field
-                            resultIndicatesError = toolResult.success === false;
-                        } else if (hasStructuredResult && 'error' in toolResult && typeof toolResult.error === 'string' && toolResult.error.length > 0) {
-                            // Plugin returned { error: "some message" } without success field
-                            resultIndicatesError = true;
-                        } else if (typeof toolResult === 'string') {
-                            // Unstructured string result — scan for error indicators
-                            // But only at the START of the string (not deeply nested in response data)
-                            const lower = toolResult.toLowerCase();
-                            resultIndicatesError = lower.startsWith('error') ||
-                                lower.startsWith('failed') ||
-                                lower.includes('error executing skill');
-                        } else {
-                            resultIndicatesError = false;
-                        }
-                        // Channel send skills (telegram, whatsapp, discord, etc.) are NEVER added to
-                        // blockedFailedSignatures — they can fail transiently (API errors, parse failures)
-                        // and the LLM needs to retry with adjusted content/params.
-                        const isChannelSendSkill = toolMeta.isSideEffect;
-
-                        if (toolMeta.isDeep && !resultIndicatesError) {
-                            deepToolExecutedSinceLastMessage = true;
-                            // Reset failure counter for this skill on success
-                            skillFailCounts[toolCall.name] = 0;
-                        } else if (resultIndicatesError) {
-                            if (!isChannelSendSkill) blockedFailedSignatures.add(toolSignature);
-                            // Track ALL tool failures that return error results (not just thrown exceptions)
-                            skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
-
-                            // Inject explicit error feedback so the LLM learns from this failure
-                            const errorSnippet = resultString.slice(0, 300);
-                            const paramsSummary = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
-
-                            // Detect rate-limit errors and suggest schedule_task instead of giving up
-                            const rateLimitMatch = resultString.match(/(?:wait|retry.*?after|rate.*?limit).*?(\d+)\s*(second|minute|hour|min|sec|hr)s?/i);
-                            const hasRetryAfter = hasStructuredResult && (toolResult.retry_after_minutes || toolResult.retry_after_seconds || toolResult.details?.retry_after_minutes || toolResult.details?.retry_after_seconds);
-
-                            if (rateLimitMatch || hasRetryAfter) {
-                                let waitMinutes: number;
-                                if (hasRetryAfter) {
-                                    const retryMins = toolResult.retry_after_minutes || toolResult.details?.retry_after_minutes;
-                                    const retrySecs = toolResult.retry_after_seconds || toolResult.details?.retry_after_seconds;
-                                    waitMinutes = retryMins ? Number(retryMins) : Math.ceil(Number(retrySecs || 60) / 60);
-                                } else {
-                                    const amount = parseInt(rateLimitMatch![1]);
-                                    const unit = rateLimitMatch![2].toLowerCase();
-                                    waitMinutes = unit.startsWith('sec') ? Math.ceil(amount / 60) : unit.startsWith('hr') || unit.startsWith('hour') ? amount * 60 : amount;
-                                }
-                                // Add 1 minute buffer
-                                waitMinutes = Math.max(waitMinutes + 1, 2);
-
-                                logger.info(`Agent: Rate limit detected for '${toolCall.name}'. Suggesting schedule_task for ${waitMinutes} minutes.`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-rate-limit-guidance`,
-                                    type: 'short',
-                                    content: `[SYSTEM: TEMPORAL BLOCKER — '${toolCall.name}' hit a rate limit / cooldown (~${waitMinutes} min). DO NOT retry now. Use schedule_task({ time_or_cron: "in ${waitMinutes} minutes", task_description: "<original task>" }) to auto-retry, then inform the user what you scheduled.]`,
-                                    metadata: { actionId: action.id, skill: toolCall.name, rateLimitMinutes: waitMinutes, step: currentStep }
-                                });
-                            } else {
-                                // Build shell-aware hint for common failures
-                                let hint = '';
-                                const isWin = process.platform === 'win32';
-                                if (toolCall.name === 'run_command') {
-                                    const cmdStr = String(toolCall.metadata?.command || toolCall.metadata?.cmd || '').trim().toLowerCase();
-                                    if (isWin) {
-                                        if (cmdStr.startsWith('dir ') || cmdStr === 'dir') {
-                                            hint = ' HINT: Use Get-ChildItem instead of dir. Commands execute in PowerShell.';
-                                        } else if (cmdStr.startsWith('where ')) {
-                                            hint = ' HINT: Use Get-Command instead of where. Commands execute in PowerShell.';
-                                        } else if (errorSnippet.includes('not recognized') || errorSnippet.includes('not found') || errorSnippet.includes('Could not find')) {
-                                            hint = ' HINT: Commands run in PowerShell. Use PowerShell cmdlets (Get-ChildItem, Get-Command, Test-Path, Start-MpScan, etc.).';
-                                        } else if (errorSnippet.includes('cannot find the path') || errorSnippet.includes('does not exist')) {
-                                            hint = ' HINT: Verify the path exists with Test-Path before using it.';
-                                        }
-                                    } else {
-                                        // Linux/Mac hints
-                                        if (errorSnippet.includes('command not found') || errorSnippet.includes('not found')) {
-                                            hint = ' HINT: The command is not installed. Try installing it first (e.g., apt install, brew install, npm install -g, pip install), or use an alternative tool that is available. Run "which <command>" or "command -v <command>" to check if a tool exists.';
-                                        } else if (errorSnippet.includes('Permission denied') || errorSnippet.includes('permission denied')) {
-                                            hint = ' HINT: Permission denied. Try: (1) using a different output directory you have write access to, (2) checking file permissions with "ls -la", (3) using chmod if appropriate.';
-                                        } else if (errorSnippet.includes('No such file or directory')) {
-                                            hint = ' HINT: File or directory not found. Use "ls" or "find" to locate the correct path. Check for typos in the path.';
-                                        } else if (errorSnippet.includes('Connection refused') || errorSnippet.includes('connection refused')) {
-                                            hint = ' HINT: Connection refused. The target service may not be running. Check if it needs to be started or if the port/address is correct.';
-                                        } else if (errorSnippet.includes('timed out') || errorSnippet.includes('Killed')) {
-                                            hint = ' HINT: Command timed out or was killed. Try: (1) a simpler/faster command, (2) adding non-interactive flags (-y, --batch, --no-input), (3) increasing the timeout with timeoutMs parameter.';
-                                        } else if (errorSnippet.includes('syntax error') || errorSnippet.includes('unexpected token')) {
-                                            hint = ' HINT: Shell syntax error. Check your command for proper quoting, escaping, and shell-compatible syntax. Use get_system_info to check the shell environment.';
+                                } catch (e) {
+                                    executionError = e;
+                                    logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
+                                    toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+                                    skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
+                                    
+                                    if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
+                                        const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+                                        const review = await this.reviewHardBlock(action, String(toolResult), currentStep, history);
+                                        if (review.verdict === 'STOP') {
+                                            forceBreak = true;
+                                            break;
+                                        } else {
+                                            skillFailCounts[toolCall.name] = 0;
                                         }
                                     }
                                 }
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-error-feedback`,
-                                    type: 'short',
-                                    content: `[SYSTEM: TOOL ERROR — '${toolCall.name}' FAILED with params ${paramsSummary}. Error: ${errorSnippet}.${hint} DO NOT call '${toolCall.name}' again with the same parameters. Fix the parameters or try a completely different approach.]`,
-                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name], step: currentStep }
-                                });
-                            }
 
-                            if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
-                                logger.warn(`Agent: '${toolCall.name}' returned errors ${MAX_CONSECUTIVE_FAILURES} times in action ${action.id}. Injecting hard stop notice.`);
-                                blockedFailedTools.add(toolCall.name);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-${toolCall.name}-failure-limit`,
-                                    type: 'short',
-                                    content: `[SYSTEM: CRITICAL — '${toolCall.name}' has returned errors ${MAX_CONSECUTIVE_FAILURES} times in a row. STOP calling it with the same approach. Your options:\n1. PATCH IT — call tweak_skill("${toolCall.name}", "<exact description of the error and what to fix>") to generate and load a patched replacement right now.\n2. ALTERNATIVE — use a different skill or method that achieves the same goal.\n3. INFORM USER — explain what failed and ask for guidance.]`,
-                                    metadata: { actionId: action.id, skill: toolCall.name, failures: skillFailCounts[toolCall.name] }
-                                });
-                            }
-                        }
-
-                        // Data-returning tools need more of their output visible so the LLM can
-                        // recognise success/failure without looping. Message/action tools keep a
-                        // tighter cap since their result is just a confirmation string.
-                        const DATA_RETURNING_TOOLS = new Set([
-                            'run_command', 'read_file', 'write_file', 'web_search',
-                            'browser_navigate', 'browser_click', 'http_request',
-                            'find_skills', 'list_files', 'search_files',
-                        ]);
-                        const obsLimit = DATA_RETURNING_TOOLS.has(toolCall.name) ? 1400 : 500;
-
-                        let observation: string;
-                        if (resultIndicatesError) {
-                            const errorDetail = hasStructuredResult && toolResult.error
-                                ? toolResult.error
-                                : resultString.slice(0, obsLimit);
-                            observation = `⚠️ TOOL ERROR: ${toolCall.name} FAILED — ${errorDetail}`;
-                        } else if (hasStructuredResult && toolResult.success === true) {
-                            observation = `✅ Tool ${toolCall.name} succeeded: ${resultString.slice(0, obsLimit)}`;
-                        } else {
-                            observation = `Observation: Tool ${toolCall.name} returned: ${resultString.slice(0, obsLimit)}`;
-                        }
-                        if (toolMeta.isSideEffect) {
-                            const isStructuredSend = toolCall.name === 'telegram_send_buttons' || toolCall.name === 'telegram_send_poll';
-                            const isMediaSend = toolCall.name === 'send_image' || toolCall.name === 'send_file' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file';
-                            
-                            const structuredSuffix = isStructuredSend
-                                ? '|' + JSON.stringify(toolCall.metadata?.buttons ?? toolCall.metadata?.options ?? [])
-                                : '';
-                            const sentMessage = ((toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.question || toolCall.metadata?.caption || toolCall.metadata?.newText || toolCall.metadata?.new_text || '').trim()).toString();
-                            const currentMessage = sentMessage + (isMediaSend ? ` [Media: ${toolCall.metadata?.path || toolCall.metadata?.prompt || 'attachment'}]` : '') + structuredSuffix;
-
-                            if (!resultIndicatesError) {
-                                messagesSent++;
-                                sentMessagesInAction.push(currentMessage);
-                                lastMessageContent = currentMessage;
-                                deepToolExecutedSinceLastMessage = false; // Reset cooldown after SUCCESSFUL sending
-                                stepsSinceLastMessage = 0; // Reset status update timer
-
-                                anyUserDeliverySuccess = true;
-                                lastUserDeliveryAtMs = Date.now();
-
-                                if (this.isSubstantiveDeliveryMessage(sentMessage) || isStructuredSend || isMediaSend) {
-                                    substantiveDeliveriesSent++;
+                                if (toolCall.name === 'request_supporting_data') {
+                                    waitingForClarification = true;
+                                    forceBreak = true;
+                                    break;
                                 }
-                            }
 
-                            // QUESTION PAUSE: If this message asked a question, pause and wait for response
-
-                            const wasSuccessfulSend = !resultIndicatesError;
-                            if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && !decision.verification?.goals_met) {
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-waiting`,
-                                    type: 'short',
-                                    content: `[SYSTEM: Sent question to user. WAITING for response. Do NOT continue until user replies. Question: "${sentMessage.slice(0, 100)}..."]`,
-                                    metadata: { waitingForResponse: true, actionId: action.id }
-                                });
-                                logger.info(`Agent: Pausing action ${action.id} - waiting for user response to question.`);
-
-                                this.actionQueue.updateStatus(action.id, 'waiting');
-
-                                // Actually pause - set flags to break loop and skip completion
-                                waitingForClarification = true;
-                                forceBreak = true;
-                            } else if (this.messageContainsQuestion(sentMessage) && wasSuccessfulSend && decision.verification?.goals_met) {
-                                logger.info(`Agent: Sent a question in action ${action.id}, but goals_met=true; not entering waiting state.`);
-                            } else if (this.messageContainsQuestion(sentMessage) && !wasSuccessfulSend) {
-                                logger.warn(`Agent: Attempted to ask a question via ${toolCall.name}, but send failed; not entering waiting state.`);
-                            }
-                        }
-
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-${toolCall.name}`,
-                            type: 'short',
-                            content: observation,
-                            metadata: { tool: toolCall.name, result: toolResult, input: toolCall.metadata }
-                        });
-
-                        const toolDurationMs = Date.now() - toolStartedAt;
-                        const signalLevel: WorkflowSignalLevel = resultIndicatesError
-                            ? 'error'
-                            : toolDurationMs >= 12000
-                                ? 'warn'
-                                : 'info';
-
-                        if (shouldInjectWorkflowSignal({
-                            actionId: action.id,
-                            step: currentStep,
-                            toolName: toolCall.name,
-                            level: signalLevel,
-                            toolDurationMs,
-                            errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
-                            consecutiveFailures: skillFailCounts[toolCall.name] || 0,
-                            hasExistingErrorGuidance: resultIndicatesError,
-                        })) {
-                            const workflowSignal = buildWorkflowSignalMemory({
-                                actionId: action.id,
-                                step: currentStep,
-                                toolName: toolCall.name,
-                                level: signalLevel,
-                                toolDurationMs,
-                                errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
-                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
-                                hasExistingErrorGuidance: resultIndicatesError,
-                            });
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-workflow-signal`,
-                                type: 'short',
-                                content: workflowSignal,
-                                metadata: {
-                                    actionId: action.id,
-                                    step: currentStep,
-                                    skill: toolCall.name,
-                                    signalLevel,
-                                    toolDurationMs,
-                                    consecutiveFailures: skillFailCounts[toolCall.name] || 0,
+                                const resultString = JSON.stringify(toolResult) || '';
+                                const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
+                                let resultIndicatesError = false;
+                                if (hasStructuredResult && 'success' in toolResult) resultIndicatesError = toolResult.success === false;
+                                else if (hasStructuredResult && 'error' in toolResult) resultIndicatesError = true;
+                                else if (typeof toolResult === 'string') {
+                                    const lower = toolResult.toLowerCase();
+                                    resultIndicatesError = lower.startsWith('error') || lower.startsWith('failed');
                                 }
-                            });
 
-                            logger.warn(buildWorkflowSignalLog({
-                                actionId: action.id,
-                                step: currentStep,
-                                toolName: toolCall.name,
-                                level: signalLevel,
-                                toolDurationMs,
-                                errorMessage: executionError ? String(executionError) : resultIndicatesError ? String(toolResult) : undefined,
-                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
-                            }));
-                        }
-
-                        if (toolMeta.isSideEffect && !resultIndicatesError) {
-                            const sideEffectKey = buildSideEffectKey(toolCall.name, toolCall.metadata || {});
-                            successfulSideEffectKeys.add(sideEffectKey);
-                            if (toolCall.name === 'send_file' || toolCall.name === 'send_image' || toolCall.name === 'send_discord_file' || toolCall.name === 'send_slack_file') {
-                                anyUserDeliverySuccess = true;
-                            }
-                        }
-
-                        this.saveSessionAnchorFromToolResult(action, currentStep, toolCall.name, toolCall.metadata || {}, toolResult, resultIndicatesError);
-
-                        // BATCH EXECUTION GUARDRAIL:
-                        // If a queued multi-tool sequence hits a failure, stop remaining tools now
-                        // and let the next decision step re-plan with fresh error context.
-                        if (resultIndicatesError && remainingToolsInBatch > 0) {
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-batch-paused`,
-                                type: 'short',
-                                content: `[SYSTEM: Paused tool batch after ${toolCall.name} failed. ${remainingToolsInBatch} queued tool(s) were skipped. Re-plan from this failure before continuing.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: toolCall.name, queuedToolsSkipped: remainingToolsInBatch }
-                            });
-
-                            const batchPauseSignal = buildWorkflowSignalMemory({
-                                actionId: action.id,
-                                step: currentStep,
-                                toolName: toolCall.name,
-                                level: 'warn',
-                                toolDurationMs,
-                                errorMessage: executionError ? String(executionError) : String(toolResult),
-                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
-                                queuedToolsSkipped: remainingToolsInBatch,
-                            });
-
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-${toolCall.name}-batch-workflow-signal`,
-                                type: 'short',
-                                content: batchPauseSignal,
-                                metadata: {
-                                    actionId: action.id,
-                                    step: currentStep,
-                                    skill: toolCall.name,
-                                    queuedToolsSkipped: remainingToolsInBatch,
-                                    signalLevel: 'warn',
+                                if (toolMeta.isDeep && !resultIndicatesError) {
+                                    deepToolExecutedSinceLastMessage = true;
+                                } else if (resultIndicatesError) {
+                                    if (!toolMeta.isSideEffect) blockedFailedSignatures.add(toolSignature);
+                                    skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
                                 }
-                            });
 
-                            logger.warn(buildWorkflowSignalLog({
-                                actionId: action.id,
-                                step: currentStep,
-                                toolName: toolCall.name,
-                                level: 'warn',
-                                toolDurationMs,
-                                errorMessage: executionError ? String(executionError) : String(toolResult),
-                                consecutiveFailures: skillFailCounts[toolCall.name] || 0,
-                                queuedToolsSkipped: remainingToolsInBatch,
-                            }));
-                            logger.info(`Agent: Paused queued tools for action ${action.id} after '${toolCall.name}' failure (${remainingToolsInBatch} remaining).`);
-                            break;
-                        }
+                                if (toolMeta.isSideEffect && !resultIndicatesError) {
+                                    messagesSent++;
+                                    anyUserDeliverySuccess = true;
+                                    if (this.isSubstantiveDeliveryMessage(resultString)) substantiveDeliveriesSent++;
+                                }
 
-                        // HARD BREAK after scheduling to prevent loops
-                        if (toolCall.name === 'schedule_task') {
-                            logger.info(`Agent: Task scheduled for action ${action.id}. Terminating sequence.`);
-                            goalsMet = true;
-                            forceBreak = true;
-                            break;
-                        }
-
-                        // DELIVERY COMPLETION: send_file is a terminal delivery action.
-                        // When a file is successfully sent to the user, inject a strong completion signal
-                        // so the LLM recognizes that the delivery goal has been met.
-                        if (toolCall.name === 'send_file' && !resultIndicatesError) {
-                            logger.info(`Agent: File successfully delivered in action ${action.id}. Injecting delivery completion signal.`);
-                            const deliveryChannel = resultString.includes('Gateway Chat') ? 'Gateway Chat' : resultString.includes('Telegram') ? 'Telegram' : resultString.includes('WhatsApp') ? 'WhatsApp' : resultString.includes('Discord') ? 'Discord' : 'channel';
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-file-delivered`,
-                                type: 'short',
-                                content: `[SYSTEM: FILE DELIVERED SUCCESSFULLY via ${deliveryChannel}. The user has received the file. If the task was to send/deliver/resend this file, the goal is NOW COMPLETE — set goals_met=true. Do NOT re-read or re-send the same file.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: 'send_file', delivered: true }
-                            });
-                        }
-
-                        // IMAGE GENERATION DEDUP: After successful generate_image, set tracking flags
-                        // and inject a signal to prevent the LLM from calling it again.
-                        if (toolCall.name === 'generate_image' && !resultIndicatesError) {
-                            imageGeneratedInAction = true;
-                            // Extract file path from result string
-                            const pathMatch = resultString.match(/([A-Z]:\\[^\s(]+\.(?:png|jpg|webp))/i) || resultString.match(/(\/[^\s(]+\.(?:png|jpg|webp))/i);
-                            if (pathMatch) generatedImagePath = pathMatch[1];
-                            logger.info(`Agent: Image generated in action ${action.id}. Injecting dedup signal.`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-image-generated`,
-                                type: 'short',
-                                content: `[SYSTEM: IMAGE ALREADY GENERATED at ${generatedImagePath || 'path above'}. Do NOT call generate_image again — it will create DUPLICATE files. Send it with send_file(jid, "${generatedImagePath}") or set goals_met=true if task is complete.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: 'generate_image', imageGenerated: true }
-                            });
-                        }
-
-                        // SEND_IMAGE COMPLETION: compound generate+send is a terminal delivery action.
-                        // Treat it like send_file — inject delivery signal and hard break.
-                        if (toolCall.name === 'send_image' && !resultIndicatesError) {
-                            imageGeneratedInAction = true;
-                            imageDeliveredInAction = true;
-                            logger.info(`Agent: Image generated and sent in action ${action.id}. Forcing break.`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-image-delivered`,
-                                type: 'short',
-                                content: `[SYSTEM: IMAGE GENERATED AND DELIVERED SUCCESSFULLY. The user has received the image. Task is COMPLETE.]`,
-                                metadata: { actionId: action.id, step: currentStep, skill: 'send_image', delivered: true, imageGenerated: true }
-                            });
-                            goalsMet = true;
-                            forceBreak = true;
-                            break;
-                        }
-
-                        // SEND_IMAGE PARTIAL FAILURE: image was generated but send failed (e.g. wrong channel).
-                        // Mark imageGeneratedInAction so generate_image won't create a duplicate image.
-                        // The LLM should use the correct channel-specific send skill to deliver the existing image.
-                        if (toolCall.name === 'send_image' && resultIndicatesError) {
-                            // Check if the result indicates the image was generated despite send failure
-                            const hasImageGenerated = (hasStructuredResult && toolResult.imageGenerated === true) ||
-                                resultString.includes('imageGenerated') ||
-                                resultString.includes('Image was generated');
-                            if (hasImageGenerated) {
-                                imageGeneratedInAction = true;
-                                // Extract file path from structured result or string
-                                const extractedPath = (hasStructuredResult && toolResult.filePath) ||
-                                    ((resultString.match(/filePath['"]?:\s*['"]?([^'"\s,}]+\.(?:png|jpg|webp))/i) || [])[1]) ||
-                                    ((resultString.match(/([A-Z]:\\[^\s'"]+\.(?:png|jpg|webp))/i) || [])[1]) ||
-                                    ((resultString.match(/(\/.+?\.(?:png|jpg|webp))/i) || [])[1]);
-                                if (extractedPath) generatedImagePath = extractedPath;
-                                logger.warn(`Agent: send_image PARTIAL FAILURE in action ${action.id} — image generated at ${generatedImagePath || 'unknown'} but send failed.`);
                                 this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-image-generated-send-failed`,
+                                    id: `${action.id}-step-${currentStep}-${toolCall.name}`,
                                     type: 'short',
-                                    content: `[SYSTEM: Image was GENERATED at ${generatedImagePath || 'downloads folder'} but SEND FAILED. Do NOT generate another image. Use the correct channel skill to deliver: send_file("gateway-web", "${generatedImagePath}", "", "gateway-chat") for Gateway Chat, send_discord_file(channel_id, "${generatedImagePath}") for Discord, send_slack_file(channel_id, "${generatedImagePath}") for Slack, and send_file(jid, "${generatedImagePath}") for Telegram/WhatsApp.]`,
-                                    metadata: { actionId: action.id, step: currentStep, skill: 'send_image', imageGenerated: true, sendFailed: true }
+                                    content: `Tool ${toolCall.name} returned: ${resultString.slice(0, 1000)}`,
+                                    metadata: { tool: toolCall.name, result: toolResult }
                                 });
-                            }
-                        }
 
-                        // IMAGE DELIVERY via send_file or send_discord_file: If we generated an image earlier
-                        // in this action and now delivered it, force-break to prevent duplicate generation.
-                        if ((toolCall.name === 'send_file' || toolCall.name === 'send_discord_file') && !resultIndicatesError && imageGeneratedInAction && !imageDeliveredInAction) {
-                            imageDeliveredInAction = true;
-                            logger.info(`Agent: Generated image delivered via ${toolCall.name} in action ${action.id}. Forcing break.`);
-                            goalsMet = true;
-                            forceBreak = true;
-                            break;
-                        }
+                                if (resultIndicatesError && remainingToolsInBatch > 0) {
+                                    logger.info(`Agent: Paused queued tools after ${toolCall.name} failure.`);
+                                    break;
+                                }
 
-                        // HARD BREAK after successful channel message send for "respond to" tasks
-                        // This prevents duplicate messages when the LLM doesn't set goals_met correctly.
-                        // We ONLY force this for 'trivial' tasks (greetings/thanks) or when the agent
-                        // already agrees the goal is met. We don't force it for 'simple' tasks
-                        // to allow for multi-tool execution or follow-up logic in standard requests.
-                        const isChannelSend = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat', 'telegram_send_buttons', 'telegram_send_poll'].includes(toolCall.name);
-                        const isFileDelivery = toolCall.name === 'send_file' || toolCall.name === 'send_image';
-                        const isResponseTask = action.payload?.description?.toLowerCase().includes('respond to') ||
-                            action.payload?.requiresResponse === true;
-                        const isRecoveryDeliveryTask = action.payload?.trigger === 'completion_audit_recovery';
-                        const wasSuccessful = toolResult && !JSON.stringify(toolResult).toLowerCase().includes('error');
-
-                        if (isChannelSend && isResponseTask && wasSuccessful && remainingToolsInBatch === 0) {
-                            if (taskComplexity === 'trivial' || goalsMet) {
-                                logger.info(`Agent: Channel message sent for ${taskComplexity} response task ${action.id}. Terminating to prevent duplicates.`);
-                                goalsMet = true;
-                                forceBreak = true;
-                                break;
-                            }
-                        }
-
-                        if (isChannelSend && isRecoveryDeliveryTask && wasSuccessful && remainingToolsInBatch === 0) {
-                            if (goalsMet || taskComplexity === 'trivial') {
-                                logger.info(`Agent: Channel message sent for recovery task ${action.id}. Terminating as goals are met.`);
-                                goalsMet = true;
-                                forceBreak = true;
-                                break;
-                            } else {
-                                logger.info(`Agent: Channel message sent for recovery task ${action.id}, but goals not yet met. Continuing to next step.`);
-                            }
-                        }
-
-                        // HARD BREAK after successful file delivery for file-centric tasks
-                        // Prevents the agent from looping on read_file after the file has already been sent
-                        if (isFileDelivery && wasSuccessful) {
-                            const taskDesc = (action.payload?.description || '').toLowerCase();
-                            const isFileCentricTask = taskDesc.includes('send') || taskDesc.includes('file') ||
-                                taskDesc.includes('cut short') || taskDesc.includes('resend') ||
-                                taskDesc.includes('deliver') || taskDesc.includes('share') ||
-                                taskDesc.includes('truncat') || taskDesc.includes('incomplete') ||
-                                taskDesc.includes('image') || taskDesc.includes('picture') ||
-                                taskDesc.includes('draw') || taskDesc.includes('generat');
-                            if (isFileCentricTask) {
-                                logger.info(`Agent: File delivered for file-centric task ${action.id}. Terminating.`);
-                                goalsMet = true;
-                                forceBreak = true;
-                                break;
+                                if (toolCall.name === 'schedule_task' || toolCall.name === 'send_image') {
+                                    goalsMet = true;
+                                    forceBreak = true;
+                                    break;
+                                }
                             }
                         }
                     }
 
-                    // BROWSING PROGRESS INJECTION: If the agent has been doing browser work
-                    // for 2+ steps without sending a user update, nudge it to communicate.
-                    const browserSkillsUsed = Object.keys(skillCallCounts).filter(s => s.startsWith('browser_'));
-                    const totalBrowserCalls = browserSkillsUsed.reduce((sum, s) => sum + skillCallCounts[s], 0);
-                    if (totalBrowserCalls >= 2 && stepsSinceLastMessage >= 2 && messagesSent === 0) {
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-browse-progress-nudge`,
-                            type: 'short',
-                            content: `[SYSTEM: You have been browsing for ${totalBrowserCalls} steps without sending any update to the user. Send a brief status update NOW describing what you see on the page and what you're doing. Users need visibility into browsing progress — don't go silent. Keep them informed.]`,
-                            metadata: { actionId: action.id, step: currentStep, browserCalls: totalBrowserCalls }
-                        });
-                        logger.info(`Agent: Injected browsing progress nudge at step ${currentStep} (${totalBrowserCalls} browser calls, no user message yet)`);
-                    }
-
-                    // GENERAL PROGRESS INJECTION: For non-browser tasks, nudge the agent to
-                    // update the user when working silently for too long.
-                    // Uses stepsSinceLastMessage as the primary check (accounts for both LLM-sent
-                    // messages and system progress feedback that resets this counter).
-                    if (totalBrowserCalls === 0 && stepsSinceLastMessage >= 4 && currentStep >= 4) {
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-general-progress-nudge`,
-                            type: 'short',
-                            content: `[SYSTEM: You have been working for ${stepsSinceLastMessage} steps without sending any message to the user. The user CANNOT see your internal work — they may think you've stopped or stalled. Send a brief progress update NOW: what you've done, what you're doing, and what's left. Even a short "Working on it — found X, now doing Y" helps the user feel informed.]`,
-                            metadata: { actionId: action.id, step: currentStep, stepsSilent: stepsSinceLastMessage }
-                        });
-                        logger.info(`Agent: Injected general progress nudge at step ${currentStep} (${stepsSinceLastMessage} steps without message)`);
-                    }
-
-                    // NOW check goals_met AFTER tools have been executed
                     if (decision.verification?.goals_met) {
-                        if (robustReasoningMode) {
-                            const completionAudit = await this.auditCompletionFromActionLogs(action, {
-                                currentStep,
-                                messagesSent,
-                                substantiveDeliveriesSent,
-                                deepToolExecutedSinceLastMessage,
-                                sentMessagesInAction,
-                                skillCallCounts,
-                                taskComplexity,
-                                anyUserDeliverySuccess
-                            });
-
-                            if (!completionAudit.ok) {
-                                const issueSummary = completionAudit.issues.join(' | ');
-                                const auditCode = this.buildAuditCode(completionAudit.issues);
-                                logger.warn(`Agent: Robust mode blocked completion in-loop for ${action.id} (${auditCode}): ${issueSummary}`);
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-robust-completion-blocked`,
-                                    type: 'short',
-                                    content: `[SYSTEM: COMPLETION BLOCKED (${auditCode}). You attempted goals_met=true before delivering concrete results. Resolve these issues now: ${issueSummary}. Send a substantive final result message, then complete.]`,
-                                    metadata: { actionId: action.id, step: currentStep, issues: completionAudit.issues, auditCode }
-                                });
-                                continue;
-                            }
-                        }
-
                         logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
                         goalsMet = true;
                         break;
                     }
 
-                    // COOLDOWN COMPLETION: If ALL send tools in this step were blocked and we already
-                    // sent a message, the task is done — the agent is just looping trying to send dupes.
-                    if (totalSendToolsInStep > 0 && toolsBlockedByCooldown >= totalSendToolsInStep && messagesSent > 0) {
-                        if (substantiveDeliveriesSent > 0) {
-                            logger.info(`Agent: All ${totalSendToolsInStep} send tool(s) blocked by cooldown/dupe guards after substantive delivery. Completing action ${action.id}.`);
-                            goalsMet = true;
-                            break;
-                        }
-
-                        logger.warn(`Agent: All ${totalSendToolsInStep} send tool(s) blocked but no substantive delivery yet. Forcing continuation for action ${action.id}.`);
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-suppressed-before-substantive`,
-                            type: 'short',
-                            content: `[SYSTEM: Your recent sends were suppressed, but you have NOT delivered a substantive answer yet. Send ONE concrete, content-rich response now (not an acknowledgment/status update). If needed, combine your acknowledgment and the actual content in a single message.]`,
-                            metadata: { actionId: action.id, step: currentStep }
-                        });
-                    }
-
-                    // SIDE-EFFECT DEDUP GUIDANCE: if every side-effect tool in this step was blocked
-                    // as a duplicate of already-successful work, guide the next step instead of hard-stopping.
-                    if (totalSideEffectToolsInStep > 0 && duplicateSideEffectsBlockedInStep >= totalSideEffectToolsInStep && successfulSideEffectKeys.size > 0) {
-                        const hasDeliveredSubstantiveAnswer = substantiveDeliveriesSent > 0;
-                        logger.info(`Agent: All ${totalSideEffectToolsInStep} side-effect tool(s) in step ${currentStep} were duplicate replays (action ${action.id}).`);
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-duplicate-sideeffects-guidance`,
-                            type: 'short',
-                            content: `[SYSTEM: Duplicate side-effect replays were blocked this step (${duplicateSideEffectsBlockedInStep}/${totalSideEffectToolsInStep}). Do NOT resend completed operations. If user still needs an answer, send ONE fresh substantive message. If all goals are already met, conclude.]`,
-                            metadata: { actionId: action.id, step: currentStep, duplicateSideEffectsBlockedInStep, totalSideEffectToolsInStep }
-                        });
-
-                        if (hasDeliveredSubstantiveAnswer) {
-                            logger.info(`Agent: Duplicate-only side-effect step occurred after substantive delivery. Completing action ${action.id}.`);
-                            goalsMet = true;
-                            break;
-                        }
-
-                        logger.warn(`Agent: Duplicate-only side-effect step before substantive delivery. Continuing action ${action.id} for one fresh response.`);
-                        continue;
-                    }
-
                     if (forceBreak) break;
                 } else {
-                    // No tools in response - check why before self-terminating
                     const toolsWereFiltered = (decision as any).toolsFiltered > 0;
                     const goalsNotMet = decision.verification?.goals_met === false;
 
-                    // Case 1: Tools were filtered by validator - retry with feedback
                     if (toolsWereFiltered && goalsNotMet) {
                         noToolsRetryCount++;
-                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
-                            logger.warn(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for filtered tools in action ${action.id}. Triggering Hard Block Review.`);
-                            
-                            const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
-                            const review = await this.reviewHardBlock(
-                                action, 
-                                `Tool Validation Error: ${MAX_NO_TOOLS_RETRIES} consecutive attempts with invalid/filtered tool parameters.`,
-                                currentStep,
-                                history,
-                                'Tool Validation Error'
-                            );
-
-                            if (review.verdict === 'STOP') {
-                                logger.error(`Agent: Hard Block Reviewer decided to STOP action ${action.id} due to invalid tool calls. Reason: ${review.reasoning}`);
-                                break;
-                            } else {
-                                logger.info(`Agent: Hard Block Reviewer decided to CONTINUE action ${action.id} despite tool errors. Strategy: ${review.suggestedStrategy}`);
-                                noToolsRetryCount = 0; // Reset counter
-                            }
-                        }
-                        logger.warn(`Agent: ${(decision as any).toolsFiltered} tool(s) were filtered by validator but goals_met=false. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-tools-filtered`,
-                            type: 'short',
-                            content: `[SYSTEM: Your tool calls were INVALID and filtered. Common issues: browser_click/browser_type require 'selector' (use ref number from snapshot), browser_type requires 'text'. Check your tool metadata and try again with valid parameters.]`,
-                            metadata: { actionId: action.id, step: currentStep, toolsFiltered: (decision as any).toolsFiltered }
-                        });
-
+                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) break;
                         continue;
                     }
 
-                    // Case 2: LLM said goals_met=false but provided no tools - this is an error, retry
                     if (goalsNotMet && !toolsWereFiltered) {
                         noToolsRetryCount++;
-                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) {
-                            logger.error(`Agent: Exceeded max retries (${MAX_NO_TOOLS_RETRIES}) for no-tools error. Terminating action ${action.id}.`);
-                            break;
-                        }
-
-                        // Check if the pipeline suppressed send tools as duplicates
-                        const pipelineDropped = pipelineNotes?.dropped || [];
-                        const wasSendSuppressed = pipelineDropped.some((d: string) =>
-                            d.startsWith('semantic-dupe:') || d.startsWith('dupe:') || d.startsWith('limit:')
-                        );
-
-                        if (wasSendSuppressed && messagesSent === 0) {
-                            // Pipeline incorrectly suppressed the first reply — this shouldn't happen
-                            // with our fix, but as a safety net, inject a better error message
-                            logger.warn(`Agent: Pipeline suppressed first reply as duplicate. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES} with better guidance...`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-no-tools-error`,
-                                type: 'short',
-                                content: `[SYSTEM: Your reply was blocked because it was too similar to a recent message. Rephrase your response with DIFFERENT wording — don't just repeat the same message. Address the user's specific words directly.]`,
-                                metadata: { actionId: action.id, step: currentStep, error: 'send_suppressed_as_dupe' }
-                            });
-                        } else {
-                            logger.warn(`Agent: LLM returned goals_met=false but no tools. Retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-no-tools-error`,
-                                type: 'short',
-                                content: `[SYSTEM: You said goals_met=false but provided NO TOOLS. This is INVALID. If goals are not met, you MUST include at least one tool to make progress. Re-read the task and provide the appropriate tool calls.]`,
-                                metadata: { actionId: action.id, step: currentStep, error: 'no_tools_but_goals_not_met' }
-                            });
-                        }
-
+                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) break;
                         continue;
                     }
-
-                    // Case 3: goals_met=true or undefined with no tools - legitimate termination
-                    // BUT: catch silent termination — if from a channel and never sent a message, force a retry
-                    const isChannelTask = action.payload.source === 'telegram' || action.payload.source === 'whatsapp' ||
-                        action.payload.source === 'discord' || action.payload.source === 'slack' || action.payload.source === 'email' || action.payload.source === 'gateway-chat';
-                    if (isChannelTask && messagesSent > 0 && substantiveDeliveriesSent === 0 && currentStep < MAX_STEPS) {
-                        noToolsRetryCount++;
-                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
-                            logger.warn(`Agent: Action ${action.id} attempted completion after only non-substantive updates. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-non-substantive-completion-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: BLOCKED PREMATURE COMPLETION. You sent updates but no substantive final answer. You MUST send a concrete result summary to the user (findings, answer, or outcome), not just status updates.]`,
-                                metadata: { actionId: action.id, step: currentStep, error: 'non_substantive_completion_blocked' }
-                            });
-                            continue;
-                        }
-                    }
-
-                    // Channel completion safety: if we have produced NEW deep-tool output since
+                // Channel completion safety: if we have produced NEW deep-tool output since
                     // the last user-visible message, we are not done yet. We must send a final
                     // delivery message that includes those results.
                     if (isChannelTask && messagesSent > 0 && deepToolExecutedSinceLastMessage && currentStep < MAX_STEPS) {

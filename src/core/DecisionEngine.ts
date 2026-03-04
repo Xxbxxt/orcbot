@@ -1001,7 +1001,7 @@ ${this.repoContext}`,
         let semanticEpisodicString = '';
         let ragContext = '';
 
-        if (!isHeartbeat) {
+        if (!isHeartbeat && !metadata.isLeanMode) {
             // Collect shown IDs for dedup (used by semantic recall)
             const shownIds = new Set<string>();
             for (const m of [...actionMemories, ...otherMemories]) {
@@ -1069,6 +1069,8 @@ ${this.repoContext}`,
             if (bookLogContext) {
                 ragContext = `## RELEVANT BOOK LOG SUMMARIES\n${bookLogContext}\n\n${ragContext}`;
             }
+        } else if (metadata.isLeanMode) {
+            logger.info('DecisionEngine: Lean mode active — skipping semantic recall, episodic retrieval, RAG, and Book Log.');
         }
 
         // Channel instructions and contact profiles — irrelevant for heartbeats (source='autonomy')
@@ -1091,7 +1093,7 @@ ${this.repoContext}`,
             threadId: metadata.chatId || metadata.channelId
         };
 
-        if (!isHeartbeat) {
+        if (!isHeartbeat && !metadata.isLeanMode) {
         try {
             const recentExchanges = this.memory.getUserRecentExchanges(conversationContext as any, 10);
             if (recentExchanges.length > 0) {

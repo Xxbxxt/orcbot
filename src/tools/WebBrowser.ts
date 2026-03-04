@@ -3286,15 +3286,75 @@ export class WebBrowser {
      * Reset blank page tracking for a specific domain or all domains.
      * Allows retrying sites that were previously flagged as blank.
      */
-    public resetBlankHistory(domain?: string): void {
-        if (domain) {
-            this._blankUrlHistory.delete(domain);
-            this._blankUrlHistory.delete(domain.replace('www.', ''));
-            logger.info(`Browser: Reset blank history for ${domain}`);
-        } else {
-            this._blankUrlHistory.clear();
-            logger.info('Browser: Reset all blank history');
+    /**
+     * Injects a visual overlay into the page that draws bounding boxes and ID labels
+     * around all interactive elements.
+     */
+    public async toggleDebugOverlay(enabled: boolean = true): Promise<string> {
+        try {
+            await this.ensureBrowser();
+            if (!this._page) return 'Error: No browser page available.';
+
+            if (!enabled) {
+                await this.p.evaluate(() => {
+                    const existing = document.getElementById('orcbot-debug-overlay');
+                    if (existing) existing.remove();
+                });
+                return 'Debug overlay disabled.';
+            }
+
+            await this.p.evaluate(() => {
+                let overlay = document.getElementById('orcbot-debug-overlay');
+                if (!overlay) {
+                    overlay = document.createElement('div');
+                    overlay.id = 'orcbot-debug-overlay';
+                    overlay.style.position = 'absolute';
+                    overlay.style.top = '0';
+                    overlay.style.left = '0';
+                    overlay.style.width = '100%';
+                    overlay.style.height = document.documentElement.scrollHeight + 'px';
+                    overlay.style.pointerEvents = 'none';
+                    overlay.style.zIndex = '2147483647';
+                    document.body.appendChild(overlay);
+                }
+                overlay.innerHTML = ''; // Clear previous
+
+                const refs = Array.from(document.querySelectorAll('[data-orcbot-ref]'));
+                refs.forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    const refId = el.getAttribute('data-orcbot-ref');
+                    if (rect.width > 0 && rect.height > 0) {
+                        const box = document.createElement('div');
+                        box.style.position = 'absolute';
+                        box.style.top = `${rect.top + window.scrollY}px`;
+                        box.style.left = `${rect.left + window.scrollX}px`;
+                        box.style.width = `${rect.width}px`;
+                        box.style.height = `${rect.height}px`;
+                        box.style.border = '2px solid rgba(255, 0, 0, 0.7)';
+                        box.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+                        box.style.boxSizing = 'border-box';
+                        
+                        const label = document.createElement('span');
+                        label.textContent = `ID: ${refId}`;
+                        label.style.position = 'absolute';
+                        label.style.top = '-20px';
+                        label.style.left = '0';
+                        label.style.backgroundColor = 'red';
+                        label.style.color = 'white';
+                        label.style.fontSize = '12px';
+                        label.style.fontWeight = 'bold';
+                        label.style.padding = '2px 4px';
+                        label.style.whiteSpace = 'nowrap';
+                        
+                        box.appendChild(label);
+                        overlay?.appendChild(box);
+                    }
+                });
+            });
+
+            return 'Visual debug overlay enabled. Elements are now highlighted with red boxes and ID labels.';
+        } catch (e) {
+            return `Failed to toggle debug overlay: ${e}`;
         }
-        this._resourceBlockingEnabled = true;
     }
 }
