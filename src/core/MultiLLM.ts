@@ -381,20 +381,65 @@ export class MultiLLM {
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
         messages.push({ role: 'user', content: prompt });
         const resolvedModel = this.normalizeOllamaModel(model);
+        
+        // 1. Check if model is loaded (skip for remote bridge models)
+        const isRemoteBridge = resolvedModel.includes('gemini') || resolvedModel.includes('openai');
+        if (!isRemoteBridge) {
+            try {
+                const psResponse = await fetch(`${baseUrl}/api/ps`);
+                if (psResponse.ok) {
+                    const psData = await psResponse.json() as any;
+                    const isLoaded = (psData.models || []).some((m: any) => m.name === resolvedModel || m.name.startsWith(resolvedModel + ':'));
+                    if (!isLoaded) {
+                        logger.info(`Ollama: Tool-capable model "${resolvedModel}" is not in memory. Loading...`);
+                    }
+                }
+            } catch (e) {
+                // Ignore status check errors
+            }
+        }
+
+        logger.info(`MultiLLM: Requesting tool-call response from Ollama ("${resolvedModel}")...`);
+
         const body: any = {
             model: resolvedModel,
             messages,
             temperature: 0.7,
             tools,
         };
+
+        // Use a longer timeout (3m) and heartbeat for local tool calls
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000);
+        
+        let elapsed = 0;
+        const heartbeatId = setInterval(() => {
+            elapsed += 15;
+            if (elapsed < 180) {
+                logger.info(`MultiLLM: Ollama ("${resolvedModel}") is still deliberating tools... [Elapsed: ${elapsed}s]`);
+                if (elapsed >= 60) {
+                    logger.warn(`MultiLLM: Local tool-calling is slow. Ensure you are using a model that natively supports tools (e.g. llama3.1, qwen2.5).`);
+                }
+            }
+        }, 15000);
+
         try {
+            const startTime = Date.now();
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(body),
+                signal: controller.signal
             });
+
+            const endTime = Date.now();
+            const duration = ((endTime - startTime) / 1000).toFixed(1);
+            
+            clearTimeout(timeoutId);
+            clearInterval(heartbeatId);
+
             if (!response.ok) {
                 const err = await response.text();
                 // Ollama returns 400 if the model doesn't support tools
@@ -402,8 +447,10 @@ export class MultiLLM {
                     logger.warn(`Ollama: Model "${resolvedModel}" does not support native tool calling. Falling back to text-based tools.`);
                     throw new Error('MODEL_DOES_NOT_SUPPORT_TOOLS');
                 }
+                logger.error(`Ollama Tool Error: Received ${response.status} from server. Detail: ${err}`);
                 throw new Error(`Ollama Tool Call API Error: ${response.status} ${err}`);
             }
+
             const data = await response.json() as any;
             const message = data.choices?.[0]?.message;
             const textContent = message?.content || '';
@@ -412,11 +459,18 @@ export class MultiLLM {
                 arguments: this.safeParseJson(tc.function?.arguments),
                 id: tc.id,
             }));
+
             this.recordUsage('ollama', resolvedModel, prompt, data, textContent);
-            logger.debug(`MultiLLM: Ollama tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
+            logger.info(`MultiLLM: Ollama ("${resolvedModel}") returned ${toolCalls.length} tool(s) in ${duration}s.`);
+            
             return { content: textContent, toolCalls, raw: data };
-        } catch (error) {
-            logger.error(`MultiLLM Ollama tool call error: ${error}`);
+        } catch (error: any) {
+            clearTimeout(timeoutId);
+            clearInterval(heartbeatId);
+            if (error.name === 'AbortError') {
+                logger.error(`Ollama Timeout: Tool-deliberation for "${resolvedModel}" timed out after 180s.`);
+            }
+            logger.error(`MultiLLM Ollama tool call error: ${error.message || error}`);
             throw error;
         }
     }
