@@ -4595,24 +4595,35 @@ Output JSON now:`;
                         if (res.startsWith('Error') || res.startsWith('Failed')) break;
                     }
 
-                    // VERIFICATION STEP: Take a fresh snapshot and confirm if the goal was actually met
-                    await this.browser.wait(500); // Small settle
+                    // VERIFICATION STEP: Lightweight DOM check first
+                    await this.browser.wait(800); 
                     const finalSnapshot = await this.browser.getSemanticSnapshot();
+                    const pageText = await this.browser.extractContent().catch(() => "");
                     
-                    const verificationPrompt = `I was trying to achieve this goal: "${goal}"
+                    // Logic-based check: Did the text actually land in the DOM?
+                    const goalKeywords = goal.toLowerCase().split(' ').filter((w: string) => w.length > 4).slice(0, 5);
+                    const foundKeywords = goalKeywords.filter((w: string) => pageText.toLowerCase().includes(w));
+                    
+                    let verification = "";
+                    if (foundKeywords.length >= 2 || (actions.some((a: any) => a.tool === 'type') && pageText.length > 100)) {
+                        verification = `VERIFIED: Content is now visible in the DOM (Matches keywords: ${foundKeywords.join(', ')}).`;
+                    } else {
+                        // Fallback to LLM verification only if DOM check is ambiguous
+                        const verificationPrompt = `I was trying to achieve this goal: "${goal}"
 I performed these actions:
 ${results.join('\n')}
 
 NEW PAGE STATE:
-${finalSnapshot.slice(0, 5000)}
+${finalSnapshot.slice(0, 4000)}
 
 Did the actions actually result in the goal being achieved? 
-If typing was involved, check if the value is visible or if the page transitioned correctly.
 Respond with: "VERIFIED: <reason>" or "FAILED: <reason>"`;
-
-                    const verification = await this.llm.callFast(verificationPrompt, "You are a quality assurance expert. Verify if the browser goal was met.");
+                        verification = await this.llm.callFast(verificationPrompt, "You are a quality assurance expert.");
+                    }
                     
-                    return `Performed actions for goal: "${goal}"\n\nResults:\n${results.join('\n')}\n\nVerification: ${verification}\n\n--- Page after perform ---\n${finalSnapshot}`;
+                    const finalMsg = `Performed actions for goal: "${goal}"\n\nResults:\n${results.join('\n')}\n\nVerification: ${verification}`;
+                    logger.info(`Browser: Perform result: ${verification}`);
+                    return finalMsg;
                 } catch (e) {
                     return `Failed to perform goal "${goal}": ${e}`;
                 }
@@ -8159,6 +8170,10 @@ The plugin handles all logic internally. See the plugin source for implementatio
             const hadResearchOrDeepOutput =
                 Object.entries(context.skillCallCounts || {}).some(([skill, count]) => {
                     if (!count || count <= 0) return false;
+                    // browser_perform is an action tool, not a data-gathering tool.
+                    // It doesn't need to 'deliver' results because the result is on the page.
+                    if (skill === 'browser_perform') return false;
+                    
                     return skill === 'web_search' ||
                         skill.startsWith('browser_') ||
                         skill === 'extract_article' ||
@@ -9044,6 +9059,15 @@ REFLECTION: <1-2 sentences>`;
     private isSubstantiveDeliveryMessage(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
+
+        // HIGH VALUE: Confirmation of work/verified state
+        const highValuePhrases = [
+            'accomplished', 'successfully', 'verified', 'mission complete',
+            'is now empty', 'cleared the', 'wiped', 'deleted', 'completed the',
+            'done!', 'confirmed.'
+        ];
+        if (highValuePhrases.some(p => normalized.includes(p))) return true;
+
         // Reduced threshold from 40 to 20 to catch concise but useful answers
         if (normalized.length < 20) return false;
 

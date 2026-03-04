@@ -234,14 +234,16 @@ export class MultiLLM {
         }
     }
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
-        if (this.usePiAI) {
+        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+
+        if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
             } catch (e) {
                 // Silently fall back if pi-ai fails or is misconfigured
             }
         }
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        
         // Build fallback chain: try all available providers
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         const executeCall = async (p: LLMProvider, m?: string) => {
@@ -296,14 +298,16 @@ export class MultiLLM {
         provider?: LLMProvider,
         modelOverride?: string
     ): Promise<LLMToolResponse> {
-        if (this.usePiAI) {
+        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+
+        if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
                 return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(modelOverride, provider));
             } catch (e) {
                 logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy — ${(e as Error).message}`);
             }
         }
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        
         const model = modelOverride || this.modelName;
         // Check if provider supports native tool calling
         const supportsTools = this.supportsNativeToolCalling(primaryProvider);

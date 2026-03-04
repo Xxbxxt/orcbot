@@ -1,27 +1,46 @@
 {
   "name": "orcbot",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "1.0.1",
+  "description": "Autonomous AI Agent Orchestrator with Puppeteer browsing, multi-channel messaging, and self-tuning capabilities.",
+  "main": "./dist/core/Agent.js",
+  "types": "./dist/core/Agent.d.ts",
   "bin": {
     "orcbot": "./dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "SKILLS.md",
+    "README.md",
+    "LICENSE",
+    ".AI.md",
+    "AGENTS.md",
+    "USER.md",
+    "JOURNAL.md",
+    "LEARNING.md"
+  ],
   "scripts": {
     "build": "tsc",
     "build:fast": "node build.mjs",
+    "prepublishOnly": "npm run build",
+    "postinstall": "npx puppeteer browsers install chrome",
     "start": "node dist/cli/index.js",
     "dev": "ts-node src/cli/index.ts",
     "test": "vitest run --reporter=dot",
     "test:watch": "vitest watch",
-    "browser:test": "ts-node src/tools/browserTest.ts",
-    "soak:init": "ts-node src/tools/soakHarness.ts init",
-    "soak:enqueue": "ts-node src/tools/soakHarness.ts enqueue",
-    "soak:score": "ts-node src/tools/soakHarness.ts score",
-    "soak:report": "ts-node src/tools/soakHarness.ts report",
-    "soak:report:daily": "ts-node src/tools/soakHarness.ts report --sinceHours=24"
+    "browser:test": "ts-node src/tools/browserTest.ts"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "ai",
+    "agent",
+    "autonomous",
+    "orchestrator",
+    "puppeteer",
+    "automation",
+    "telegram",
+    "whatsapp",
+    "discord"
+  ],
+  "author": "Frederick Abila",
   "license": "MIT",
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

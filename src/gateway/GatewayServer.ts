@@ -1175,7 +1175,8 @@ export class GatewayServer {
         
         // Infer which provider would be used for current model
         let inferredProvider = 'openai'; // default
-        if (modelName.includes('gemini')) inferredProvider = 'google';
+        if (modelName.startsWith('ollama:') || modelName.startsWith('local:')) inferredProvider = 'ollama';
+        else if (modelName.includes('gemini')) inferredProvider = 'google';
         else if (modelName.includes('claude')) inferredProvider = 'anthropic';
         else if (modelName.includes('llama') || modelName.includes('mixtral')) inferredProvider = 'openrouter';
         else if (modelName.includes('gpt') || modelName.includes('o1') || modelName.includes('o3')) inferredProvider = 'openai';
@@ -1199,6 +1200,7 @@ export class GatewayServer {
 
     private inferProviderFromModel(modelName: string): string {
         const model = modelName.toLowerCase();
+        if (model.startsWith('ollama:') || model.startsWith('local:')) return 'ollama';
         if (model.includes('gemini')) return 'google';
         if (model.includes('claude')) return 'anthropic';
         if (model.includes('llama') || model.includes('mixtral')) return 'openrouter';

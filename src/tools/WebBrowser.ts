@@ -1741,6 +1741,31 @@ export class WebBrowser {
         }, { sel: selector, val: expected }).catch(() => false);
     }
 
+    private async checkAndSwitchToNewTab(): Promise<void> {
+        if (!this.browser) return;
+
+        if (this.browserEngine === 'puppeteer') {
+            const pages = await (this.browser as PuppeteerBrowser).pages();
+            if (pages.length > 1) {
+                const newPage = pages[pages.length - 1];
+                if (newPage !== this._page) {
+                    logger.info(`Browser: Detected new tab opened. Switching focus to: "${await newPage.title().catch(() => 'New Tab')}"`);
+                    this._page = newPage;
+                    await this._page.setViewport({ width: 1280, height: 720 });
+                }
+            }
+        } else if (this.browserEngine === 'playwright' && this.context) {
+            const pages = this.context.pages();
+            if (pages.length > 1) {
+                const newPage = pages[pages.length - 1];
+                if (newPage !== this._page) {
+                    logger.info(`Browser: Detected new tab opened. Switching focus to: "${await newPage.title().catch(() => 'New Tab')}"`);
+                    this._page = newPage;
+                }
+            }
+        }
+    }
+
     public async click(selector: string): Promise<string> {
         try {
             await this.ensureBrowser();
@@ -1877,9 +1902,18 @@ export class WebBrowser {
             this.stateManager.recordAction('click', this.lastNavigatedUrl || 'unknown', selector, true);
 
             // Return a mini-snapshot of the page state after click so the agent knows what happened
-            const url = this.page!.url();
-            const title = await this.page!.title().catch(() => '');
+            await this.checkAndSwitchToNewTab();
+            
+            const url = this.p.url();
+            const title = await this.p.title().catch(() => '');
             const urlChanged = url !== this.lastNavigatedUrl;
+            
+            if (urlChanged) {
+                logger.info(`Browser: Click triggered navigation -> ${url}`);
+                await this.waitForStablePage(5000);
+                this.lastNavigatedUrl = url;
+            }
+
             logger.info(`Browser: Clicked ${selector}${urlChanged ? ` -> ${url}` : ''}`);
             return `Successfully clicked: ${selector}${urlChanged ? `\nPage navigated to: "${title}" (${url})` : ''}`;
         } catch (e) {
@@ -2089,6 +2123,14 @@ export class WebBrowser {
             return `Successfully pressed key: ${key}`;
         } catch (e) {
             return `Failed to press key ${key}: ${e}`;
+        } finally {
+            await this.checkAndSwitchToNewTab();
+            const url = this.p.url();
+            if (url !== this.lastNavigatedUrl) {
+                logger.info(`Browser: Key press triggered navigation -> ${url}`);
+                await this.waitForStablePage(5000);
+                this.lastNavigatedUrl = url;
+            }
         }
     }
 
