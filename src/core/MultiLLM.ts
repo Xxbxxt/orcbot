@@ -1287,8 +1287,8 @@ export class MultiLLM {
                 elapsed += 15;
                 if (elapsed < 180) {
                     logger.info(`MultiLLM: Still waiting for Ollama ("${model}") to process... [Elapsed: ${elapsed}s]`);
-                    if (elapsed >= 60) {
-                        logger.warn(`MultiLLM: Local model "${model}" is taking longer than usual. This often happens if your RAM is full or the model is very large.`);
+                    if (elapsed === 60) {
+                        logger.warn(`MultiLLM: Local model "${model}" is taking a while. This usually happens if you have limited RAM/VRAM or if the model is being swapped from disk.`);
                     }
                 }
             }, 15000);

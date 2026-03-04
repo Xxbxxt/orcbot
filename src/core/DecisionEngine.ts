@@ -1394,9 +1394,33 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
             fileIntent: inferredFileIntent
         });
 
+        // Track if semantic duplication occurred (important for completion audit)
+        const pipelineDropped = piped?.metadata?.pipelineNotes?.dropped || [];
+        const isSemanticDupe = pipelineDropped.some((d: string) => d.startsWith('semantic-dupe:') || d.startsWith('dupe:'));
+        if (isSemanticDupe) {
+            metadata.pipelineSemanticDupe = true;
+        }
+
         const isUserFacing = metadata.source === 'telegram' || metadata.source === 'whatsapp' || 
                            metadata.source === 'discord' || metadata.source === 'slack' || 
                            metadata.source === 'gateway-chat';
+
+        // LOOP PROTECTION: Check if the agent is stuck in a repetitive cycle
+        const actionState = this.executionStateManager.getState(actionId);
+        if (actionState.isRepeatingResponse(3)) {
+            logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Forcing termination to prevent redundant messaging.`);
+            
+            // Force goals_met to true so the pipeline doesn't keep retrying
+            if (piped) {
+                piped.verification = { 
+                    goals_met: true,
+                    analysis: 'Terminated due to repetitive response detection (loop prevention).'
+                };
+                // If the model is repeating the same message, just stop after the current one
+                piped.tools = []; 
+                return piped;
+            }
+        }
 
         // Termination review layer (always enabled)
         // We review if:

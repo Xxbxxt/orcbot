@@ -105,6 +105,38 @@ export class ExecutionState {
     }
 
     /**
+     * Check if the LLM is repeating the same response (text + tools), which indicates a loop.
+     * @param threshold Number of times the same response must appear to be considered repetitive.
+     */
+    public isRepeatingResponse(threshold: number = 2): boolean {
+        if (this.attempts.length < threshold) return false;
+
+        const latest = this.attempts[this.attempts.length - 1].response;
+        if (!latest) return false;
+
+        let repeatCount = 0;
+        const latestText = (latest.content || '').trim();
+        const latestTools = JSON.stringify((latest.tools || []).map(t => ({ name: t.name, meta: t.metadata })));
+
+        for (let i = this.attempts.length - 2; i >= 0; i--) {
+            const prev = this.attempts[i].response;
+            if (!prev) continue;
+
+            const prevText = (prev.content || '').trim();
+            const prevTools = JSON.stringify((prev.tools || []).map(t => ({ name: t.name, meta: t.metadata })));
+
+            if (latestText === prevText && latestTools === prevTools) {
+                repeatCount++;
+                if (repeatCount >= threshold - 1) return true;
+            } else {
+                // If we hit a different response, break the streak
+                break;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Check if we should try compaction
      */
     public shouldTryCompaction(): boolean {

@@ -8190,7 +8190,12 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 issues.push('No user-visible message was sent for this channel task.');
             }
 
-            if (context.deepToolExecutedSinceLastMessage) {
+            // If the pipeline suppressed a duplicate send (semantic-dupe), we treat that as
+            // a virtual delivery. This prevents the audit from blocking completion
+            // when the agent is trying to send the same result again.
+            const pipelineDupe = !!action.payload?.pipelineSemanticDupe;
+
+            if (context.deepToolExecutedSinceLastMessage && !pipelineDupe) {
                 issues.push('Deep tool output exists after the last sent message (results likely not delivered).');
             }
 
