@@ -385,6 +385,38 @@ process.on('uncaughtException', (err) => {
     logger.error(`Uncaught exception (non-fatal): ${err?.stack || err}`);
 });
 
+/** Connect the global event bus to the CLI for real-time feedback. */
+function setupEventSubscriptions() {
+    let currentLlmStream = '';
+    
+    eventBus.on('llm:token', (data: any) => {
+        if (!currentLlmStream) {
+            process.stdout.write(`\n${c.brightCyan}🤖 Agent:${c.reset} `);
+        }
+        currentLlmStream += data.token;
+        process.stdout.write(data.token);
+    });
+
+    eventBus.on('llm:thought', (data: any) => {
+        process.stdout.write(`${c.gray}${data.thought}${c.reset}`);
+    });
+
+    eventBus.on('llm:end', () => {
+        if (currentLlmStream) {
+            process.stdout.write('\n');
+            currentLlmStream = '';
+        }
+    });
+
+    eventBus.on('task:step:start', (data: any) => {
+        console.log(`\n${c.brightYellow}🧭 Step ${data.step}:${c.reset} ${c.bold}${data.description}${c.reset}`);
+    });
+
+    eventBus.on('tool:call', (data: any) => {
+        console.log(`${c.magenta}⚡ Tool:${c.reset} ${c.bold}${data.name}${c.reset} ${c.dim}${JSON.stringify(data.arguments || {})}${c.reset}`);
+    });
+}
+
 const program = new Command();
 const agent = new Agent({ isCLI: true });
 const workerProfile = new WorkerProfileManager();
@@ -779,6 +811,7 @@ program
             }
 
             console.log('Agent loop starting... (Press Ctrl+C to stop)');
+            setupEventSubscriptions();
             await startGatewayIfNeeded();
             await agent.start();
         }
@@ -3361,7 +3394,7 @@ async function showPiAIConfig() {
         { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
         { name: `  📦 ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
         new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
-        ...Object.entries(catalogue).map(([key, cat]) => {
+        ...Object.entries(catalogue).map(([key, cat]: [string, any]) => {
             const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
             return {
                 name: `  ${statusDot(hasKey, '')} ${bold(cat.label.padEnd(32))} ${hasKey ? green('key set') : yellow('no key')}  ${dim(`${cat.models.length} models`)}`,

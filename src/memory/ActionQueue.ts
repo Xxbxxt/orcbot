@@ -286,6 +286,11 @@ export class ActionQueue {
         return this.cache.find(action => action.id === id);
     }
 
+    /** Alias for getAction to support shorter syntax */
+    public get(id: string): Action | undefined {
+        return this.getAction(id);
+    }
+
     // ─── New: Filtered accessors ─────────────────────────────────────
 
     /** Get only active actions (pending, in-progress, waiting) — skips the dead weight */

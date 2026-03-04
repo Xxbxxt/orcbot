@@ -4,10 +4,15 @@ export interface IChannel {
     stop(): Promise<void>;
     // Returns `true` if the message was actually sent, or `false` if the channel
     // chose to defer delivery (e.g. user is active). Channels may also return
-    // nothing (void) for backward compatibility.
-    sendMessage(to: string, message: string): Promise<boolean | void>;
+    // a string (message ID) for editing support, or nothing (void).
+    sendMessage(to: string, message: string): Promise<string | boolean | void>;
     sendFile(to: string, filePath: string, caption?: string): Promise<void>;
     sendTypingIndicator(to: string): Promise<void>;
+    /**
+     * Update/Edit a previously sent message.
+     * Returns the new message ID if successful.
+     */
+    updateMessage?(to: string, messageId: string, newMessage: string): Promise<string | void>;
     /**
      * React to a message with an emoji.
      * @param chatId - The chat/channel ID where the message lives

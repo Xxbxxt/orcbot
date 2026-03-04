@@ -2905,7 +2905,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         this.skills.registerSkill({
             name: 'run_command',
             description: 'Execute a non-interactive shell command on the host system (supports Bash/Zsh on Unix and PowerShell on Windows). Use get_system_info first to detect the OS and environment. Commands run in the project root by default; use the "cwd" parameter for specific directories. Supports standard shell features like pipes, redirection, and chaining (&&, ||, ;). \n\nCRITICAL GUIDELINES:\n1. NON-INTERACTIVE: Always use "yes" flags (e.g., -y, --batch, --force) as you cannot provide input during execution.\n2. SECURITY: Access to node_modules and .git is strictly blocked and will throw an error.\n3. WINDOWS: Use PowerShell syntax (Get-ChildItem, Get-Command) rather than old cmd.exe syntax.\n4. OUTPUT: For very large outputs, pipe to "head", "tail", or a file to avoid context flooding.\n5. TUI/CLI: Avoid commands that launch interactive UIs or block indefinitely without a timeout.',
-            usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?)',
+            usage: 'run_command(command, cwd?, timeoutMs?, retries?, timeoutBackoffFactor?, maxTimeoutMs?, allowBackground?)',
             isDeep: true,
             isResearch: true,
             isDangerous: true,
@@ -3040,14 +3040,13 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const retries = parseInt(args.retries || this.config.get('commandRetries') || 1, 10);
                     const timeoutBackoffFactor = Number(args.timeoutBackoffFactor || this.config.get('commandTimeoutBackoffFactor') || 1.5);
                     const maxTimeoutMs = parseInt(args.maxTimeoutMs || this.config.get('commandMaxTimeoutMs') || 600000, 10);
+                    const allowBackground = args.allowBackground === true || args.allow_background === true;
 
                     const { exec } = require('child_process');
 
                     const runOnce = (attemptTimeoutMs: number) => new Promise<string>((resolve) => {
                         const execOptions: any = { cwd: workingDir };
                         // On Windows, use PowerShell as the shell so PowerShell cmdlets work.
-                        // Do NOT pass the `timeout` option here on Windows — it relies on SIGKILL
-                        // which doesn't work cross-platform.  We handle timeout manually below.
                         if (process.platform === 'win32') {
                             execOptions.shell = 'powershell.exe';
                         }
@@ -3055,6 +3054,39 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                             clearTimeout(killTimer);
                             if (error) {
                                 if (error.killed || timedOut) {
+                                    if (allowBackground) {
+                                        // Auto-transition to background session
+                                        const sessionId = `bg_cmd_${Date.now()}`;
+                                        shellSessions.attach(sessionId, child, actualCommand, workingDir);
+                                        
+                                        // Register polling job
+                                        this.pollingManager.registerJob({
+                                            id: `cmd:${sessionId}`,
+                                            description: `Background command: ${actualCommand.substring(0, 50)}...`,
+                                            intervalMs: 10000,
+                                            checkFn: async () => {
+                                                const info = shellSessions.get(sessionId)?.info();
+                                                return info?.status === 'exited';
+                                            },
+                                            onSuccess: () => {
+                                                const logs = shellSessions.get(sessionId)?.read(50).join('\n');
+                                                this.actionQueue.push({
+                                                    id: `notify_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+                                                    type: 'NOTIFY',
+                                                    payload: {
+                                                        source: 'system',
+                                                        text: `Command "${actualCommand.substring(0, 30)}..." has finished in the background.\n\nOutput:\n${logs}`
+                                                    },
+                                                    priority: 7,
+                                                    status: 'pending',
+                                                    timestamp: new Date().toISOString()
+                                                });
+                                            }
+                                        });
+                                        
+                                        resolve(`Command timed out after ${Math.round(attemptTimeoutMs / 1000)} seconds, but is continuing in the background (ID: ${sessionId}). I will notify you when it finishes.`);
+                                        return;
+                                    }
                                     resolve(`Error: Command timed out after ${Math.round(attemptTimeoutMs / 1000)} seconds.`);
                                     return;
                                 }
@@ -3062,7 +3094,6 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                                 return;
                             }
                             let out = stdout || stderr || 'Command executed successfully (no output)';
-                            // Cap output to prevent context flooding
                             const MAX_OUT = 8_000;
                             if (out.length > MAX_OUT) {
                                 out = out.substring(0, MAX_OUT) + `\n\n[...truncated — ${out.length} chars total. Pipe to a file or use tail/head to get a smaller slice.]`;
@@ -3073,12 +3104,12 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         let timedOut = false;
                         const killTimer = setTimeout(() => {
                             timedOut = true;
-                            if (process.platform === 'win32' && child.pid) {
-                                // On Windows exec() with PowerShell doesn't propagate SIGKILL to the
-                                // child tree.  Use taskkill /F /T to forcefully kill the whole tree.
-                                require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => { });
-                            } else {
-                                child.kill('SIGKILL');
+                            if (!allowBackground) {
+                                if (process.platform === 'win32' && child.pid) {
+                                    require('child_process').exec(`taskkill /PID ${child.pid} /T /F`, () => { });
+                                } else {
+                                    child.kill('SIGKILL');
+                                }
                             }
                         }, attemptTimeoutMs);
 
@@ -3149,6 +3180,63 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                 } catch (e) {
                     return `Error starting session: ${e}`;
                 }
+            }
+        });
+
+        // Skill: Poll Shell Session
+        this.skills.registerSkill({
+            name: 'shell_poll',
+            description: 'Register a background polling job to monitor a shell session until it completes or reaches a specific output condition. The agent will be notified when the job is done.',
+            usage: 'shell_poll(id, intervalMs?, maxAttempts?, stopOnOutput?)',
+            handler: async (args: any) => {
+                const id = args.id || args.name;
+                if (!id) return 'Error: Missing session id.';
+                
+                const session = shellSessions.get(String(id));
+                if (!session) return `Error: Session "${id}" not found.`;
+
+                const interval = parseInt(args.intervalMs || 5000, 10);
+                const maxAttempts = parseInt(args.maxAttempts || 60, 10); // Default 5 mins at 5s interval
+                const stopOnOutput = args.stopOnOutput;
+
+                this.pollingManager.registerJob({
+                    id: `shell:${id}`,
+                    description: `Monitoring shell session "${id}"`,
+                    intervalMs: interval,
+                    maxAttempts,
+                    checkFn: async () => {
+                        const info = session.info();
+                        if (info.status === 'exited') return true;
+                        
+                        if (stopOnOutput) {
+                            const logs = session.read(20).join('\n');
+                            if (logs.includes(stopOnOutput)) return true;
+                        }
+                        return false;
+                    },
+                    onSuccess: () => {
+                        const info = session.info();
+                        const logs = session.read(50).join('\n');
+                        logger.info(`Polling: Shell session "${id}" finished with exit code ${info.exitCode}`);
+                        // Push a virtual update to the agent queue so it knows the task is ready
+                        this.actionQueue.push({
+                            id: `shell_done_${id}_${Date.now()}`,
+                            type: 'NOTIFY',
+                            payload: {
+                                source: 'system',
+                                text: `Background shell session "${id}" has completed.\n\nFinal Output:\n${logs}`
+                            },
+                            priority: 7,
+                            status: 'pending',
+                            timestamp: new Date().toISOString()
+                        });
+                    },
+                    onFailure: (jobId, reason) => {
+                        logger.warn(`Polling: Shell session "${id}" monitoring timed out: ${reason}`);
+                    }
+                });
+
+                return `Polling registered for session "${id}". I will monitor it in the background and notify you when it finishes. You can continue with other tasks.`;
             }
         });
 
@@ -8194,23 +8282,28 @@ The plugin handles all logic internally. See the plugin source for implementatio
             // a virtual delivery. This prevents the audit from blocking completion
             // when the agent is trying to send the same result again.
             const pipelineDupe = !!action.payload?.pipelineSemanticDupe;
+            
+            // Check if decision engine explicitly mentioned loop termination in its analysis
+            const loopDetected = !!action.payload?.loopDetected || 
+                                (action.payload?.lastDecision?.verification?.analysis || '').includes('loop prevention');
 
-            if (context.deepToolExecutedSinceLastMessage && !pipelineDupe) {
+            if (context.deepToolExecutedSinceLastMessage && !pipelineDupe && !loopDetected) {
                 issues.push('Deep tool output exists after the last sent message (results likely not delivered).');
             }
 
             // Only flag ack-only messages as an issue when deep/research tools also ran.
             // Pure conversational tasks (greetings, short confirmations) legitimately produce
             // short replies that look like acks — don't penalise them.
-            if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput) {
+            // Bypass this if a loop was detected to allow graceful termination.
+            if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput && !loopDetected) {
                 issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
             }
 
-            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages && hadResearchOrDeepOutput) {
+            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages && hadResearchOrDeepOutput && !loopDetected) {
                 issues.push('Only acknowledgement/status-style messages were sent despite running research tools.');
             }
 
-            if (hadToolErrors && context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput) {
+            if (hadToolErrors && context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput && !loopDetected) {
                 issues.push('Tool errors occurred and no substantive user-facing recovery/result message was delivered.');
             }
 
@@ -9110,7 +9203,73 @@ REFLECTION: <1-2 sentences>`;
         return true;
     }
 
+    private currentThinkingMessageId: string | null = null;
+    private currentThinkingActionId: string | null = null;
+    private currentThinkingText: string = '';
+    private lastThinkingUpdateTime: number = 0;
+
+    private setupEventBusListeners() {
+        eventBus.on('llm:token', async (data: any) => {
+            this.currentThinkingText += data.token;
+            const now = Date.now();
+            
+            // Update the chat message every 2.5 seconds to avoid rate limits
+            if (now - this.lastThinkingUpdateTime > 2500 && this.currentThinkingActionId) {
+                this.lastThinkingUpdateTime = now;
+                await this.updateLiveThinkingMessage(this.currentThinkingActionId, this.currentThinkingText);
+            }
+        });
+
+        eventBus.on('task:step:start', (data: any) => {
+            this.currentThinkingActionId = data.actionId;
+            this.currentThinkingText = '';
+            this.currentThinkingMessageId = null;
+        });
+
+        eventBus.on('llm:end', () => {
+            // Optional: final update or cleanup
+        });
+
+        eventBus.on('task:complete', (data: any) => {
+            if (data.actionId === this.currentThinkingActionId) {
+                this.currentThinkingActionId = null;
+                this.currentThinkingText = '';
+                this.currentThinkingMessageId = null;
+            }
+        });
+    }
+
+    private async updateLiveThinkingMessage(actionId: string, text: string) {
+        try {
+            const action = this.actionQueue.get(actionId);
+            if (!action || !action.payload.source || !action.payload.sourceId) return;
+
+            const channel = this.channelRegistry.get(action.payload.source);
+            if (!channel || !channel.updateMessage) return;
+
+            const displayTarget = action.payload.sourceId;
+            const progressHeader = `🤖 *Thinking...*\n\n`;
+            
+            // Limit thinking text length for telegram/whatsapp UI comfort
+            const displayBody = text.length > 800 ? `...${text.substring(text.length - 800)}` : text;
+            const fullMessage = `${progressHeader}${displayBody}`;
+
+            if (!this.currentThinkingMessageId) {
+                const sentId = await channel.sendMessage(displayTarget, fullMessage);
+                if (typeof sentId === 'string') {
+                    this.currentThinkingMessageId = sentId;
+                }
+            } else {
+                await channel.updateMessage(displayTarget, this.currentThinkingMessageId, fullMessage);
+            }
+        } catch (e) {
+            // Ignore update errors
+        }
+    }
+
     private setupEventListeners() {
+        this.setupEventBusListeners();
+
         eventBus.on('scheduler:tick', async () => {
             try {
                 await this.processNextAction();
@@ -12633,7 +12792,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     resultIndicatesError = lower.startsWith('error') || lower.startsWith('failed');
                                 }
 
-                                if (toolMeta.isDeep && !resultIndicatesError) {
+                                const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
+
+                                if (toolMeta.isDeep && !resultIndicatesError && !isInternalTool) {
                                     deepToolExecutedSinceLastMessage = true;
                                 } else if (resultIndicatesError) {
                                     if (!toolMeta.isSideEffect) blockedFailedSignatures.add(toolSignature);
@@ -12643,6 +12804,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 if (toolMeta.isSideEffect && !resultIndicatesError) {
                                     messagesSent++;
                                     anyUserDeliverySuccess = true;
+                                    // Reset the deep tool flag because we just delivered a message to the user
+                                    deepToolExecutedSinceLastMessage = false; 
                                     if (this.isSubstantiveDeliveryMessage(resultString)) substantiveDeliveriesSent++;
                                 }
 

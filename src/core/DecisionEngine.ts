@@ -1410,6 +1410,9 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
         if (actionState.isRepeatingResponse(3)) {
             logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Forcing termination to prevent redundant messaging.`);
             
+            // Mark that a loop was detected so the auditor can bypass the "unsent results" check
+            metadata.loopDetected = true;
+
             // Force goals_met to true so the pipeline doesn't keep retrying
             if (piped) {
                 piped.verification = { 

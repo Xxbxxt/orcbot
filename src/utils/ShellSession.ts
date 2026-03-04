@@ -28,22 +28,26 @@ export class ShellSession {
     private _exitCode?: number;
     private _pid?: number;
 
-    constructor(id: string, command: string, cwd: string) {
+    constructor(id: string, command: string, cwd: string, existingProcess?: ChildProcess) {
         this.id = id;
         this.command = command;
         this.cwd = cwd;
         this.startedAt = new Date().toISOString();
 
-        const isWindows = process.platform === 'win32';
-        const shell = isWindows ? 'powershell.exe' : '/bin/sh';
-        const shellFlag = isWindows ? '-Command' : '-c';
+        if (existingProcess) {
+            this.process = existingProcess;
+        } else {
+            const isWindows = process.platform === 'win32';
+            const shell = isWindows ? 'powershell.exe' : '/bin/sh';
+            const shellFlag = isWindows ? '-Command' : '-c';
 
-        this.process = spawn(shell, [shellFlag, command], {
-            cwd,
-            stdio: ['pipe', 'pipe', 'pipe'],
-            detached: false,
-            windowsHide: true,
-        });
+            this.process = spawn(shell, [shellFlag, command], {
+                cwd,
+                stdio: ['pipe', 'pipe', 'pipe'],
+                detached: false,
+                windowsHide: true,
+            });
+        }
 
         this._pid = this.process.pid;
 
@@ -72,7 +76,7 @@ export class ShellSession {
             logger.error(`ShellSession[${id}]: Process error: ${err.message}`);
         });
 
-        logger.info(`ShellSession[${id}]: Started PID=${this._pid} command="${command}" cwd="${cwd}"`);
+        logger.info(`ShellSession[${id}]: ${existingProcess ? 'Attached' : 'Started'} PID=${this._pid} command="${command}" cwd="${cwd}"`);
     }
 
     private appendLines(newLines: string[]): void {
@@ -170,6 +174,15 @@ class ShellSessionRegistry {
 
     public get(id: string): ShellSession | undefined {
         return this.sessions.get(id);
+    }
+
+    /**
+     * Attach an existing child process to the registry.
+     */
+    public attach(id: string, process: ChildProcess, command: string, cwd: string): ShellSession {
+        const session = new ShellSession(id, command, cwd, process);
+        this.sessions.set(id, session);
+        return session;
     }
 
     public list(): SessionInfo[] {

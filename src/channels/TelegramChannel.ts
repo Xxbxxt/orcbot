@@ -392,7 +392,7 @@ export class TelegramChannel implements IChannel {
         logger.info('TelegramChannel: Bot stopped');
     }
 
-    public async sendMessage(to: string, message: string): Promise<void> {
+    public async sendMessage(to: string, message: string): Promise<string | void> {
         try {
             // Convert markdown to Telegram HTML if the message contains formatting
             const useHtml = hasMarkdown(message);
@@ -401,14 +401,18 @@ export class TelegramChannel implements IChannel {
 
             // Telegram has a 4096 character limit. We'll chunk the message into parts.
             const MAX_LENGTH = 4000;
+            let lastMessageId: string | undefined;
+
             if (formatted.length <= MAX_LENGTH) {
                 try {
-                    await this.bot.telegram.sendMessage(to, formatted, sendOpts);
+                    const sent = await this.bot.telegram.sendMessage(to, formatted, sendOpts);
+                    lastMessageId = sent.message_id.toString();
                 } catch (parseErr: any) {
                     // If HTML parsing fails, fall back to plain text
                     if (useHtml && parseErr?.response?.description?.includes('parse')) {
                         logger.warn(`TelegramChannel: HTML parse failed, falling back to plain text`);
-                        await this.bot.telegram.sendMessage(to, renderMarkdown(message, 'plain'));
+                        const sent = await this.bot.telegram.sendMessage(to, renderMarkdown(message, 'plain'));
+                        lastMessageId = sent.message_id.toString();
                     } else {
                         throw parseErr;
                     }
@@ -437,10 +441,12 @@ export class TelegramChannel implements IChannel {
                 for (let i = 0; i < chunks.length; i++) {
                     const chunkText = `[Part ${i + 1}/${chunks.length}]\n${chunks[i]}`;
                     try {
-                        await this.bot.telegram.sendMessage(to, chunkText, sendOpts);
+                        const sent = await this.bot.telegram.sendMessage(to, chunkText, sendOpts);
+                        lastMessageId = sent.message_id.toString();
                     } catch (parseErr: any) {
                         if (useHtml && parseErr?.response?.description?.includes('parse')) {
-                            await this.bot.telegram.sendMessage(to, renderMarkdown(chunkText, 'plain'));
+                            const sent = await this.bot.telegram.sendMessage(to, renderMarkdown(chunkText, 'plain'));
+                            lastMessageId = sent.message_id.toString();
                         } else {
                             throw parseErr;
                         }
@@ -450,8 +456,26 @@ export class TelegramChannel implements IChannel {
                 }
                 logger.info(`TelegramChannel: Sent ${chunks.length} chunks to ${to}${useHtml ? ' (HTML)' : ''}`);
             }
+            return lastMessageId;
         } catch (error) {
             logger.error(`TelegramChannel: Error sending message to ${to}: ${error}`);
+            throw error;
+        }
+    }
+
+    public async updateMessage(to: string, messageId: string, newMessage: string): Promise<string | void> {
+        try {
+            const useHtml = hasMarkdown(newMessage);
+            const formatted = useHtml ? renderMarkdown(newMessage, 'telegram_html') : newMessage;
+            const sendOpts = useHtml ? { parse_mode: 'HTML' as const } : {};
+
+            await this.bot.telegram.editMessageText(to, parseInt(messageId), undefined, formatted, sendOpts);
+            return messageId;
+        } catch (error: any) {
+            if (error?.response?.description?.includes('message is not modified')) {
+                return messageId;
+            }
+            logger.error(`TelegramChannel: Failed to update message ${messageId}: ${error}`);
             throw error;
         }
     }

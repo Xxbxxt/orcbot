@@ -6,11 +6,15 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { TokenTracker } from './TokenTracker';
 import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, isPiAiLinked, type PiAIAdapterOptions } from './PiAIAdapter';
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
+import { eventBus } from './EventBus';
+
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
+
 export interface LLMMessage {
     role: 'system' | 'user' | 'assistant';
     content: string;
 }
+
 /** JSON Schema-based tool definition (OpenAI function calling format) */
 export interface LLMToolDefinition {
     type: 'function';
@@ -24,18 +28,21 @@ export interface LLMToolDefinition {
         };
     };
 }
+
 /** Structured tool call returned by native tool calling APIs */
 export interface LLMToolCall {
     name: string;
     arguments: Record<string, any>;
     id?: string;  // tool_call_id from the API
 }
+
 /** Combined response from callWithTools: text content + structured tool calls */
 export interface LLMToolResponse {
     content: string;         // Text/reasoning from the model (may be empty if only tool calls)
     toolCalls: LLMToolCall[];
     raw?: any;               // Raw API response for debugging
 }
+
 export class MultiLLM {
     private openaiKey: string | undefined;
     private openrouterKey: string | undefined;
@@ -68,8 +75,10 @@ export class MultiLLM {
     private tokenTracker?: TokenTracker;
     private preferredProvider?: LLMProvider;
     private fallbackModelNames: Record<string, string> = {};
+
     /** When true, route call() and callWithTools() through @mariozechner/pi-ai */
     private usePiAI: boolean = false;
+
     constructor(config?: {
         apiKey?: string, googleApiKey?: string, nvidiaApiKey?: string, anthropicApiKey?: string, modelName?: string,
         bedrockRegion?: string, bedrockAccessKeyId?: string, bedrockSecretAccessKey?: string, bedrockSessionToken?: string,
@@ -112,6 +121,7 @@ export class MultiLLM {
         this.preferredProvider = config?.llmProvider;
         this.fallbackModelNames = config?.fallbackModelNames || {};
         this.usePiAI = config?.usePiAI ?? false;
+
         if (this.usePiAI) logger.info('MultiLLM: pi-ai backend enabled');
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
     }
@@ -166,41 +176,26 @@ export class MultiLLM {
     }
 
     // ── Fast model for internal reasoning (reviews, reflections, classification) ──
-    // Uses a cheaper/faster model for non-user-facing LLM calls.
-    // Set via config key `fastModelName` (default: gpt-4o-mini).
     private fastModelName?: string;
-    /**
-     * Set the fast model name used for internal reasoning tasks
-     * (task classification, termination review, post-action reflection).
-     * These calls don't need the full primary model's quality.
-     */
+
     public setFastModel(modelName: string): void {
         this.fastModelName = modelName;
         logger.info(`MultiLLM: Fast model set to ${modelName}`);
     }
-    /**
-     * Call the LLM using the fast/cheap model for internal reasoning.
-     * Resolution order:
-     *   1. Explicit fastModelName from config → use it with its native provider
-     *   2. If that provider has no API key → pick a fast model for the primary provider
-     *   3. If no fastModelName configured → auto-select a fast model for the primary provider
-     */
+
     public async callFast(prompt: string, systemMessage?: string): Promise<string> {
-        // If user explicitly configured a fast model, try its native provider first
         if (this.fastModelName) {
             const provider = this.inferProvider(this.fastModelName);
             if (this.hasKeyForProvider(provider)) {
                 return this.call(prompt, systemMessage, provider, this.fastModelName);
             }
-            // Configured fast model's provider has no key — fall through
             logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} key (not configured). Auto-selecting from primary provider.`);
         }
-        // Auto-select a fast model for the primary provider
         const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
         const fastModel = this.getFastModelForProvider(primaryProvider);
         return this.call(prompt, systemMessage, primaryProvider, fastModel);
     }
-    /** Check whether we have a usable API key for the given provider. */
+
     private hasKeyForProvider(provider: LLMProvider): boolean {
         switch (provider) {
             case 'openai': return !!this.openaiKey && !this.openaiKey.startsWith('your_');
@@ -209,9 +204,8 @@ export class MultiLLM {
             case 'nvidia': return !!this.nvidiaKey && !this.nvidiaKey.startsWith('your_');
             case 'openrouter': return !!this.openrouterKey && !this.openrouterKey.startsWith('your_');
             case 'bedrock': return !!this.bedrockAccessKeyId;
-            case 'ollama': return true; // Local, no key needed usually
+            case 'ollama': return true;
             default:
-                // Check extended providers from MultiLLM state
                 if (provider === 'groq' as any) return !!this.groqKey && !this.groqKey.startsWith('your_');
                 if (provider === 'mistral' as any) return !!this.mistralKey && !this.mistralKey.startsWith('your_');
                 if (provider === 'xai' as any) return !!this.xaiKey && !this.xaiKey.startsWith('your_');
@@ -221,7 +215,7 @@ export class MultiLLM {
                 return false;
         }
     }
-    /** Return a cheap/fast model name appropriate for the given provider. */
+
     private getFastModelForProvider(provider: LLMProvider): string {
         switch (provider) {
             case 'openai': return 'gpt-4o-mini';
@@ -233,18 +227,16 @@ export class MultiLLM {
             default: return this.modelName;
         }
     }
+
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
         const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
-            } catch (e) {
-                // Silently fall back if pi-ai fails or is misconfigured
-            }
+            } catch (e) {}
         }
         
-        // Build fallback chain: try all available providers
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         const executeCall = async (p: LLMProvider, m?: string) => {
             if (p === 'openai') return this.callOpenAI(prompt, systemMessage, m);
@@ -255,14 +247,13 @@ export class MultiLLM {
             if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
             if (p === 'ollama') return this.callOllama(prompt, systemMessage, m);
             
-            // Dynamic routing: If not a core provider, try routing through pi-ai
-            // This covers mistral, groq, xai, deepseek, perplexity, cerebras, etc.
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(m, p));
             } catch (e) {
                 throw new Error(`Provider ${p} not supported by core MultiLLM and pi-ai routing failed: ${(e as Error).message}`);
             }
         };
+
         const primaryModel = modelOverride || this.modelName;
         return ErrorHandler.withFallback(
             async () => {
@@ -283,14 +274,7 @@ export class MultiLLM {
             }
         );
     }
-    /**
-     * Call the LLM with native tool/function calling support.
-     * Providers that support tool calling (OpenAI, Anthropic, Google, OpenRouter, NVIDIA)
-     * will pass structured tool definitions to the API rather than embedding them in the prompt.
-     * 
-     * Returns both the text content (reasoning) and structured tool calls.
-     * Falls back to regular call() + text parsing for unsupported providers.
-     */
+
     public async callWithTools(
         prompt: string,
         systemMessage: string,
@@ -309,17 +293,16 @@ export class MultiLLM {
         }
         
         const model = modelOverride || this.modelName;
-        // Check if provider supports native tool calling
         const supportsTools = this.supportsNativeToolCalling(primaryProvider);
         if (!supportsTools || tools.length === 0) {
-            // Fallback: use regular call() — tools are already in the system prompt
             const textResponse = await this.call(prompt, systemMessage, provider, modelOverride);
             return { content: textResponse, toolCalls: [] };
         }
+
         const executeToolCall = async (p: LLMProvider, m: string): Promise<LLMToolResponse> => {
             switch (p) {
                 case 'openai':
-                case 'nvidia':  // NVIDIA uses OpenAI-compatible API
+                case 'nvidia':
                     return this.callOpenAIWithTools(prompt, systemMessage, tools, m, p);
                 case 'anthropic':
                     return this.callAnthropicWithTools(prompt, systemMessage, tools, m);
@@ -330,16 +313,15 @@ export class MultiLLM {
                 case 'ollama':
                     return this.callOllamaWithTools(prompt, systemMessage, tools, m);
                 default:
-                    // Dynamic routing via pi-ai for extended providers
                     try {
                         return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(m, p));
                     } catch (e) {
-                        // If pi-ai fails, fall back to text-based call
                         const text = await this.call(prompt, systemMessage, p, m);
                         return { content: text, toolCalls: [] };
                     }
             }
         };
+
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         return ErrorHandler.withFallback(
             async () => {
@@ -359,16 +341,12 @@ export class MultiLLM {
             }
         );
     }
-    /**
-     * Whether a given provider supports native tool/function calling.
-     */
+
     public supportsNativeToolCalling(provider?: LLMProvider): boolean {
         const p = provider || this.preferredProvider || this.inferProvider(this.modelName);
-        // Ollama supports tools in modern versions, but it depends on the model.
-        // We'll allow it here, but handle the 400 error in the call method to fall back.
         return ['openai', 'anthropic', 'google', 'openrouter', 'nvidia', 'ollama'].includes(p);
     }
-    // ── Native tool calling: Ollama (OpenAI-compatible) ──
+
     private async callOllamaWithTools(
         prompt: string,
         systemMessage: string,
@@ -382,7 +360,6 @@ export class MultiLLM {
         messages.push({ role: 'user', content: prompt });
         const resolvedModel = this.normalizeOllamaModel(model);
         
-        // 1. Check if model is loaded (skip for remote bridge models)
         const isRemoteBridge = resolvedModel.includes('gemini') || resolvedModel.includes('openai');
         if (!isRemoteBridge) {
             try {
@@ -394,21 +371,11 @@ export class MultiLLM {
                         logger.info(`Ollama: Tool-capable model "${resolvedModel}" is not in memory. Loading...`);
                     }
                 }
-            } catch (e) {
-                // Ignore status check errors
-            }
+            } catch (e) {}
         }
 
         logger.info(`MultiLLM: Requesting tool-call response from Ollama ("${resolvedModel}")...`);
 
-        const body: any = {
-            model: resolvedModel,
-            messages,
-            temperature: 0.7,
-            tools,
-        };
-
-        // Use a longer timeout (3m) and heartbeat for local tool calls
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 180000);
         
@@ -417,7 +384,7 @@ export class MultiLLM {
             elapsed += 15;
             if (elapsed < 180) {
                 logger.info(`MultiLLM: Ollama ("${resolvedModel}") is still deliberating tools... [Elapsed: ${elapsed}s]`);
-                if (elapsed >= 60) {
+                if (elapsed === 60) {
                     logger.warn(`MultiLLM: Local tool-calling is slow. Ensure you are using a model that natively supports tools (e.g. llama3.1, qwen2.5).`);
                 }
             }
@@ -427,10 +394,13 @@ export class MultiLLM {
             const startTime = Date.now();
             const response = await fetch(url, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(body),
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: resolvedModel,
+                    messages,
+                    temperature: 0.7,
+                    tools,
+                }),
                 signal: controller.signal
             });
 
@@ -442,12 +412,10 @@ export class MultiLLM {
 
             if (!response.ok) {
                 const err = await response.text();
-                // Ollama returns 400 if the model doesn't support tools
                 if (response.status === 400 && (err.toLowerCase().includes('tool') || err.toLowerCase().includes('function'))) {
                     logger.warn(`Ollama: Model "${resolvedModel}" does not support native tool calling. Falling back to text-based tools.`);
                     throw new Error('MODEL_DOES_NOT_SUPPORT_TOOLS');
                 }
-                logger.error(`Ollama Tool Error: Received ${response.status} from server. Detail: ${err}`);
                 throw new Error(`Ollama Tool Call API Error: ${response.status} ${err}`);
             }
 
@@ -467,14 +435,10 @@ export class MultiLLM {
         } catch (error: any) {
             clearTimeout(timeoutId);
             clearInterval(heartbeatId);
-            if (error.name === 'AbortError') {
-                logger.error(`Ollama Timeout: Tool-deliberation for "${resolvedModel}" timed out after 180s.`);
-            }
-            logger.error(`MultiLLM Ollama tool call error: ${error.message || error}`);
             throw error;
         }
     }
-    // ── Native tool calling: OpenAI / NVIDIA (OpenAI-compatible) ──
+
     private async callOpenAIWithTools(
         prompt: string,
         systemMessage: string,
@@ -483,9 +447,7 @@ export class MultiLLM {
         provider: 'openai' | 'nvidia'
     ): Promise<LLMToolResponse> {
         const apiKey = provider === 'nvidia' ? this.nvidiaKey : this.openaiKey;
-        const baseUrl = provider === 'nvidia'
-            ? 'https://integrate.api.nvidia.com/v1/chat/completions'
-            : 'https://api.openai.com/v1/chat/completions';
+        const baseUrl = provider === 'nvidia' ? 'https://integrate.api.nvidia.com/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
         if (!apiKey) throw new Error(`${provider} API key not configured`);
         const resolvedModel = provider === 'nvidia' ? this.normalizeNvidiaModel(model) : model;
         const messages: LLMMessage[] = [];
@@ -497,10 +459,8 @@ export class MultiLLM {
             temperature: 0.7,
             tools,
         };
-        // NVIDIA may need max_tokens
-        if (provider === 'nvidia') {
-            body.max_tokens = 16384;
-        }
+        if (provider === 'nvidia') body.max_tokens = 16384;
+
         try {
             const response = await fetch(baseUrl, {
                 method: 'POST',
@@ -524,14 +484,13 @@ export class MultiLLM {
                 id: tc.id,
             }));
             this.recordUsage(provider, resolvedModel, prompt, data, textContent);
-            logger.debug(`MultiLLM: ${provider} tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
             return { content: textContent, toolCalls, raw: data };
         } catch (error) {
             logger.error(`MultiLLM ${provider} tool call error: ${error}`);
             throw error;
         }
     }
-    // ── Native tool calling: Anthropic ──
+
     private async callAnthropicWithTools(
         prompt: string,
         systemMessage: string,
@@ -540,7 +499,6 @@ export class MultiLLM {
     ): Promise<LLMToolResponse> {
         if (!this.anthropicKey) throw new Error('Anthropic API key not configured');
         const resolvedModel = this.normalizeAnthropicModel(model);
-        // Convert OpenAI tool format → Anthropic tool format
         const anthropicTools = tools.map(t => ({
             name: t.function.name,
             description: t.function.description,
@@ -553,7 +511,6 @@ export class MultiLLM {
             tools: anthropicTools,
         };
         if (systemMessage) {
-            // Use structured content block with cache_control for prompt caching
             body.system = [
                 {
                     type: 'text',
@@ -578,13 +535,11 @@ export class MultiLLM {
                 throw new Error(`Anthropic Tool Call API Error: ${response.status} ${err}`);
             }
             const data = await response.json() as any;
-            // Anthropic returns mixed content blocks: text and tool_use
             let textContent = '';
             const toolCalls: LLMToolCall[] = [];
             for (const block of (data.content || [])) {
-                if (block.type === 'text') {
-                    textContent += block.text;
-                } else if (block.type === 'tool_use') {
+                if (block.type === 'text') textContent += block.text;
+                else if (block.type === 'tool_use') {
                     toolCalls.push({
                         name: block.name,
                         arguments: block.input || {},
@@ -593,14 +548,13 @@ export class MultiLLM {
                 }
             }
             this.recordUsage('anthropic', resolvedModel, prompt, data, textContent);
-            logger.debug(`MultiLLM: Anthropic tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
             return { content: textContent, toolCalls, raw: data };
         } catch (error) {
             logger.error(`MultiLLM Anthropic tool call error: ${error}`);
             throw error;
         }
     }
-    // ── Native tool calling: Google Gemini ──
+
     private async callGoogleWithTools(
         prompt: string,
         systemMessage: string,
@@ -609,7 +563,6 @@ export class MultiLLM {
     ): Promise<LLMToolResponse> {
         if (!this.googleKey) throw new Error('Google API key not configured');
         const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
-        // Convert OpenAI tool format → Gemini function declaration format
         const geminiTools = [{
             functionDeclarations: tools.map(t => ({
                 name: t.function.name,
@@ -634,12 +587,9 @@ export class MultiLLM {
             const data = await response.json() as any;
             let textContent = '';
             const toolCalls: LLMToolCall[] = [];
-            // Gemini returns parts with text and/or functionCall
             const parts = data?.candidates?.[0]?.content?.parts || [];
             for (const part of parts) {
-                if (part.text) {
-                    textContent += part.text;
-                }
+                if (part.text) textContent += part.text;
                 if (part.functionCall) {
                     toolCalls.push({
                         name: part.functionCall.name,
@@ -648,14 +598,13 @@ export class MultiLLM {
                 }
             }
             this.recordUsage('google', model, fullPrompt, data, textContent);
-            logger.debug(`MultiLLM: Google tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
             return { content: textContent, toolCalls, raw: data };
         } catch (error) {
             logger.error(`MultiLLM Google tool call error: ${error}`);
             throw error;
         }
     }
-    // ── Native tool calling: OpenRouter (OpenAI-compatible) ──
+
     private async callOpenRouterWithTools(
         prompt: string,
         systemMessage: string,
@@ -684,15 +633,12 @@ export class MultiLLM {
                     messages,
                     temperature: 0.7,
                     tools,
-                    // Tell OpenRouter to only route to providers that support tool use
                     provider: { require: ['tools'] },
                 }),
             });
             if (!response.ok) {
                 const err = await response.text();
-                // If no provider supports tools for this model, fall back to text-based call
                 if (response.status === 404 && err.includes('tool use')) {
-                    logger.warn(`MultiLLM: OpenRouter model "${resolvedModel}" has no tool-capable providers, falling back to text-based call`);
                     const textResponse = await this.callOpenRouter(prompt, systemMessage, model);
                     return { content: textResponse, toolCalls: [] };
                 }
@@ -707,35 +653,27 @@ export class MultiLLM {
                 id: tc.id,
             }));
             this.recordUsage('openrouter', resolvedModel, prompt, data, textContent);
-            logger.debug(`MultiLLM: OpenRouter tool call returned ${toolCalls.length} tool(s) + ${textContent.length} chars text`);
             return { content: textContent, toolCalls, raw: data };
         } catch (error: any) {
-            // Also catch retried 404 tool-use errors gracefully
             if (error?.message?.includes('tool use') && error?.message?.includes('404')) {
-                logger.warn(`MultiLLM: OpenRouter model "${resolvedModel}" tool call failed, falling back to text-based call`);
                 const textResponse = await this.callOpenRouter(prompt, systemMessage, model);
                 return { content: textResponse, toolCalls: [] };
             }
-            logger.error(`MultiLLM OpenRouter tool call error: ${error}`);
             throw error;
         }
     }
-    /**
-     * Safely parse a JSON string, returning empty object on failure.
-     * OpenAI tool call arguments come as a JSON string.
-     */
+
     private safeParseJson(str: any): Record<string, any> {
         if (typeof str === 'object' && str !== null) return str;
         if (typeof str !== 'string') return {};
         try {
             return JSON.parse(str);
         } catch {
-            logger.warn(`MultiLLM: Failed to parse tool arguments: "${String(str).slice(0, 100)}"`);
             return {};
         }
     }
+
     private getFallbackProvider(primaryProvider: LLMProvider): LLMProvider | null {
-        // Priority order for fallbacks based on what's configured
         const fallbackOrder: LLMProvider[] = ['openai', 'anthropic', 'google', 'nvidia', 'openrouter', 'bedrock'];
         for (const provider of fallbackOrder) {
             if (provider === primaryProvider) continue;
@@ -748,6 +686,7 @@ export class MultiLLM {
         }
         return null;
     }
+
     private getDefaultModelForProvider(provider: LLMProvider): string {
         const configuredFallback = this.fallbackModelNames?.[provider];
         if (configuredFallback) return configuredFallback;
@@ -762,408 +701,10 @@ export class MultiLLM {
             default: return this.modelName;
         }
     }
-    public setModel(modelName: string): void {
-        this.modelName = modelName;
-    }
-    public setFallbackModels(fallbacks: Record<string, string>): void {
-        this.fallbackModelNames = { ...(fallbacks || {}) };
-    }
-    public getModelAvailabilitySummary(): string {
-        const has = (v?: string) => !!v && !String(v).startsWith('your_');
-        const providers: Array<{provider: LLMProvider, configured: boolean, model: string}> = [
-            { provider: 'openai', configured: has(this.openaiKey), model: this.getDefaultModelForProvider('openai') },
-            { provider: 'google', configured: has(this.googleKey), model: this.getDefaultModelForProvider('google') },
-            { provider: 'anthropic', configured: has(this.anthropicKey), model: this.getDefaultModelForProvider('anthropic') },
-            { provider: 'nvidia', configured: has(this.nvidiaKey), model: this.getDefaultModelForProvider('nvidia') },
-            { provider: 'openrouter', configured: has(this.openrouterKey), model: this.getDefaultModelForProvider('openrouter') },
-            { provider: 'ollama', configured: !!this.ollamaUrl, model: this.getDefaultModelForProvider('ollama') },
-            { provider: 'bedrock', configured: has(this.bedrockAccessKeyId), model: this.getDefaultModelForProvider('bedrock') },
-        ];
-        const currentProvider = this.preferredProvider || this.inferProvider(this.modelName);
-        const lines = [
-            `Current model: ${this.modelName}`,
-            `Current provider: ${currentProvider}`,
-            'Available providers/models:'
-        ];
-        for (const p of providers) {
-            lines.push(`- ${p.provider}: ${p.configured ? 'configured' : 'not configured'} (default/fallback model: ${p.model})`);
-        }
-        return lines.join('\n');
-    }
-    public async analyzeMedia(filePath: string, prompt: string): Promise<string> {
-        const provider = this.inferProvider(this.modelName);
-        if (provider === 'google') {
-            return this.analyzeMediaGoogle(filePath, prompt);
-        } else {
-            return this.analyzeMediaOpenAI(filePath, prompt);
-        }
-    }
-    public async analyzeMediaWithModel(filePath: string, prompt: string, modelName: string): Promise<string> {
-        if (!modelName) return this.analyzeMedia(filePath, prompt);
-        const provider = this.inferProvider(modelName);
-        if (provider === 'google') {
-            return this.analyzeMediaGoogle(filePath, prompt, modelName);
-        }
-        if (provider === 'openai') {
-            return this.analyzeMediaOpenAI(filePath, prompt);
-        }
-        return this.analyzeMedia(filePath, prompt);
-    }
-    /**
-     * Text-to-Speech: Convert text to an audio file using the primary provider.
-     * Uses Google TTS when primary provider is google; otherwise OpenAI TTS.
-     * Returns the path to the generated audio file.
-     * 
-     * @param text The text to convert to speech
-     * @param outputPath Where to save the audio file
-     * @param voice The voice to use. OpenAI voices: alloy, echo, fable, onyx, nova, shimmer. Google: e.g. kore.
-     * @param speed Speech speed multiplier (0.25 to 4.0). Default: 1.0
-     */
-    public async textToSpeech(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
-        const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
-        if (primaryProvider === 'google' && this.googleKey) {
-            return this.textToSpeechGoogle(text, outputPath, voice);
-        }
-        if (!this.openaiKey) {
-            throw new Error('OpenAI API key not configured — required for TTS');
-        }
-        const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
-        let selectedVoice = voice || 'nova';
-        if (!validVoices.includes(selectedVoice)) {
-            selectedVoice = 'nova';
-        }
-        try {
-            const response = await fetch('https://api.openai.com/v1/audio/speech', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.openaiKey}`,
-                },
-                body: JSON.stringify({
-                    model: 'tts-1',
-                    input: text,
-                    voice: selectedVoice,
-                    response_format: 'opus',  // Opus codec in OGG container — works as voice note
-                    speed: Math.max(0.25, Math.min(4.0, speed))
-                })
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`OpenAI TTS Error: ${response.status} ${err}`);
-            }
-            const buffer = Buffer.from(await response.arrayBuffer());
-            // Ensure output directory exists
-            const dir = path.dirname(outputPath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(outputPath, buffer);
-            logger.info(`MultiLLM TTS (OpenAI): Generated ${buffer.length} bytes → ${outputPath}`);
-            return outputPath;
-        } catch (error) {
-            logger.error(`MultiLLM TTS Error: ${error}`);
-            throw error;
-        }
-    }
-    private async textToSpeechGoogle(text: string, outputPath: string, voice?: string): Promise<string> {
-        if (!this.googleKey) throw new Error('Google API key not configured — required for TTS');
-        const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${this.googleKey}`;
-        
-        const googleVoices = ['achernar', 'achird', 'algenib', 'algieba', 'alnilam', 'aoede', 'autonoe', 'callirrhoe', 'charon', 'despina', 'enceladus', 'erinome', 'fenrir', 'gacrux', 'iapetus', 'kore', 'laomedeia', 'leda', 'orus', 'puck', 'pulcherrima', 'rasalgethi', 'sadachbia', 'sadaltager', 'schedar', 'sulafat', 'umbriel', 'vindemiatrix', 'zephyr', 'zubenelgenubi'];
-        let selectedVoice = voice || 'kore';
-        if (!googleVoices.includes(selectedVoice)) {
-            selectedVoice = 'kore';
-        }
 
-        const body = {
-            model: 'gemini-2.5-flash-preview-tts',
-            input: text,
-            response_modalities: ['AUDIO'],
-            generation_config: {
-                speech_config: {
-                    language: 'en-us',
-                    voice: selectedVoice
-                }
-            }
-        };
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`Google TTS Error: ${response.status} ${err}`);
-            }
-            const data: any = await response.json().catch(() => ({}));
-            const outputs = data?.outputs || [];
-            const audio = outputs.find((o: any) => o?.type === 'audio');
-            const base64 = audio?.data;
-            if (!base64) {
-                throw new Error('Google TTS Error: No audio data returned');
-            }
-            const pcmBuffer = Buffer.from(base64, 'base64');
-            const wavPath = path.extname(outputPath).toLowerCase() === '.wav'
-                ? outputPath
-                : outputPath.replace(path.extname(outputPath) || '', '') + '.wav';
-            // Ensure output directory exists
-            const dir = path.dirname(wavPath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            this.writeWavFile(pcmBuffer, wavPath, 24000, 1, 16);
-            logger.info(`MultiLLM TTS (Google): Generated ${pcmBuffer.length} bytes PCM → ${wavPath}`);
-            return wavPath;
-        } catch (error) {
-            logger.error(`MultiLLM TTS Error: ${error}`);
-            throw error;
-        }
-    }
-    private writeWavFile(pcmData: Buffer, outputPath: string, sampleRate: number, channels: number, bitDepth: number): void {
-        const byteRate = sampleRate * channels * (bitDepth / 8);
-        const blockAlign = channels * (bitDepth / 8);
-        const dataSize = pcmData.length;
-        const header = Buffer.alloc(44);
-        header.write('RIFF', 0);
-        header.writeUInt32LE(36 + dataSize, 4);
-        header.write('WAVE', 8);
-        header.write('fmt ', 12);
-        header.writeUInt32LE(16, 16); // PCM header size
-        header.writeUInt16LE(1, 20);  // Audio format PCM
-        header.writeUInt16LE(channels, 22);
-        header.writeUInt32LE(sampleRate, 24);
-        header.writeUInt32LE(byteRate, 28);
-        header.writeUInt16LE(blockAlign, 32);
-        header.writeUInt16LE(bitDepth, 34);
-        header.write('data', 36);
-        header.writeUInt32LE(dataSize, 40);
-        const wav = Buffer.concat([header, pcmData]);
-        fs.writeFileSync(outputPath, wav);
-    }
-    private async analyzeMediaGoogle(filePath: string, prompt: string, modelOverride?: string): Promise<string> {
-        if (!this.googleKey) throw new Error('Google API key not configured');
-        const buffer = fs.readFileSync(filePath);
-        const mimeType = this.getMimeType(filePath);
-        const base64Data = buffer.toString('base64');
-        const model = (modelOverride && modelOverride.trim()) ? modelOverride.trim() : 'gemini-2.5-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
-        const body = {
-            contents: [{
-                parts: [
-                    { text: prompt },
-                    {
-                        inlineData: {
-                            mimeType: mimeType,
-                            data: base64Data
-                        }
-                    }
-                ]
-            }],
-            ...(this.isGoogleComputerUseModel(model)
-                ? {
-                    // Computer-use preview models reject requests that do not explicitly
-                    // enable the computer use tool, even for screenshot analysis.
-                    tools: [{ computer_use: {} }]
-                }
-                : {})
-        };
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`Google Media Error: ${response.status} ${err}`);
-            }
-            const data = await response.json() as any;
-            const parts = data.candidates?.[0]?.content?.parts;
-            if (parts && parts.length > 0) {
-                // Find first part with text
-                for (const part of parts) {
-                    if (part.text) return part.text;
-                    if (part.functionCall) {
-                        logger.info(`MultiLLM: Model returned functionCall instead of text: ${JSON.stringify(part.functionCall)}`);
-                        // If it's a computer_use call, we might want to return its arguments as string for now
-                        return JSON.stringify(part.functionCall.args || part.functionCall);
-                    }
-                }
-            }
-            throw new Error(`No analytical content in Gemini response: ${JSON.stringify(data)}`);
-        } catch (error) {
-            logger.error(`MultiLLM Google Media Error: ${error}`);
-            throw error;
-        }
-    }
-    private isGoogleComputerUseModel(model: string): boolean {
-        const lower = (model || '').toLowerCase();
-        return lower.includes('computer-use') || lower.includes('computer_use');
-    }
-    private async analyzeMediaOpenAI(filePath: string, prompt: string): Promise<string> {
-        if (!this.openaiKey) throw new Error('OpenAI API key not configured');
-        const ext = path.extname(filePath).toLowerCase().substring(1);
-        // Prefer detected mime over extension
-        const buffer = fs.readFileSync(filePath);
-        const detectedMime = await this.detectMime(buffer, ext);
-        if (['png', 'jpg', 'jpeg', 'webp'].includes(ext) || detectedMime.startsWith('image/')) {
-            const { encoded, mime } = await this.prepareImage(buffer, detectedMime);
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.openaiKey}`,
-                },
-                body: JSON.stringify({
-                    model: 'gpt-4o',
-                    messages: [
-                        {
-                            role: 'user',
-                            content: [
-                                { type: 'text', text: prompt },
-                                {
-                                    type: 'image_url',
-                                    image_url: { url: `data:${mime};base64,${encoded}` }
-                                }
-                            ]
-                        }
-                    ]
-                }),
-            });
-            if (!response.ok) throw new Error(`OpenAI Vision Error: ${response.status}`);
-            const data = await response.json() as any;
-            return data.choices[0].message.content;
-        } else if (isAudioFile(filePath) || detectedMime.startsWith('audio/')) {
-            // Auto-convert unsupported formats (e.g. OGG, OPUS, AMR) to MP3 for Whisper
-            const compatiblePath = await convertToWhisperCompatible(filePath);
-            const audioBuffer = fs.readFileSync(compatiblePath);
-            const audioFilename = path.basename(compatiblePath);
-            const formData = new FormData();
-            // In Node environments, global FormData might behave differently.
-            formData.append('file', new Blob([audioBuffer]), audioFilename);
-            formData.append('model', 'whisper-1');
-            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.openaiKey}`,
-                },
-                body: formData
-            });
-            if (!response.ok) throw new Error(`OpenAI Whisper Error: ${response.status}`);
-            const data = await response.json() as any;
-            return `Transcription result:\n${data.text}`;
-        } else if (ext === 'pdf' || detectedMime === 'application/pdf') {
-            try {
-                const text = await this.extractPdfText(buffer);
-                return this.call(`${prompt}\n\n[PDF EXCERPT]:\n${text.substring(0, 15000)}`);
-            } catch (e) {
-                logger.warn(`PDF extract failed, falling back to raw text: ${e}`);
-                try {
-                    const content = fs.readFileSync(filePath, 'utf8');
-                    return this.call(`${prompt}\n\n[FILE CONTENT EXCERPT]:\n${content.substring(0, 15000)}`);
-                } catch (err) {
-                    return `Unsupported file analysis for extension .${ext}. Try a multimodal provider like Google/Gemini for advanced media types.`;
-                }
-            }
-        } else {
-            // Document Fallback
-            try {
-                const content = fs.readFileSync(filePath, 'utf8');
-                return this.call(`${prompt}\n\n[FILE CONTENT EXCERPT]:\n${content.substring(0, 15000)}`);
-            } catch (e) {
-                return `Unsupported file analysis for extension .${ext}. Try a multimodal provider like Google/Gemini for advanced media types.`;
-            }
-        }
-    }
-    private getMimeType(filePath: string): string {
-        return getAudioHelperMimeType(filePath);
-    }
-    private async detectMime(buffer: Buffer, fallbackExt: string): Promise<string> {
-        try {
-            const { fileTypeFromBuffer } = await import('file-type');
-            const res = await fileTypeFromBuffer(buffer);
-            if (res?.mime) return res.mime;
-        } catch (e) {
-            logger.debug(`Mime detect fallback: ${e}`);
-        }
-        return this.getMimeType(`.${fallbackExt}`);
-    }
-    private async prepareImage(buffer: Buffer, mime: string): Promise<{ encoded: string, mime: string }> {
-        let working = buffer;
-        let workingMime = mime;
-        try {
-            const sharp = (await import('sharp')).default;
-            const image = sharp(buffer, { failOn: 'none' });
-            const meta = await image.metadata();
-            const needsResize = (meta.width && meta.width > 2048) || (meta.height && meta.height > 2048);
-            if (needsResize || (buffer.byteLength > 2_000_000)) {
-                const resized = image.resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true });
-                const output = await resized.jpeg({ quality: 85 }).toBuffer();
-                working = output;
-                workingMime = 'image/jpeg';
-            }
-        } catch (e) {
-            logger.debug(`Image preprocess skipped: ${e}`);
-        }
-        return { encoded: working.toString('base64'), mime: workingMime };
-    }
-    private async extractPdfText(buffer: Buffer): Promise<string> {
-        try {
-            // Use pdf-parse for more robust, native node.js parsing
-            // Dynamic import to handle both ESM/CJS interop gracefully
-            const mod: any = await import('pdf-parse');
-            const pdfParse = mod.default || mod;
-            const data = await pdfParse(buffer, { max: 20 }); // limit to 20 pages
-            let text = data.text || '';
-            if (text.length > 20000) {
-                text = text.substring(0, 20000);
-            }
-            return text;
-        } catch (e) {
-            logger.warn(`PDF parse failed: ${e}`);
-            return '';
-        }
-    }
-    /** Build PiAIAdapterOptions from current state. */
-    private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
-        const model = modelOverride || this.modelName;
-        return {
-            // Do NOT pass this.preferredProvider here — it's a legacy routing hint that can
-            // misdirect pi-ai (e.g. stored 'google' but model is 'llama-3.3-70b-versatile').
-            // Only pass an explicit per-call override; toPiProvider() infers from model name.
-            provider: providerOverride ?? 'auto',
-            model,
-            apiKeys: {
-                openai: this.openaiKey,
-                google: this.googleKey,
-                anthropic: this.anthropicKey,
-                openrouter: this.openrouterKey,
-                nvidia: this.nvidiaKey,
-                bedrockAccessKeyId: this.bedrockAccessKeyId,
-                bedrockSecretAccessKey: this.bedrockSecretAccessKey,
-                bedrockRegion: this.bedrockRegion,
-                bedrockSessionToken: this.bedrockSessionToken,
-                groq: this.groqKey,
-                mistral: this.mistralKey,
-                cerebras: this.cerebrasKey,
-                xai: this.xaiKey,
-                huggingface: this.huggingfaceKey,
-                kimi: this.kimiKey,
-                minimax: this.minimaxKey,
-                zai: this.zaiKey,
-                perplexity: this.perplexityKey,
-                deepseek: this.deepseekKey,
-                opencode: this.opencodeKey,
-                azureEndpoint: this.azureEndpoint,
-                googleProjectId: this.googleProjectId,
-                googleLocation: this.googleLocation,
-            },
-        };
-    }
     public inferProvider(modelName: string): LLMProvider {
         const lower = (modelName || '').toLowerCase();
-        
-        // 1. Explicit local/ollama prefixes always win
         if (lower.startsWith('ollama:') || lower.startsWith('local:') || lower.startsWith('ol:')) return 'ollama';
-        
-        // 2. Other explicit prefixes
         if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
         if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
         if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
@@ -1174,178 +715,28 @@ export class MultiLLM {
         if (lower.startsWith('xai:') || lower.startsWith('xi:')) return 'xai';
         if (lower.startsWith('perplexity:') || lower.startsWith('pp:')) return 'perplexity';
         if (lower.startsWith('cerebras:') || lower.startsWith('cb:')) return 'cerebras';
-        
-        // 3. Inference from common names (Cloud defaults)
         if (lower.includes('gemini')) return 'google';
         if (lower.includes('gpt-') || lower.includes('o1-')) return 'openai';
         if (lower.includes('mistral') || lower.includes('mixtral')) return 'mistral';
         if (lower.includes('deepseek')) return 'deepseek';
-        if (lower.includes('llama')) return 'groq'; // Default llama to groq if not specified otherwise
-        
+        if (lower.includes('llama')) return 'groq';
         return 'openai';
     }
+
     private normalizeOpenRouterModel(modelName: string): string {
-        return modelName
-            .replace(/^openrouter:/i, '')
-            .replace(/^openrouter\//i, '')
-            .replace(/^or:/i, '');
+        return modelName.replace(/^openrouter:/i, '').replace(/^openrouter\//i, '').replace(/^or:/i, '');
     }
     private normalizeNvidiaModel(modelName: string): string {
-        return modelName
-            .replace(/^nvidia:/i, '')
-            .replace(/^nv:/i, '');
+        return modelName.replace(/^nvidia:/i, '').replace(/^nv:/i, '');
     }
     private normalizeAnthropicModel(modelName: string): string {
-        return modelName
-            .replace(/^anthropic:/i, '')
-            .replace(/^ant:/i, '');
+        return modelName.replace(/^anthropic:/i, '').replace(/^ant:/i, '');
     }
-    private getBedrockClient() {
-        if (!this.bedrockRegion) throw new Error('Bedrock region not configured');
-        return new BedrockRuntimeClient({
-            region: this.bedrockRegion,
-            credentials: this.bedrockAccessKeyId && this.bedrockSecretAccessKey ? {
-                accessKeyId: this.bedrockAccessKeyId,
-                secretAccessKey: this.bedrockSecretAccessKey,
-                sessionToken: this.bedrockSessionToken,
-            } : undefined,
-        });
+    private normalizeOllamaModel(modelName: string): string {
+        return modelName.replace(/^ollama:/i, '').replace(/^local:/i, '');
     }
-    private async callBedrock(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
-        const modelId = modelOverride || this.modelName;
-        if (!this.bedrockRegion) throw new Error('Bedrock region not configured');
-        const body = {
-            messages: [
-                systemMessage ? { role: 'user', content: [{ type: 'text', text: `${systemMessage}\n\n${prompt}` }] } : { role: 'user', content: [{ type: 'text', text: prompt }] }
-            ],
-            max_tokens: 1024,
-            temperature: 0.7
-        } as any;
-        const client = this.getBedrockClient();
-        const command = new InvokeModelCommand({
-            modelId,
-            body: JSON.stringify(body),
-            contentType: 'application/json',
-            accept: 'application/json'
-        });
-        try {
-            const response = await client.send(command);
-            const decoded = new TextDecoder().decode(response.body as Uint8Array);
-            const data = JSON.parse(decoded);
-            this.recordUsage('bedrock', modelId, prompt, data, undefined);
-            if (data.output?.message?.content?.length) {
-                const textPart = data.output.message.content.find((p: any) => p.text)?.text;
-                if (textPart) return textPart;
-            }
-            if (data.outputText) return data.outputText;
-            return JSON.stringify(data);
-        } catch (error) {
-            logger.error(`MultiLLM Bedrock Error: ${error}`);
-            throw error;
-        }
-    }
-        private async callOllama(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
-            const messages: LLMMessage[] = [];
-            if (systemMessage) messages.push({ role: 'system', content: systemMessage });
-            messages.push({ role: 'user', content: prompt });
-            
-            const rawModel = modelOverride || this.modelName;
-            const model = this.normalizeOllamaModel(rawModel);
-            const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
-            
-            // 1. Check if model is loaded (skip for remote bridge models)
-            const isRemoteBridge = model.includes('gemini') || model.includes('openai');
-            if (!isRemoteBridge) {
-                try {
-                    const psResponse = await fetch(`${baseUrl}/api/ps`);
-                    if (psResponse.ok) {
-                        const psData = await psResponse.json() as any;
-                        const isLoaded = (psData.models || []).some((m: any) => m.name === model || m.name.startsWith(model + ':'));
-                        if (!isLoaded) {
-                            logger.info(`Ollama: Model "${model}" is not currently in memory. This may take a moment to load from disk...`);
-                        } else {
-                            logger.debug(`Ollama: Model "${model}" is already loaded in memory.`);
-                        }
-                    }
-                } catch (e) {
-                    logger.debug(`Ollama: Could not check model status via /api/ps: ${(e as Error).message}`);
-                }
-            }
 
-            const url = `${baseUrl}/v1/chat/completions`;
-            if (!isRemoteBridge) {
-                logger.info(`MultiLLM: Requesting response from local Ollama model "${model}"...`);
-            }
-            
-            // Use a longer timeout for local Ollama calls (3 minutes) to allow for model loading/swapping
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 180000);
-            
-            // HEARTBEAT TIMER: Log status every 15s to keep the user informed during slow local reasoning
-            let elapsed = 0;
-            const heartbeatId = setInterval(() => {
-                elapsed += 15;
-                if (elapsed < 180) {
-                    logger.info(`MultiLLM: Still waiting for Ollama ("${model}") to process... [Elapsed: ${elapsed}s]`);
-                    if (elapsed === 60) {
-                        logger.warn(`MultiLLM: Local model "${model}" is taking a while. This usually happens if you have limited RAM/VRAM or if the model is being swapped from disk.`);
-                    }
-                }
-            }, 15000);
-
-            try {
-                const startTime = Date.now();
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model,
-                        messages,
-                        temperature: 0.7,
-                    }),
-                    signal: controller.signal
-                });
-                
-                const endTime = Date.now();
-                const duration = ((endTime - startTime) / 1000).toFixed(1);
-
-                clearTimeout(timeoutId);
-                clearInterval(heartbeatId);
-
-                if (!response.ok) {
-                    const err = await response.text();
-                    logger.error(`Ollama Error: Received ${response.status} from server. Detail: ${err}`);
-                    throw new Error(`Ollama API Error: ${response.status} ${err}`);
-                }
-
-                const data = await response.json() as any;
-                const content = data?.choices?.[0]?.message?.content || '';
-                
-                this.recordUsage('ollama', model, prompt, data, content);
-                logger.info(`MultiLLM: Ollama ("${model}") responded successfully in ${duration}s.`);
-                
-                return content;
-            } catch (error: any) {
-                clearTimeout(timeoutId);
-                clearInterval(heartbeatId);
-                if (error.name === 'AbortError') {
-                    logger.error(`Ollama Timeout: Local model "${model}" failed to respond within 180s.`);
-                    throw new Error(`Ollama request timed out after 180s. Your system might be struggling to run both OrcBot and the model concurrently.`);
-                }
-                logger.error(`MultiLLM Ollama Connection Error: ${error.message || error}`);
-                throw error;
-            }
-        }
-    
-        private normalizeOllamaModel(modelName: string): string {
-            return modelName
-                .replace(/^ollama:/i, '')
-                .replace(/^local:/i, '');
-        }
-    
-        private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         if (!this.openaiKey) throw new Error('OpenAI API key not configured');
         const messages: LLMMessage[] = [];
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
@@ -1358,153 +749,50 @@ export class MultiLLM {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.openaiKey}`,
                 },
-                body: JSON.stringify({
-                    model,
-                    messages,
-                    temperature: 0.7,
-                }),
+                body: JSON.stringify({ model, messages, temperature: 0.7, stream: true }),
             });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`OpenAI API Error: ${response.status} ${err}`);
+            if (!response.ok) throw new Error(`OpenAI API Error: ${response.status}`);
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let content = '';
+
+            if (reader) {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    for (const line of lines) {
+                        if (!line.trim() || line.startsWith(':') || line === 'data: [DONE]') continue;
+                        try {
+                            const json = JSON.parse(line.replace(/^data: /, ''));
+                            const token = json.choices?.[0]?.delta?.content;
+                            if (token) {
+                                content += token;
+                                eventBus.emitToken(token, { model, provider: 'openai' });
+                            }
+                        } catch (e) {}
+                    }
+                }
             }
-            const data = await response.json() as any;
-            this.recordUsage('openai', model, prompt, data, data?.choices?.[0]?.message?.content);
-            return data.choices[0].message.content;
+            this.recordUsage('openai', model, prompt, { choices: [{ message: { content } }] }, content);
+            return content;
         } catch (error) {
-            logger.error(`MultiLLM OpenAI Error: ${error}`);
             throw error;
         }
     }
-    private async callOpenRouter(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
-        if (!this.openrouterKey) throw new Error('OpenRouter API key not configured');
-        const messages: LLMMessage[] = [];
-        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
-        messages.push({ role: 'user', content: prompt });
-        const rawModel = modelOverride || this.modelName;
-        const model = this.normalizeOpenRouterModel(rawModel);
-        const base = this.openrouterBaseUrl.replace(/\/+$/, '');
-        const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.openrouterKey}`
-        };
-        if (this.openrouterReferer) headers['HTTP-Referer'] = this.openrouterReferer;
-        if (this.openrouterAppName) headers['X-Title'] = this.openrouterAppName;
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    model,
-                    messages,
-                    temperature: 0.7
-                })
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`OpenRouter API Error: ${response.status} ${err}`);
-            }
-            const data = await response.json() as any;
-            const content = data?.choices?.[0]?.message?.content;
-            this.recordUsage('openrouter', model, prompt, data, content);
-            return content || JSON.stringify(data);
-        } catch (error) {
-            logger.error(`MultiLLM OpenRouter Error: ${error}`);
-            throw error;
-        }
-    }
-    private async callGoogle(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
-        if (!this.googleKey) throw new Error('Google API key not configured');
-        const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
-        const model = modelOverride || this.modelName;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: fullPrompt }] }]
-                })
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`Google API Error: ${response.status} ${err}`);
-            }
-            const data = await response.json() as any;
-            const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            this.recordUsage('google', model, fullPrompt, data, textOut);
-            if (data.candidates && data.candidates.length > 0 &&
-                data.candidates[0].content &&
-                data.candidates[0].content.parts &&
-                data.candidates[0].content.parts.length > 0) {
-                return data.candidates[0].content.parts[0].text;
-            }
-            throw new Error(`No text content in Gemini response: ${JSON.stringify(data)}`);
-        } catch (error) {
-            logger.error(`MultiLLM Google Error: ${error}`);
-            throw error;
-        }
-    }
-    private async callNvidia(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
-        if (!this.nvidiaKey) throw new Error('NVIDIA API key not configured');
-        const messages: LLMMessage[] = [];
-        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
-        messages.push({ role: 'user', content: prompt });
-        const rawModel = modelOverride || this.modelName;
-        const model = this.normalizeNvidiaModel(rawModel);
-        try {
-            const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.nvidiaKey}`,
-                    'Accept': 'application/json',
-                },
-                body: JSON.stringify({
-                    model,
-                    messages,
-                    max_tokens: 16384,
-                    temperature: 0.7,
-                    top_p: 1.00,
-                    stream: false,
-                }),
-            });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`NVIDIA API Error: ${response.status} ${err}`);
-            }
-            const data = await response.json() as any;
-            this.recordUsage('nvidia', model, prompt, data, data?.choices?.[0]?.message?.content);
-            return data.choices[0].message.content;
-        } catch (error) {
-            logger.error(`MultiLLM NVIDIA Error: ${error}`);
-            throw error;
-        }
-    }
+
     private async callAnthropic(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
         if (!this.anthropicKey) throw new Error('Anthropic API key not configured');
-        const rawModel = modelOverride || this.modelName;
-        const model = this.normalizeAnthropicModel(rawModel);
+        const model = this.normalizeAnthropicModel(modelOverride || this.modelName);
         const body: any = {
-            model,
-            max_tokens: 16384,
-            messages: [
-                { role: 'user', content: prompt }
-            ]
+            model, max_tokens: 16384,
+            messages: [{ role: 'user', content: prompt }],
+            stream: true
         };
-        // Anthropic Messages API uses a top-level "system" field, not a system message in the array.
-        // Use structured content block with cache_control for prompt caching.
-        // This can save 90% of input token costs on repeated system prompts.
-        if (systemMessage) {
-            body.system = [
-                {
-                    type: 'text',
-                    text: systemMessage,
-                    cache_control: { type: 'ephemeral' }
-                }
-            ];
-        }
+        if (systemMessage) body.system = [{ type: 'text', text: systemMessage, cache_control: { type: 'ephemeral' } }];
+
         try {
             const response = await fetch('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
@@ -1516,334 +804,380 @@ export class MultiLLM {
                 },
                 body: JSON.stringify(body),
             });
-            if (!response.ok) {
-                const err = await response.text();
-                throw new Error(`Anthropic API Error: ${response.status} ${err}`);
+            if (!response.ok) throw new Error(`Anthropic API Error: ${response.status}`);
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let content = '';
+
+            if (reader) {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    for (const line of lines) {
+                        if (!line.trim() || !line.startsWith('data: ')) continue;
+                        try {
+                            const json = JSON.parse(line.replace(/^data: /, ''));
+                            if (json.type === 'content_block_delta') {
+                                const token = json.delta?.text;
+                                if (token) {
+                                    content += token;
+                                    eventBus.emitToken(token, { model, provider: 'anthropic' });
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
             }
-            const data = await response.json() as any;
-            // Extract text from content blocks
-            const textContent = data.content
-                ?.filter((block: any) => block.type === 'text')
-                ?.map((block: any) => block.text)
-                ?.join('') || '';
-            this.recordUsage('anthropic', model, prompt, data, textContent);
-            return textContent;
+            this.recordUsage('anthropic', model, prompt, { content: [{ type: 'text', text: content }] }, content);
+            return content;
         } catch (error) {
-            logger.error(`MultiLLM Anthropic Error: ${error}`);
             throw error;
         }
     }
+
+    private async callOllama(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        const rawModel = modelOverride || this.modelName;
+        const model = this.normalizeOllamaModel(rawModel);
+        const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+
+        try {
+            const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model, messages, temperature: 0.7, stream: true }),
+            });
+            if (!response.ok) throw new Error(`Ollama API Error: ${response.status}`);
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let content = '';
+
+            if (reader) {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    for (const line of lines) {
+                        if (!line.trim() || line === 'data: [DONE]') continue;
+                        try {
+                            const json = JSON.parse(line.replace(/^data: /, ''));
+                            const token = json.choices?.[0]?.delta?.content;
+                            if (token) {
+                                content += token;
+                                eventBus.emitToken(token, { model, provider: 'ollama' });
+                            }
+                        } catch (e) {}
+                    }
+                }
+            }
+            this.recordUsage('ollama', model, prompt, { choices: [{ message: { content } }] }, content);
+            return content;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async callGoogle(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.googleKey) throw new Error('Google API key not configured');
+        const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
+        const model = modelOverride || this.modelName;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
+            });
+            if (!response.ok) throw new Error(`Google API Error: ${response.status}`);
+            const data = await response.json() as any;
+            const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            this.recordUsage('google', model, fullPrompt, data, textOut);
+            return textOut;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async callNvidia(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.nvidiaKey) throw new Error('NVIDIA API key not configured');
+        const model = this.normalizeNvidiaModel(modelOverride || this.modelName);
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+        try {
+            const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.nvidiaKey}`,
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({ model, messages, max_tokens: 16384, temperature: 0.7, stream: false }),
+            });
+            if (!response.ok) throw new Error(`NVIDIA API Error: ${response.status}`);
+            const data = await response.json() as any;
+            const content = data?.choices?.[0]?.message?.content || '';
+            this.recordUsage('nvidia', model, prompt, data, content);
+            return content;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async callOpenRouter(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        if (!this.openrouterKey) throw new Error('OpenRouter API key not configured');
+        const model = this.normalizeOpenRouterModel(modelOverride || this.modelName);
+        const base = this.openrouterBaseUrl.replace(/\/+$/, '');
+        const url = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+        const messages: LLMMessage[] = [];
+        if (systemMessage) messages.push({ role: 'system', content: systemMessage });
+        messages.push({ role: 'user', content: prompt });
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openrouterKey}` },
+                body: JSON.stringify({ model, messages, temperature: 0.7 })
+            });
+            if (!response.ok) throw new Error(`OpenRouter API Error: ${response.status}`);
+            const data = await response.json() as any;
+            const content = data?.choices?.[0]?.message?.content || '';
+            this.recordUsage('openrouter', model, prompt, data, content);
+            return content;
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async callBedrock(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+        const modelId = modelOverride || this.modelName;
+        if (!this.bedrockRegion) throw new Error('Bedrock region not configured');
+        const body = {
+            messages: [systemMessage ? { role: 'user', content: [{ type: 'text', text: `${systemMessage}\n\n${prompt}` }] } : { role: 'user', content: [{ type: 'text', text: prompt }] }],
+            max_tokens: 1024, temperature: 0.7
+        };
+        const client = this.getBedrockClient();
+        const command = new InvokeModelCommand({ modelId, body: JSON.stringify(body), contentType: 'application/json', accept: 'application/json' });
+        try {
+            const response = await client.send(command);
+            const decoded = new TextDecoder().decode(response.body as Uint8Array);
+            const data = JSON.parse(decoded);
+            const textOut = data.output?.message?.content?.find((p: any) => p.text)?.text || data.outputText || JSON.stringify(data);
+            this.recordUsage('bedrock', modelId, prompt, data, textOut);
+            return textOut;
+        } catch (error) {
+            throw error;
+        }
+    }
+
     private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
         if (!this.tokenTracker) return;
-        let promptTokens = 0;
-        let completionTokens = 0;
-        let totalTokens = 0;
-        let estimated = true; // assume estimated until proven otherwise
-        // Try to extract real usage data from API response first
+        let pt = 0, ct = 0, tt = 0, est = true;
         if ((provider === 'openai' || provider === 'openrouter' || provider === 'nvidia') && data?.usage) {
-            const u = data.usage;
-            if (u.prompt_tokens !== undefined && u.prompt_tokens !== null) {
-                promptTokens = u.prompt_tokens;
-                completionTokens = u.completion_tokens ?? 0;
-                totalTokens = u.total_tokens ?? (promptTokens + completionTokens);
-                estimated = false;
-            }
+            pt = data.usage.prompt_tokens; ct = data.usage.completion_tokens || 0; tt = data.usage.total_tokens || (pt + ct); est = false;
+        } else if (provider === 'google' && data?.usageMetadata) {
+            pt = data.usageMetadata.promptTokenCount; ct = data.usageMetadata.candidatesTokenCount || 0; tt = data.usageMetadata.totalTokenCount || (pt + ct); est = false;
+        } else if (provider === 'anthropic' && data?.usage) {
+            pt = data.usage.input_tokens; ct = data.usage.output_tokens || 0; tt = pt + ct; est = false;
         }
-        if (provider === 'google' && data?.usageMetadata) {
-            const u = data.usageMetadata;
-            if (u.promptTokenCount !== undefined && u.promptTokenCount !== null) {
-                promptTokens = u.promptTokenCount;
-                completionTokens = u.candidatesTokenCount ?? 0;
-                totalTokens = u.totalTokenCount ?? (promptTokens + completionTokens);
-                estimated = false;
-            }
+        if (est) {
+            pt = this.estimateTokens(prompt); ct = this.estimateTokens(completionText || ''); tt = pt + ct;
         }
-        if (provider === 'bedrock') {
-            const usage = data?.usage || data?.Usage || {};
-            const inputTokens = usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens ?? usage.promptTokens;
-            const outputTokens = usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens ?? usage.completionTokens;
-            if (inputTokens !== undefined && inputTokens !== null) {
-                promptTokens = inputTokens;
-                completionTokens = outputTokens ?? 0;
-                totalTokens = usage.total_tokens ?? usage.totalTokens ?? (promptTokens + completionTokens);
-                estimated = false;
-            }
-        }
-        if (provider === 'anthropic' && data?.usage) {
-            const u = data.usage;
-            if (u.input_tokens !== undefined && u.input_tokens !== null) {
-                promptTokens = u.input_tokens;
-                completionTokens = u.output_tokens ?? 0;
-                totalTokens = promptTokens + completionTokens;
-                estimated = false;
-            }
-        }
-        // Only fall back to estimation if the API returned no usage data at all
-        if (estimated) {
-            promptTokens = this.estimateTokens(prompt);
-            completionTokens = this.estimateTokens(completionText || '');
-            totalTokens = promptTokens + completionTokens;
-        }
-        this.tokenTracker.record({
-            ts: new Date().toISOString(),
-            provider,
-            model,
-            promptTokens,
-            completionTokens,
-            totalTokens,
-            metadata: { estimated }
-        });
+        this.tokenTracker.record({ ts: new Date().toISOString(), provider, model, promptTokens: pt, completionTokens: ct, totalTokens: tt, metadata: { estimated: est } });
     }
-    /**
-     * Improved token estimation heuristic.
-     * Uses word/subword analysis instead of the naive chars/4 formula.
-     * Still an approximation but ~20-30% more accurate for mixed content.
-     */
+
     private estimateTokens(text: string): number {
         if (!text) return 0;
-        // Count different text components that tokenize differently:
-        // 1. Words (most map to 1 token, long words to 2+)
-        // 2. Numbers (each digit group is usually 1-2 tokens)
-        // 3. Punctuation / special chars (usually 1 token each)
-        // 4. Whitespace runs (usually absorbed into adjacent tokens)
         let tokens = 0;
-        // Split into whitespace-separated chunks
         const chunks = text.split(/\s+/).filter(c => c.length > 0);
         for (const chunk of chunks) {
-            if (chunk.length <= 4) {
-                // Short words are typically 1 token
-                tokens += 1;
-            } else if (chunk.length <= 10) {
-                // Medium words: usually 1-2 tokens
-                tokens += Math.ceil(chunk.length / 5);
-            } else {
-                // Long words/URLs/code: ~1 token per 4-5 chars
-                tokens += Math.ceil(chunk.length / 4.5);
-            }
+            if (chunk.length <= 4) tokens += 1;
+            else if (chunk.length <= 10) tokens += Math.ceil(chunk.length / 5);
+            else tokens += Math.ceil(chunk.length / 4.5);
         }
-        // Add tokens for newlines (each is typically a token)
-        const newlines = (text.match(/\n/g) || []).length;
-        tokens += newlines;
-        // Minimum 1 token for non-empty text
-        return Math.max(1, Math.ceil(tokens));
+        return Math.max(1, Math.ceil(tokens + (text.match(/\n/g) || []).length));
     }
-    /**
-     * Generate an image using the configured provider.
-     * Returns the file path to the saved image.
-     */
-    public async generateImage(
-        prompt: string,
-        outputPath: string,
-        options?: {
-            provider?: 'openai' | 'google';
-            model?: string;
-            size?: string;
-            quality?: string;
-        }
-    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
-        const provider = options?.provider || (this.googleKey ? 'google' : this.openaiKey ? 'openai' : null);
-        if (!provider) {
-            return { success: false, error: 'No image generation provider available. Configure an OpenAI or Google API key.' };
-        }
+
+    public async textToSpeech(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
+        const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
+        if (primaryProvider === 'google' && this.googleKey) return this.textToSpeechGoogle(text, outputPath, voice);
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured — required for TTS');
+        const selectedVoice = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].includes(voice || '') ? voice : 'nova';
         try {
-            if (provider === 'openai') {
-                return await this.generateImageOpenAI(prompt, outputPath, options?.model, options?.size, options?.quality);
-            } else if (provider === 'google') {
-                return await this.generateImageGoogle(prompt, outputPath, options?.model, options?.size);
-            }
-            return { success: false, error: `Unsupported image gen provider: ${provider}` };
+            const response = await fetch('https://api.openai.com/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openaiKey}` },
+                body: JSON.stringify({ model: 'tts-1', input: text, voice: selectedVoice, response_format: 'opus', speed: Math.max(0.25, Math.min(4.0, speed)) })
+            });
+            if (!response.ok) throw new Error(`OpenAI TTS Error: ${response.status}`);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            const dir = path.dirname(outputPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(outputPath, buffer);
+            return outputPath;
         } catch (error) {
-            logger.error(`MultiLLM: Image generation failed (${provider}): ${error}`);
-            return { success: false, error: String(error) };
+            throw error;
         }
     }
-    /**
-     * Generate an image using OpenAI DALL·E / GPT Image API.
-     * Uses the Images API endpoint: POST /v1/images/generations
-     */
-    private async generateImageOpenAI(
-        prompt: string,
-        outputPath: string,
-        model?: string,
-        size?: string,
-        quality?: string
-    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
-        if (!this.openaiKey) throw new Error('OpenAI API key not configured');
-        const imageModel = model || 'dall-e-3';
-        const imageSize = size || '1024x1024';
-        // DALL-E 3 uses 'standard'/'hd'; GPT Image uses 'low'/'medium'/'high'
-        const isDalle = imageModel.startsWith('dall-e');
-        let imageQuality: string;
-        if (isDalle) {
-            imageQuality = (quality === 'high' || quality === 'hd') ? 'hd' : 'standard';
-        } else {
-            imageQuality = quality || 'medium';
+
+    private async textToSpeechGoogle(text: string, outputPath: string, voice?: string): Promise<string> {
+        if (!this.googleKey) throw new Error('Google API key not configured — required for TTS');
+        const selectedVoice = voice || 'kore';
+        const body = { model: 'gemini-2.5-flash-preview-tts', input: text, response_modalities: ['AUDIO'], generation_config: { speech_config: { language: 'en-us', voice: selectedVoice } } };
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions?key=${this.googleKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!response.ok) throw new Error(`Google TTS Error: ${response.status}`);
+            const data: any = await response.json();
+            const base64 = data?.outputs?.find((o: any) => o?.type === 'audio')?.data;
+            if (!base64) throw new Error('Google TTS Error: No audio data');
+            const wavPath = outputPath.toLowerCase().endsWith('.wav') ? outputPath : outputPath + '.wav';
+            const dir = path.dirname(wavPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            this.writeWavFile(Buffer.from(base64, 'base64'), wavPath, 24000, 1, 16);
+            return wavPath;
+        } catch (error) {
+            throw error;
         }
-        const body: any = {
-            model: imageModel,
-            prompt,
-            n: 1,
-            size: imageSize,
-            quality: imageQuality,
-        };
-        // GPT Image models return b64_json by default; DALL-E supports both
-        body.response_format = 'b64_json';
-        const response = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.openaiKey}`,
-            },
-            body: JSON.stringify(body),
-        });
-        if (!response.ok) {
-            const err = await response.text();
-            throw new Error(`OpenAI Image API Error: ${response.status} ${err}`);
-        }
-        const data = await response.json() as any;
-        const imageData = data?.data?.[0];
-        if (!imageData) throw new Error('No image data in OpenAI response');
-        const b64 = imageData.b64_json;
-        if (!b64) throw new Error('No base64 image data returned');
-        const dir = path.dirname(outputPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(outputPath, Buffer.from(b64, 'base64'));
-        logger.info(`MultiLLM: OpenAI image generated → ${outputPath} (model: ${imageModel})`);
-        return {
-            success: true,
-            filePath: outputPath,
-            revisedPrompt: imageData.revised_prompt,
-        };
     }
-    /**
-     * Generate an image using Google Gemini image generation.
-     * Uses the Gemini generateContent endpoint with responseModalities: ['Image'].
-     * Compatible models: gemini-2.5-flash-image, gemini-3-pro-image-preview
-     */
-    private async generateImageGoogle(
-        prompt: string,
-        outputPath: string,
-        model?: string,
-        size?: string
-    ): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
+
+    private writeWavFile(pcmData: Buffer, outputPath: string, sampleRate: number, channels: number, bitDepth: number): void {
+        const header = Buffer.alloc(44);
+        header.write('RIFF', 0); header.writeUInt32LE(36 + pcmData.length, 4); header.write('WAVE', 8); header.write('fmt ', 12);
+        header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(channels, 22); header.writeUInt32LE(sampleRate, 24);
+        header.writeUInt32LE(sampleRate * channels * (bitDepth / 8), 28); header.writeUInt16LE(channels * (bitDepth / 8), 32); header.writeUInt16LE(bitDepth, 34);
+        header.write('data', 36); header.writeUInt32LE(pcmData.length, 40);
+        fs.writeFileSync(outputPath, Buffer.concat([header, pcmData]));
+    }
+
+    public async analyzeMedia(filePath: string, prompt: string): Promise<string> {
+        return this.inferProvider(this.modelName) === 'google' ? this.analyzeMediaGoogle(filePath, prompt) : this.analyzeMediaOpenAI(filePath, prompt);
+    }
+
+    public async analyzeMediaWithModel(filePath: string, prompt: string, modelName: string): Promise<string> {
+        const p = this.inferProvider(modelName);
+        if (p === 'google') return this.analyzeMediaGoogle(filePath, prompt, modelName);
+        if (p === 'openai') return this.analyzeMediaOpenAI(filePath, prompt);
+        return this.analyzeMedia(filePath, prompt);
+    }
+
+    private async analyzeMediaGoogle(filePath: string, prompt: string, modelOverride?: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
-        const imageModel = model || 'gemini-2.5-flash-image';
-        // Map size to aspect ratio for Gemini
-        let aspectRatio: string | undefined;
-        if (size) {
-            const [w, h] = size.split('x').map(Number);
-            if (w && h) {
-                if (w > h) aspectRatio = '16:9';
-                else if (h > w) aspectRatio = '9:16';
-                else aspectRatio = '1:1';
+        const model = modelOverride || 'gemini-2.5-flash';
+        const body = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: getAudioHelperMimeType(filePath), data: fs.readFileSync(filePath).toString('base64') } }] }], ...(model.includes('computer-use') ? { tools: [{ computer_use: {} }] } : {}) };
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!response.ok) throw new Error(`Google Media Error: ${response.status}`);
+            const data = await response.json() as any;
+            return data.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || JSON.stringify(data.candidates?.[0]?.content?.parts?.[0]);
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    private async analyzeMediaOpenAI(filePath: string, prompt: string): Promise<string> {
+        if (!this.openaiKey) throw new Error('OpenAI API key not configured');
+        const ext = path.extname(filePath).toLowerCase().substring(1);
+        if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+            const response = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openaiKey}` }, body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: `data:image/${ext};base64,${fs.readFileSync(filePath).toString('base64')}` } }] }] }) });
+            const data = await response.json() as any; return data.choices[0].message.content;
+        } else if (isAudioFile(filePath)) {
+            const compatiblePath = await convertToWhisperCompatible(filePath);
+            const formData = new FormData(); formData.append('file', new Blob([fs.readFileSync(compatiblePath)]), path.basename(compatiblePath)); formData.append('model', 'whisper-1');
+            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${this.openaiKey}` }, body: formData });
+            const data = await response.json() as any; return `Transcription: ${data.text}`;
+        }
+        return this.call(`${prompt}\n\n[FILE]: ${fs.readFileSync(filePath, 'utf8').substring(0, 15000)}`);
+    }
+
+    private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
+        return { provider: providerOverride ?? 'auto', model: modelOverride || this.modelName, apiKeys: { openai: this.openaiKey, google: this.googleKey, anthropic: this.anthropicKey, openrouter: this.openrouterKey, nvidia: this.nvidiaKey, bedrockAccessKeyId: this.bedrockAccessKeyId, bedrockSecretAccessKey: this.bedrockSecretAccessKey, bedrockRegion: this.bedrockRegion, bedrockSessionToken: this.bedrockSessionToken, groq: this.groqKey, mistral: this.mistralKey, cerebras: this.cerebrasKey, xai: this.xaiKey, huggingface: this.huggingfaceKey, kimi: this.kimiKey, minimax: this.minimaxKey, zai: this.zaiKey, perplexity: this.perplexityKey, deepseek: this.deepseekKey, opencode: this.opencodeKey, azureEndpoint: this.azureEndpoint, googleProjectId: this.googleProjectId, googleLocation: this.googleLocation } };
+    }
+
+    public async piAiLogin(providerKey: string): Promise<void> { await piAiLogin(providerKey); }
+    public isPiAiLinked(providerKey: string): boolean { return isPiAiLinked(providerKey); }
+    public async getPiAICatalogue() {
+        const providers = await getPiProviders(); const cat: any = {};
+        for (const p of providers) {
+            const models = await getPiModels(p); if (!models?.length) continue;
+            cat[p] = { label: p, models: models.map(m => ({ id: m.id, note: `${m.contextWindow ? Math.round(m.contextWindow/1024)+'k' : ''}` })) };
+        }
+        return cat;
+    }
+
+    public setModel(modelName: string): void {
+        this.modelName = modelName;
+        logger.info(`MultiLLM: Model changed to ${modelName}`);
+    }
+
+    public getModelAvailabilitySummary(): string {
+        const providers = [];
+        if (this.openaiKey && !this.openaiKey.startsWith('your_')) providers.push('OpenAI');
+        if (this.googleKey && !this.googleKey.startsWith('your_')) providers.push('Google (Gemini)');
+        if (this.anthropicKey && !this.anthropicKey.startsWith('your_')) providers.push('Anthropic (Claude)');
+        if (this.nvidiaKey && !this.nvidiaKey.startsWith('your_')) providers.push('NVIDIA');
+        if (this.openrouterKey && !this.openrouterKey.startsWith('your_')) providers.push('OpenRouter');
+        if (this.ollamaUrl) providers.push('Ollama (Local)');
+        
+        return `Active Model: ${this.modelName}\nAvailable Providers: ${providers.join(', ') || 'None configured'}`;
+    }
+
+    public async generateImage(prompt: string, outputPath: string, options?: { size?: string, quality?: string, provider?: LLMProvider, model?: string }): Promise<{ success: boolean; filePath?: string; revisedPrompt?: string; error?: string }> {
+        const provider = options?.provider || this.preferredProvider || 'openai';
+        const model = options?.model || 'dall-e-3';
+        if (provider !== 'openai') {
+            // Currently only OpenAI is implemented for images in this core driver
+            return { success: false, error: `Image generation is not yet implemented for provider ${provider} in MultiLLM.` };
+        }
+        
+        if (!this.openaiKey) return { success: false, error: 'OpenAI API key not configured' };
+        
+        try {
+            const response = await fetch('https://api.openai.com/v1/images/generations', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.openaiKey}`,
+                },
+                body: JSON.stringify({
+                    model: 'dall-e-3',
+                    prompt,
+                    n: 1,
+                    size: options?.size || '1024x1024',
+                    quality: options?.quality || 'standard',
+                }),
+            });
+
+            if (!response.ok) {
+                const err = await response.text();
+                return { success: false, error: `OpenAI API Error: ${response.status} ${err}` };
             }
+
+            const data = await response.json() as any;
+            const imageUrl = data.data?.[0]?.url;
+            const revisedPrompt = data.data?.[0]?.revised_prompt;
+            
+            if (!imageUrl) return { success: false, error: 'No image URL returned from OpenAI' };
+
+            // Download the image to the local path
+            const imageResponse = await fetch(imageUrl);
+            const buffer = Buffer.from(await imageResponse.arrayBuffer());
+            
+            const dir = path.dirname(outputPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(outputPath, buffer);
+
+            return { success: true, filePath: outputPath, revisedPrompt };
+        } catch (error: any) {
+            logger.error(`MultiLLM: Image generation failed: ${error}`);
+            return { success: false, error: error.message || String(error) };
         }
-        const requestBody: any = {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-                responseModalities: ['Image', 'Text'],
-            },
-        };
-        if (aspectRatio) {
-            requestBody.generationConfig.imageConfig = { aspectRatio };
-        }
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${imageModel}:generateContent?key=${this.googleKey}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-        });
-        if (!response.ok) {
-            const err = await response.text();
-            throw new Error(`Google Image API Error: ${response.status} ${err}`);
-        }
-        const data = await response.json() as any;
-        const parts = data?.candidates?.[0]?.content?.parts;
-        if (!parts || parts.length === 0) {
-            throw new Error('No parts in Gemini image response');
-        }
-        // Find the image part (inline_data with image mimetype)
-        let imageB64: string | undefined;
-        let mimeType = 'image/png';
-        let textResponse: string | undefined;
-        for (const part of parts) {
-            if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
-                imageB64 = part.inlineData.data;
-                mimeType = part.inlineData.mimeType;
-            } else if (part.inline_data && part.inline_data.mime_type?.startsWith('image/')) {
-                // Alternative casing from some API responses
-                imageB64 = part.inline_data.data;
-                mimeType = part.inline_data.mime_type;
-            } else if (part.text) {
-                textResponse = part.text;
-            }
-        }
-        if (!imageB64) {
-            throw new Error(`No image data in Gemini response. Text: ${textResponse || 'none'}`);
-        }
-        // Determine extension from mime type
-        const ext = mimeType.includes('jpeg') ? '.jpg' : mimeType.includes('webp') ? '.webp' : '.png';
-        const finalPath = outputPath.endsWith(ext) ? outputPath : outputPath.replace(/\.[^.]+$/, ext);
-        const dir = path.dirname(finalPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(finalPath, Buffer.from(imageB64, 'base64'));
-        logger.info(`MultiLLM: Google image generated → ${finalPath} (model: ${imageModel})`);
-        return {
-            success: true,
-            filePath: finalPath,
-            revisedPrompt: textResponse,
-        };
     }
-    /** Trigger interactive OAuth login via pi-ai. */
-    public async piAiLogin(providerKey: string): Promise<void> {
-        await piAiLogin(providerKey);
-    }
-    /** Check if an OAuth provider is linked. */
-    public isPiAiLinked(providerKey: string): boolean {
-        return isPiAiLinked(providerKey);
-    }
-    /**
-     * Dynamically fetch the PI AI model catalogue from the underlying library.
-     */
-    public async getPiAICatalogue(): Promise<Record<string, { label: string; models: { id: string; note: string }[] }>> {
-        const providers = await getPiProviders();
-        const catalogue: Record<string, { label: string; models: { id: string; note: string }[] }> = {};
-        const providerLabels: Record<string, string> = {
-            'openai': 'OpenAI',
-            'google': 'Google Gemini',
-            'google-vertex': 'Google Vertex AI',
-            'anthropic': 'Anthropic (Claude)',
-            'openrouter': 'OpenRouter (Multi-model)',
-            'amazon-bedrock': 'AWS Bedrock',
-            'groq': 'Groq (Ultra-fast)',
-            'mistral': 'Mistral AI',
-            'cerebras': 'Cerebras (Wafer-speed)',
-            'xai': 'xAI (Grok)',
-            'kimi-coding': 'Kimi (Moonshot)',
-            'minimax': 'MiniMax',
-            'github-copilot': 'GitHub Copilot',
-            'huggingface': 'Hugging Face',
-        };
-        for (const pId of providers) {
-            const models = await getPiModels(pId);
-            if (!models || models.length === 0) continue;
-            catalogue[pId] = {
-                label: providerLabels[pId] || pId.charAt(0).toUpperCase() + pId.slice(1),
-                models: models.map(m => {
-                    const features: string[] = [];
-                    if (m.reasoning) features.push('Reasoning');
-                    if (m.input?.includes('image')) features.push('Vision');
-                    if (m.contextWindow) {
-                        const k = Math.round(m.contextWindow / 1024);
-                        features.push(`${k}k ctx`);
-                    }
-                    return {
-                        id: m.id,
-                        note: features.join(', ') || (m.name !== m.id ? m.name : '')
-                    };
-                })
-            };
-        }
-        return catalogue;
-    }
+
+    private getBedrockClient() { return new BedrockRuntimeClient({ region: this.bedrockRegion!, credentials: this.bedrockAccessKeyId && this.bedrockSecretAccessKey ? { accessKeyId: this.bedrockAccessKeyId, secretAccessKey: this.bedrockSecretAccessKey, sessionToken: this.bedrockSessionToken } : undefined }); }
 }
