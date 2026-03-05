@@ -568,7 +568,9 @@ ${this.repoContext}`,
         let historyNotes = '';
         if (actionMemories.length > 0) {
             const lastStep = actionMemories[actionMemories.length - 1];
-            historyNotes = `\n### 💡 IMMEDIATE HISTORY:\nIn the previous step, you executed: ${lastStep.content}\nStatus: SUCCESS. The user has already received any messages sent in that step. Check your goals carefully before sending more.\n`;
+            // Extract just the core observation/result to keep prompt clean
+            const lastContent = (lastStep.content || '').replace('[observation] ', '');
+            historyNotes = `\n### 💡 IMMEDIATE HISTORY (Last Step):\nYou previously executed: ${lastContent}\nStatus: SUCCESS. The user has already seen this. If you sent a message, do NOT repeat it unless you are correcting a mistake.\n`;
         }
 
         // Filter out elevated skills for non-admin users
