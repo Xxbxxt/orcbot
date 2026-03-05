@@ -12807,6 +12807,26 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     // Reset the deep tool flag because we just delivered a message to the user
                                     deepToolExecutedSinceLastMessage = false; 
                                     if (this.isSubstantiveDeliveryMessage(resultString)) substantiveDeliveriesSent++;
+
+                                    // NEW: Check if user is declining calibration in this message
+                                    const lowerMsg = resultString.toLowerCase();
+                                    const isRefusal = lowerMsg.includes('understood') && 
+                                                     (lowerMsg.includes('respect your preference') || 
+                                                      lowerMsg.includes('problem at all') ||
+                                                      lowerMsg.includes('change your mind'));
+                                    
+                                    if (isRefusal && action.payload.source && action.payload.sourceId) {
+                                        const profileKey = `${action.payload.source}:${action.payload.sourceId}`;
+                                        const existingRaw = this.memory.getContactProfile(profileKey);
+                                        if (existingRaw) {
+                                            try {
+                                                const profile = JSON.parse(existingRaw);
+                                                profile.calibrationDeclined = true;
+                                                this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
+                                                logger.info(`Agent: User ${profileKey} declined calibration. Stored preference.`);
+                                            } catch (e) {}
+                                        }
+                                    }
                                 }
 
                                 this.memory.saveMemory({

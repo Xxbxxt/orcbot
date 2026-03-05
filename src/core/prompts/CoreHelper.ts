@@ -36,10 +36,14 @@ CURRENT DATE & TIME:
         const hasNoIdentity = isPlaceholder(ctx.bootstrapContext.SOUL) && isPlaceholder(ctx.bootstrapContext.USER);
         
         // Safely check for "new user" (no bio/notes/meaningful history)
-        let isNewUser = !ctx.contactProfile;
+        let isNewUser = false;
+        let calibrationDeclined = false;
         if (ctx.contactProfile) {
             try {
                 const profile = JSON.parse(ctx.contactProfile);
+                if (profile.calibrationDeclined === true) {
+                    calibrationDeclined = true;
+                }
                 // If it's a JSON profile but has no bio/notes, we still treat them as "new" for onboarding
                 if (!profile.bio && !profile.notes && !profile.summary) {
                     isNewUser = true;
@@ -51,7 +55,7 @@ CURRENT DATE & TIME:
         }
 
         let onboardingContext = '';
-        if (ctx.isFirstStep && (isNewUser || hasNoIdentity)) {
+        if (ctx.isFirstStep && (isNewUser || hasNoIdentity) && !calibrationDeclined) {
             onboardingContext = `\n### ⚡ CRITICAL ONBOARDING PHASE:
 - STATUS: You are in "First Contact" mode. You have ZERO history and NO established persona.
 - YOUR GOAL: You must not only introduce yourself but also proactively help the user set you up.
