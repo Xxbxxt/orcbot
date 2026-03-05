@@ -5586,6 +5586,11 @@ export default ${name};
                         const deepResult = await this.browser.navigate(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`);
 
                         if (deepResult && !deepResult.includes('Error')) {
+                            // Check if we actually got results or a blocked/empty page
+                            if (deepResult.includes('Page Not Found') || deepResult.includes('blocked') || deepResult.includes('blank')) {
+                                return `Search failed: The search engine blocked automated access or returned an error. \n\nIMPORTANT: Do NOT search again for this query. Use your internal knowledge or try to visit a specific research URL directly using browser_navigate.`;
+                            }
+
                             // Extract links from the page content
                             const links = await this.browser.page?.evaluate(() => {
                                 const anchors = Array.from(document.querySelectorAll('a[href^="http"]'));
@@ -5613,7 +5618,7 @@ export default ${name};
                     }
 
                     // Final fallback: Provide guidance
-                    return `Unable to search at this time. Search services are unavailable.\n\nSuggestions:\n• Try again in a few minutes\n• Use browse_website to visit a specific URL directly\n• Configure a search API (Serper, Brave) for reliable results\n\nQuery attempted: "${query}"`;
+                    return `Unable to search at this time. Search services are blocking automated access.\n\nInstructions for Agent:\n1. DO NOT retry web_search for this task.\n2. Use your internal knowledge to answer as best as possible.\n3. If you need specific live data, try browser_navigate to a direct news/research site URL.\n\nQuery attempted: "${query}"`;
                 }
 
                 return result;
@@ -5958,6 +5963,39 @@ export default ${name};
                 if (!this.heartbeatJobs.has(id)) return `No heartbeat schedule found for id=${id}.`;
                 this.removeHeartbeatSchedule(String(id));
                 return `Heartbeat schedule removed: ${id}`;
+            }
+        });
+
+        // Skill: Schedule Recurring Task
+        this.skills.registerSkill({
+            name: 'scheduler_add',
+            description: 'Add a persistent, recurring task to the agent\'s internal scheduler. This is ideal for things like "Check X every 2 hours" or "Give me a summary every morning at 9am". Use standard cron syntax or simple relative phrases.',
+            usage: 'scheduler_add(schedule, task_description, priority?)',
+            handler: async (args: any) => {
+                const scheduleInput = args.schedule || args.time || args.interval;
+                const task_description = args.task || args.task_description || args.description;
+                const priority = parseInt(args.priority || '6', 10);
+
+                if (!scheduleInput || !task_description) return 'Error: Missing schedule or task_description.';
+
+                try {
+                    // Normalize "every 2 hours" etc to cron if possible, or use raw input
+                    const id = `sched_${Math.random().toString(36).slice(2, 10)}`;
+                    
+                    // Add to the internal recurring heartbeat schedules
+                    const def = {
+                        id,
+                        schedule: scheduleInput,
+                        task: task_description,
+                        priority: Math.max(1, Math.min(10, priority)),
+                        createdAt: new Date().toISOString()
+                    };
+
+                    this.registerHeartbeatSchedule(def, true);
+                    return `✅ Task scheduled successfully (ID: ${id}). I will now autonomously perform "${task_description}" on the schedule: ${scheduleInput}.`;
+                } catch (e) {
+                    return `❌ Failed to add to scheduler: ${e}`;
+                }
             }
         });
 
@@ -8239,79 +8277,23 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 return { ok: true, issues: [] };
             }
 
-            // Trivial tasks (simple greetings, confirmations, quick replies) that already
-            // successfully delivered a message are done — skip the full audit.
-            // The "substantiveDeliveriesSent === 0" check is too strict for short-form
-            // replies like "Hello! How can I help you?" (< 40 chars).
-            if (
-                context.taskComplexity === 'trivial' &&
-                context.anyUserDeliverySuccess === true &&
-                context.messagesSent > 0
-            ) {
-                return { ok: true, issues: [] };
-            }
-
             const issues: string[] = [];
-            const actionMemories = this.memory.getActionMemories(action.id);
 
-            const hadToolErrors = actionMemories.some(m => (m.content || '').includes('TOOL ERROR'));
-            const hadResearchOrDeepOutput =
-                Object.entries(context.skillCallCounts || {}).some(([skill, count]) => {
-                    if (!count || count <= 0) return false;
-                    // browser_perform is an action tool, not a data-gathering tool.
-                    // It doesn't need to 'deliver' results because the result is on the page.
-                    if (skill === 'browser_perform') return false;
-                    
-                    return skill === 'web_search' ||
-                        skill.startsWith('browser_') ||
-                        skill === 'extract_article' ||
-                        skill === 'http_fetch' ||
-                        skill === 'run_command' ||
-                        skill === 'read_file';
-                });
-
-            const hadAckOnlyMessages =
-                context.sentMessagesInAction.length > 0 &&
-                context.sentMessagesInAction.every(msg => this.isLikelyAcknowledgementMessage(msg));
-
+            // If it's a channel task and NO messages were sent, that's still a clear failure to communicate
+            // unless it's explicitly a silent background task (which would not have a channel source).
             if (context.messagesSent === 0) {
-                issues.push('No user-visible message was sent for this channel task.');
-            }
-
-            // If the pipeline suppressed a duplicate send (semantic-dupe), we treat that as
-            // a virtual delivery. This prevents the audit from blocking completion
-            // when the agent is trying to send the same result again.
-            const pipelineDupe = !!action.payload?.pipelineSemanticDupe;
-            
-            // Check if decision engine explicitly mentioned loop termination in its analysis
-            const loopDetected = !!action.payload?.loopDetected || 
-                                (action.payload?.lastDecision?.verification?.analysis || '').includes('loop prevention');
-
-            if (context.deepToolExecutedSinceLastMessage && !pipelineDupe && !loopDetected) {
-                issues.push('Deep tool output exists after the last sent message (results likely not delivered).');
-            }
-
-            // Only flag ack-only messages as an issue when deep/research tools also ran.
-            // Pure conversational tasks (greetings, short confirmations) legitimately produce
-            // short replies that look like acks — don't penalise them.
-            // Bypass this if a loop was detected to allow graceful termination.
-            if (context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput && !loopDetected) {
-                // If we hit a research limit, don't flag as an error - just let it finish
-                // so we don't trigger a recovery loop of more searching.
-                if (hadToolErrors || context.skillCallCounts?.web_search >= 10) {
-                    logger.warn(`Agent: Research limit reached or errors occurred. Allowing completion to prevent recovery loop.`);
-                } else {
-                    issues.push('Deep/research tools ran, but no substantive delivery message was sent.');
+                const loopDetected = !!action.payload?.loopDetected || 
+                                    (action.payload?.lastDecision?.verification?.analysis || '').includes('loop prevention');
+                                    
+                // Even if no messages were sent, if we hit a loop, we let it die instead of infinitely recovering
+                if (!loopDetected) {
+                    issues.push('No user-visible message was sent for this channel task.');
                 }
             }
 
-            if (context.substantiveDeliveriesSent === 0 && hadAckOnlyMessages && hadResearchOrDeepOutput && !loopDetected) {
-                issues.push('Only acknowledgement/status-style messages were sent despite running research tools.');
-            }
-
-            if (hadToolErrors && context.substantiveDeliveriesSent === 0 && hadResearchOrDeepOutput && !loopDetected) {
-                issues.push('Tool errors occurred and no substantive user-facing recovery/result message was delivered.');
-            }
+            // We no longer block based on "deep tools" or "substantive deliveries".
+            // The LLM is now trusted to self-manage its estimated steps and set goals_met = true
+            // when it believes the task is complete or should be aborted.
 
             return { ok: issues.length === 0, issues };
         } catch (e) {
@@ -12183,6 +12165,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         ? this.skills.getCompactSkillsPrompt()
                         : this.skills.getSkillsPrompt()
                 );
+
+            // Extract initial step budget from plan if available
+            let lastEstimatedRemaining = 0;
+            const budgetMatch = executionPlan.match(/STEP BUDGET:\s*(\d+)/i);
+            if (budgetMatch) {
+                lastEstimatedRemaining = parseInt(budgetMatch[1], 10);
+            }
+
             const robustReasoningMode = this.isRobustReasoningEnabled();
             const exposeChecklistPreview = this.shouldExposeChecklistPreview();
 
@@ -12458,6 +12448,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     messagesSent,
                                     messagingLocked: messagesSent > 0,
                                     currentStep,
+                                    maxSteps: lastEstimatedRemaining || MAX_STEPS,
                                     stepsSinceLastMessage,
                                     isResearchTask,
                                     executionPlan, // Pass plan to DecisionEngine
@@ -12472,7 +12463,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 timerId.unref();
                             });
                             
-                            return await Promise.race([decisionPromise, timeoutPromise]);
+                            const result = await Promise.race([decisionPromise, timeoutPromise]);
+                            
+                            // Capture LLM's own step estimation for the next turn
+                            if (result?.verification?.estimated_steps_remaining !== undefined) {
+                                lastEstimatedRemaining = result.verification.estimated_steps_remaining;
+                            }
+                            
+                            return result;
                         } finally {
                             if (timerId) clearTimeout(timerId);
                         }
@@ -12877,22 +12875,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         noToolsRetryCount++;
                         if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) break;
                         continue;
-                    }
-                // Channel completion safety: if we have produced NEW deep-tool output since
-                    // the last user-visible message, we are not done yet. We must send a final
-                    // delivery message that includes those results.
-                    if (isChannelTask && messagesSent > 0 && deepToolExecutedSinceLastMessage && currentStep < MAX_STEPS) {
-                        noToolsRetryCount++;
-                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
-                            logger.warn(`Agent: Action ${action.id} attempted completion with unsent deep-tool output. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-unsent-results-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: BLOCKED PREMATURE COMPLETION. You executed deep tools after your last message (e.g., web_search/browser/run_command) but did NOT send a final results message. Send one concrete answer with findings now.]`,
-                                metadata: { actionId: action.id, step: currentStep, error: 'unsent_results_blocked' }
-                            });
-                            continue;
-                        }
                     }
 
                     if (isChannelTask && messagesSent === 0 && currentStep < MAX_STEPS) {

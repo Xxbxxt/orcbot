@@ -39,6 +39,7 @@ This file lists the available skills for the agent.
 
 ## System & Configuration
 - **run_command(command, cwd?)**: [SYSTEM/OS LEVEL] Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
+- **shell_poll(id, intervalMs?, maxAttempts?, stopOnOutput?)**: [SYSTEM/OS LEVEL] Register a background polling job to monitor a shell session until it completes or hits a specific output. Ideal for long-running CLI tasks.
 - **get_system_info()**: [SYSTEM/OS LEVEL] Return system time/date and OS info.
 - **set_config(key, value)**: [CONFIG MANAGEMENT] Persist configuration values.
 - **execute_typescript(code?, args?, filename?)**: [DYNAMIC EXECUTION TOOL] Write, compile, and execute TypeScript code on the fly. USE THIS WHEN YOU NEED TO BUILD CUSTOM LOGIC, hit undocumented APIs, or process data in ways standard tools cannot handle. If `filename` is not provided, code is saved to a persistent `scratchpad.ts` file. If `filename` (e.g., "script.ts") is provided with `code`, it saves the script to a scripts directory for reuse. If only `filename` is provided without `code`, it executes the previously saved script.
@@ -108,6 +109,7 @@ This file lists the available skills for the agent.
 
 ## Scheduling
 - **schedule_task(time_or_cron, task_description)**: [SCHEDULING] Schedule a task for later.
+- **scheduler_add(schedule, task_description, priority?)**: [SCHEDULING] Add a persistent, recurring task to the agent's internal scheduler (e.g., "every 2 hours", "9am daily").
 
 ## Multi-Agent Orchestration
 - **spawn_agent(name, role, capabilities?)**: [ORCHESTRATION] Create a sub-agent for temporary task delegation.
@@ -119,7 +121,7 @@ This file lists the available skills for the agent.
 ## Skill Orchestration Metadata
 Built-in and plugin skills use metadata flags to drive fluid orchestration without hardcoded tool lists:
 
-- `isDeep`: (boolean) When true, this tool counts as "substantive progress." Resets the communication cooldown, allowing the agent to send a fresh status update after execution.
+- `isDeep`: (boolean) When true, this tool counts as "substantive progress." Resets the communication cooldown, allowing the agent is allowed to send a fresh status update after execution.
 - `isResearch`: (boolean) When true, this tool has a much higher repetition budget (up to 15 calls per action). Essential for browsing and searching.
 - `isSideEffect`: (boolean) When true, this tool is subject to deduplication and cross-channel permission checks. Used for messaging and file delivery.
 - `isDangerous`: (boolean) When true, requires explicit user permission in autonomy mode unless `sudoMode` is active.

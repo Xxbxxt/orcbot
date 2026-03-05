@@ -19,7 +19,8 @@ export const StandardResponseSchema = z.object({
     reasoning: z.string().optional(),
     verification: z.object({
         goals_met: z.boolean(),
-        analysis: z.string()
+        analysis: z.string(),
+        estimated_steps_remaining: z.number().optional()
     }).optional(),
     /** Set by DecisionEngine when validator filters out tools */
     toolsFiltered: z.number().optional()
@@ -467,11 +468,12 @@ You have tools available as function calls. When you want to use a tool, call it
 
 In addition to calling tools, include reasoning in your text response:
 - Brief reasoning about what you're doing and why
-- A verification assessment: { "goals_met": true/false, "analysis": "..." }
+- A verification assessment: { "goals_met": true/false, "analysis": "...", "estimated_steps_remaining": 3 }
+- You MUST manage your own step count. If you are stuck in a loop or have exceeded your estimated steps without progress, set goals_met to true to terminate gracefully.
 
 When the task is complete, respond with text only (no tool calls) and include:
 \`\`\`json
-{ "verification": { "goals_met": true, "analysis": "Task completed because..." }, "content": "Your message to show the user" }
+{ "verification": { "goals_met": true, "analysis": "Task completed because...", "estimated_steps_remaining": 0 }, "content": "Your message to show the user" }
 \`\`\`
 
 You can call MULTIPLE tools in parallel when they are independent operations.
@@ -486,13 +488,15 @@ You can call MULTIPLE tools in a single turn using the "tools" array - use this 
 JSON Format:
 - Always optimize your workflow based on the provided SYSTEM ENVIRONMENT (CPU/RAM/OS).
 - If resources are constrained, explain your choice of a lighter-weight approach in "reasoning".
+- Manage your own step count. If you exceed your estimated steps without progress, abort the task by setting goals_met to true.
 \`\`\`json
 {
   "action": "THOUGHT",
   "reasoning": "I need to search for info and notify the user simultaneously.",
   "verification": {
     "goals_met": false,
-    "analysis": "Starting research phase."
+    "analysis": "Starting research phase.",
+    "estimated_steps_remaining": 3
   },
   "tools": [
     { "name": "browser_navigate", "metadata": { "query": "http://google.com" } },

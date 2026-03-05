@@ -1270,7 +1270,7 @@ ${historyNotes}
 EXECUTION STATE:
 - Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
-- Sequence Step: ${metadata.currentStep || '1'}
+- Sequence Step: ${metadata.currentStep || '1'} of ${metadata.maxSteps || 'N/A'}
 - Steps Since Last Message: ${metadata.stepsSinceLastMessage ?? 0}
 - Task Type: ${metadata.isResearchTask ? 'Research/Deep Work' : 'Standard'}
 

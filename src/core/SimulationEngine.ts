@@ -45,20 +45,23 @@ Think about:
 
 OUTPUT FORMAT:
 Provide a concise "Execution Plan" as a numbered checklist with contingency notes.
+At the top, provide a "STEP BUDGET" estimate.
+
 Example:
-"1. [VERIFY] Check environment: run get_system_info to know OS/shell.
+"STEP BUDGET: 5 steps
+1. [VERIFY] Check environment: run get_system_info to know OS/shell.
 2. [EXECUTE] Search for 'song name' on YouTube using web_search.
    ↳ FALLBACK: If search fails or Captcha blocks, try browser_navigate to YouTube directly.
 3. [CHECKPOINT] Update user: 'Found the link, downloading now...'
 4. [EXECUTE] Download using download_file.
    ↳ FALLBACK: If download fails, try http_fetch or browser-based download.
 5. [DELIVER] Send file to user via send_file.
-6. [CHECKPOINT] Confirm delivery to user.
    ↳ FALLBACK: If send_file fails, provide the local path and explain."
 
 Be tactical, not verbose. Every step should have a clear action and a fallback.
 IMPORTANT: Only reference tools that exist in AVAILABLE TOOLS. Do NOT invent tools.
 IMPORTANT: If context includes prior failures or learnings, explicitly avoid repeating failed approaches and prefer the learned approach first.
+IMPORTANT: You MUST manage your step count. If you exceed your BUDGET without progress, you must set goals_met to true to terminate gracefully.
 `;
 
         try {
