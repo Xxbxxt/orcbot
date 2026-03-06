@@ -8008,9 +8008,18 @@ The plugin handles all logic internally. See the plugin source for implementatio
             };
 
             const result = await this.blockReviewer.reviewBlock(task, history, error, context);
-            
-            if (result.verdict === 'CONTINUE') {
-                logger.info(`BlockReviewer: Decision = CONTINUE — ${result.reasoning}`);
+
+            // SPECIAL CASE: Messaging budget blocks should almost always be respected
+            // to avoid spamming the user with 'recovery' attempts.
+            if (failureType === 'message_budget' && result.verdict === 'CONTINUE') {
+                logger.info(`Agent: Overriding BlockReviewer CONTINUE verdict for message_budget to prevent spam.`);
+                return { 
+                    verdict: 'STOP', 
+                    reasoning: 'Messaging budget reached. Stopping to avoid excessive follow-ups and respect user attention.' 
+                };
+            }
+
+            if (result.verdict === 'CONTINUE') {                logger.info(`BlockReviewer: Decision = CONTINUE — ${result.reasoning}`);
                 if (result.suggestedStrategy) {
                     this.memory.saveMemory({
                         id: `${action.id}-step-${currentStep}-reviewer-strategy`,
@@ -8039,18 +8048,6 @@ The plugin handles all logic internally. See the plugin source for implementatio
     ): Promise<'continue' | 'terminate'> {
         try {
             const taskDescription = action.payload?.description || 'Unknown task';
-
-            // Fast-path: if a substantive message was already successfully delivered and this is a
-            // simple/trivial channel response, don't waste an LLM call — just terminate.
-            if (
-                deliveryContext &&
-                deliveryContext.substantiveDeliveriesSent > 0 &&
-                reason === 'max_steps' &&
-                deliveryContext.messagesSent > 0
-            ) {
-                logger.info(`Agent: Forced termination review (${reason}): terminate — substantive message already delivered, fast-path exit.`);
-                return 'terminate';
-            }
 
             const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
             const review = await this.reviewHardBlock(action, `Forced Termination: ${reason}. Details: ${details}`, currentStep, history);

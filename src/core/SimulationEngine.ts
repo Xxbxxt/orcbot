@@ -59,9 +59,9 @@ Example:
    ↳ FALLBACK: If send_file fails, provide the local path and explain."
 
 Be tactical, not verbose. Every step should have a clear action and a fallback.
-IMPORTANT: Only reference tools that exist in AVAILABLE TOOLS. Do NOT invent tools.
-IMPORTANT: If context includes prior failures or learnings, explicitly avoid repeating failed approaches and prefer the learned approach first.
+IMPORTANT: Prefer COMPLETION. If a task requires setup (like getting an API key) and then execution (like writing a skill), plan to do BOTH in the same action sequence.
 IMPORTANT: You MUST manage your step count. If you exceed your BUDGET without progress, you must set goals_met to true to terminate gracefully.
+IMPORTANT: Do NOT suggest starting a new task for the actual work. Do the work in the current task once you have the necessary data.
 `;
 
         try {

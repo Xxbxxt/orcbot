@@ -471,12 +471,14 @@ In addition to calling tools, include reasoning in your text response:
 - A verification assessment: { "goals_met": true/false, "analysis": "...", "estimated_steps_remaining": 3 }
 - You MUST manage your own step count. If you are stuck in a loop or have exceeded your estimated steps without progress, set goals_met to true to terminate gracefully.
 
-When the task is complete, respond with text only (no tool calls) and include:
+When the task is complete, respond with the final message and set goals_met to true in the SAME turn:
 \`\`\`json
-{ "verification": { "goals_met": true, "analysis": "Task completed because...", "estimated_steps_remaining": 0 }, "content": "Your message to show the user" }
+{ 
+  "verification": { "goals_met": true, "analysis": "Task complete, answer delivered.", "estimated_steps_remaining": 0 }, 
+  "tools": [{ "name": "send_telegram", "metadata": { "chatId": "...", "message": "Your final answer here" } }]
+}
 \`\`\`
-
-You can call MULTIPLE tools in parallel when they are independent operations.
+Do NOT wait for a separate turn to set goals_met=true if you have already delivered the final result.
 `;
     }
 

@@ -45,7 +45,7 @@ const MessagingMetadataSchema = z.any().superRefine((data, ctx) => {
 
 const SearchMetadataSchema = z.any().superRefine((data, ctx) => {
     if (!data) return;
-    const query = data.query || data.q;
+    const query = data.query || data.q || data.text || data.content;
     if (!query) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,

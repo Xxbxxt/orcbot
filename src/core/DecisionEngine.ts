@@ -566,19 +566,35 @@ ${this.repoContext}`,
 
         // HIGHLIGHT PREVIOUS STEPS: Ensure the model sees exactly what it just did
         let historyNotes = '';
+        let lastTurnInvolvedMessage = false;
         if (actionMemories.length > 0) {
             const lastStep = actionMemories[actionMemories.length - 1];
-            let lastContent = (lastStep.content || '').replace('[observation] ', '');
             
-            // If the last step was a message, find the actual message text in memory
-            if (lastContent.toLowerCase().includes('sent message')) {
-                const lastMessage = recentContext.find(m => m.type === 'short' && m.metadata?.tool === lastStep.metadata?.tool);
-                if (lastMessage) {
-                    lastContent = `Sent Message: "${lastMessage.content}"`;
-                }
+            // Extract the step number from the ID (e.g., actionId-step-3 => 3)
+            const lastStepId = lastStep.id || '';
+            const stepMatch = lastStepId.match(/-step-(\d+)/);
+            const lastStepNum = stepMatch ? parseInt(stepMatch[1], 10) : -1;
+
+            // Check ALL memories from the same turn (same step number)
+            const sameTurnMemories = actionMemories.filter(m => {
+                const mStepMatch = (m.id || '').match(/-step-(\d+)/);
+                const mStepNum = mStepMatch ? parseInt(mStepMatch[1], 10) : -2;
+                return mStepNum === lastStepNum;
+            });
+
+            lastTurnInvolvedMessage = sameTurnMemories.some(m => 
+                (m.content || '').toLowerCase().includes('sent message') || 
+                ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'].includes(m.metadata?.tool || '')
+            );
+
+            let lastContent = (lastStep.content || '').replace('[observation] ', '');
+            if (lastTurnInvolvedMessage) {
+                const messageMem = sameTurnMemories.find(m => (m.content || '').toLowerCase().includes('sent message'));
+                if (messageMem) lastContent = `Sent Message: "${messageMem.content.replace('[observation] Sent message: ', '')}"`;
             }
 
-            historyNotes = `\n### 💡 IMMEDIATE HISTORY (Last Step):\nYou previously executed: ${lastContent}\nStatus: SUCCESS. The user has already seen this. If you sent a message, do NOT repeat it unless you are correcting a mistake.\n`;
+            historyNotes = `\n### 💡 IMMEDIATE HISTORY (Last Step):\nYou previously executed: ${lastContent}\nStatus: SUCCESS.
+${lastTurnInvolvedMessage ? '⚠️ CONVERSATIONAL ETIQUETTE: You just sent a message to the user in the previous turn. To maintain professional boundaries and avoid spam, you MUST now set "goals_met": true and stop. Do NOT send another message until the user replies.' : 'If you sent a message, do NOT repeat it unless you are correcting a mistake.'}\n`;
         }
 
         // Filter out elevated skills for non-admin users
@@ -1295,6 +1311,7 @@ ${metadata.sessionContinuityHint}` : ''}
 ${metadata.robustReasoningMode ? `ROBUST REASONING MODE (ENABLED):
 - Treat the execution plan as a checklist: complete it step-by-step and track what remains.
 - Do NOT set goals_met=true unless user-visible outcomes are delivered (message/file/result).
+- If you have just received data (like API keys), do NOT terminate. Immediately use that data to perform the next step in the plan.
 - If any unresolved errors, missing results, or pending checklist items remain, keep goals_met=false and continue with tools.` : ''}
 
 ${channelInstructions}
