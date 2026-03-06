@@ -8442,44 +8442,68 @@ REFLECTION: <1-2 sentences>`;
     private async classifyTaskComplexity(description: string): Promise<'trivial' | 'simple' | 'standard' | 'complex'> {
         // Extract the actual user message from the task description
         const quotedMatch = description.match(/"([^"]+)"/);
-        const payload = (quotedMatch?.[1] || description).trim().toLowerCase();
+        const payload = (quotedMatch?.[1] || description).trim();
+        const normalizedPayload = payload.toLowerCase();
 
         // Ultra-fast heuristic pre-filter for obvious trivials (avoid LLM call)
-        if (payload.length <= 5 || /^(hi|hey|hello|yo|sup|lol|ok|k|bye|thanks|ty|gm|gn|🙏|👍|👎|❤️|😊)$/i.test(payload)) {
+        if (normalizedPayload.length <= 5 || /^(hi|hey|hello|yo|sup|lol|ok|k|bye|thanks|ty|gm|gn|🙏|👍|👎|❤️|😊)$/i.test(normalizedPayload)) {
             return 'trivial';
         }
 
-        // Feature/Technical request detection
-        const techKeywords = ['build', 'create', 'search', 'find', 'connect', 'add', 'implement', 'update', 'fix', 'debug', 'script', 'python', 'typescript', 'channel', 'plugin', 'skill', 'install', 'sudo', 'elevation', 'admin', 'administrator', 'elevate'];
-        const isTechRequest = techKeywords.some(k => payload.includes(k));
+        // Generic structural signals (not domain-specific keywords)
+        const sentenceCount = normalizedPayload.split(/[.!?\n]+/).filter(Boolean).length;
+        const conjunctionCount = (normalizedPayload.match(/\b(and|then|also|while|instead|because|after|before|meanwhile)\b/g) || []).length;
+        const questionCount = (normalizedPayload.match(/\?/g) || []).length;
+        const hasListLikePattern = /\b\d+[.)]\s+\S+/.test(normalizedPayload) || /\n\s*[-*]\s+\S+/.test(normalizedPayload);
+        const hasCodeOrDataPattern = /```|\{[^\n]{3,}\}|\[[^\n]{3,}\]|\b[A-Z_]{3,}\b/.test(payload);
+        const hasUrl = /https?:\/\//i.test(payload);
 
-        // Go-ahead detection: phrases that trigger the start of a previously discussed task
-        const goAheadKeywords = ['do it', 'go ahead', 'proceed', 'start', 'begin', 'execute', 'run it'];
-        const isGoAhead = goAheadKeywords.some(k => payload.includes(k));
+        // Ambiguous short confirmations should still be at least standard when clearly action-driving.
+        const isGoAhead = /\b(do it|go ahead|proceed|start|begin|execute|run it|continue)\b/i.test(normalizedPayload);
+
+        const structuralComplexityScore = [
+            sentenceCount >= 3,
+            conjunctionCount >= 3,
+            questionCount >= 2,
+            hasListLikePattern,
+            hasCodeOrDataPattern,
+            hasUrl
+        ].filter(Boolean).length;
 
         try {
             const response = await this.llm.callFast(
-                `Classify this message's complexity for an AI assistant. Message: "${payload.slice(0, 200)}"\n\nReply with ONLY one word: trivial, simple, standard, or complex.\n- trivial: greetings, thanks, acknowledgments, single emoji, casual openers\n- simple: quick factual questions, yes/no, preferences, one-line answers\n- standard: normal requests, conversation, short tasks, "go ahead" commands\n- complex: research, building, coding, multi-step work, browsing, file creation, image generation`,
-                'You are a task classifier. Reply with exactly one word: trivial, simple, standard, or complex. Nothing else.'
+                `Classify this message complexity for an autonomous agent.\n\nMessage:\n"""${payload.slice(0, 400)}"""\n\nRespond with strict JSON only:\n{"label":"trivial|simple|standard|complex","confidence":0-1}\n\nGuidance:\n- Use complex when the user asks for multi-step diagnosis, redesign, implementation, or strategy work.\n- Use standard for normal requests and action-driving confirmations.\n- Use simple for lightweight one-shot asks.\n- Use trivial only for greetings/acknowledgments.`,
+                'You are a strict JSON classifier. Return only compact JSON with keys: label, confidence.'
             );
-            const normalized = response.trim().toLowerCase().replace(/[^a-z]/g, '');
-            if (['trivial', 'simple', 'standard', 'complex'].includes(normalized)) {
-                let result = normalized as any;
-                // Escalation: Technical or go-ahead requests should at least be 'standard' to prevent accidental early termination
-                if ((isTechRequest || isGoAhead) && (result === 'trivial' || result === 'simple')) {
+
+            const jsonMatch = response.match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const label = String(parsed?.label || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+
+            if (['trivial', 'simple', 'standard', 'complex'].includes(label)) {
+                let result = label as 'trivial' | 'simple' | 'standard' | 'complex';
+
+                // Escalate low-complexity labels when message structure signals multi-step complexity.
+                if (structuralComplexityScore >= 2 && (result === 'trivial' || result === 'simple')) {
+                    result = confidence >= 0.8 ? 'standard' : 'complex';
+                }
+
+                if (isGoAhead && result === 'trivial') {
                     result = 'standard';
                 }
-                logger.debug(`Agent: Task classified as "${result}" (LLM said "${normalized}") for: "${payload.slice(0, 60)}..."`);
+
+                logger.debug(`Agent: Task classified as "${result}" (LLM=${label}, confidence=${Number.isFinite(confidence) ? confidence.toFixed(2) : '0.00'}) for: "${normalizedPayload.slice(0, 60)}..."`);
                 return result;
             }
         } catch (e) {
-            logger.debug(`Agent: LLM task classification failed, using heuristic: ${e}`);
+            logger.debug(`Agent: LLM task classification failed, using structural heuristic: ${e}`);
         }
 
-        // Heuristic fallback
-        if (payload.length <= 50 && !isTechRequest) {
-            return 'simple';
-        }
+        // Structural fallback (keyword-lite and intent-based)
+        if (structuralComplexityScore >= 3) return 'complex';
+        if (isGoAhead || structuralComplexityScore >= 1) return 'standard';
+        if (normalizedPayload.length <= 60) return 'simple';
         return 'standard';
     }
 

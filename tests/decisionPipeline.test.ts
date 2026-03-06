@@ -199,4 +199,57 @@ describe('DecisionPipeline', () => {
     expect(names).toContain('send_telegram');
   });
 
+
+  it('suppresses status-only reassurance when no non-send tool work exists', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 4,
+        maxStepsPerAction: 10,
+        messageDedupWindow: 5,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [{ name: 'send_telegram', metadata: { chatId: 'u1', message: 'Working on it now.' } }],
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a6',
+      source: 'telegram',
+      sourceId: 'u1',
+      messagesSent: 1,
+      currentStep: 3,
+      recentMemories: [],
+    });
+
+    expect(evaluated.tools?.length).toBe(0);
+  });
+
+  it('extends step budget from execution plan to reduce premature termination', () => {
+    const pipeline = new DecisionPipeline(
+      new StubConfig({
+        maxMessagesPerAction: 4,
+        maxStepsPerAction: 8,
+        messageDedupWindow: 5,
+      }) as any,
+    );
+
+    const proposed: StandardResponse = {
+      success: true,
+      tools: [{ name: 'run_command', metadata: { command: 'echo ok' } }],
+      verification: { goals_met: false, analysis: 'Still running' },
+    };
+
+    const evaluated = pipeline.evaluate(proposed, {
+      actionId: 'a7',
+      messagesSent: 0,
+      currentStep: 11,
+      executionPlan: `STEP BUDGET: 12 steps\n1. do work`,
+    });
+
+    expect(evaluated.tools?.length).toBe(1);
+    expect(evaluated.verification?.goals_met).not.toBe(true);
+  });
+
 });
