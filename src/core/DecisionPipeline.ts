@@ -214,6 +214,14 @@ export class DecisionPipeline {
         return fileRequestTerms.some(k => recentText.includes(k));
     }
 
+    private extractStepBudget(executionPlan?: string): number | null {
+        if (!executionPlan) return null;
+        const budgetMatch = executionPlan.match(/STEP BUDGET:\s*(\d+)/i);
+        if (!budgetMatch) return null;
+        const parsed = Number.parseInt(budgetMatch[1], 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    }
+
     public evaluate(proposed: StandardResponse, ctx: PipelineContext): StandardResponse {
         const result: StandardResponse = {
             ...proposed,
@@ -226,9 +234,20 @@ export class DecisionPipeline {
         // Step budget guardrail
         const configuredMaxSteps = Number(this.config.get('maxStepsPerAction') || 0);
         const applySafetyFloor = ctx.lane === 'user';
-        const maxSteps = configuredMaxSteps > 0
+        let maxSteps = configuredMaxSteps > 0
             ? (applySafetyFloor ? Math.max(6, configuredMaxSteps) : configuredMaxSteps)
             : 0;
+
+        const plannedStepBudget = this.extractStepBudget(ctx.executionPlan);
+        if (plannedStepBudget && plannedStepBudget > maxSteps) {
+            const extensionCap = maxSteps > 0 ? maxSteps + 18 : plannedStepBudget + 2;
+            const planDrivenBudget = Math.min(plannedStepBudget + 2, extensionCap);
+            if (planDrivenBudget > maxSteps) {
+                maxSteps = planDrivenBudget;
+                notes.push(`Expanded step budget from execution plan (${plannedStepBudget})`);
+            }
+        }
+
         if (maxSteps > 0 && ctx.currentStep > maxSteps) {
             result.tools = [];
             result.verification = {
@@ -423,6 +442,8 @@ export class DecisionPipeline {
                                         !hasCreatedFileInAction;
 
         const maxToolLoops = this.config.get('maxToolLoops') || 5;
+        const sendToolNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'];
+        const proposedHasNonSendTool = uniqueTools.some(t => !sendToolNames.includes((t.name || '').toLowerCase().trim()));
 
         for (const tool of uniqueTools) {
             const toolName = (tool.name || '').toLowerCase().trim();
@@ -490,7 +511,7 @@ export class DecisionPipeline {
                 continue;
             }
 
-            const isSend = toolName === 'send_telegram' || toolName === 'send_whatsapp' || toolName === 'send_discord' || toolName === 'send_slack' || toolName === 'send_gateway_chat';
+            const isSend = sendToolNames.includes(toolName);
             if (!isSend) {
                 filteredTools.push(tool);
                 continue;
@@ -527,6 +548,12 @@ export class DecisionPipeline {
             const isReassurance = this.isShortReassurance(message);
             const hasNewToolOutput = this.hasNonSendToolSinceLastSend(ctx);
 
+            if (isReassurance && !hasNewToolOutput && !proposedHasNonSendTool) {
+                dropped.push(`status-only:${tool.name}`);
+                notes.push('Suppressed send: reassurance without any actual work/tool output');
+                continue;
+            }
+
             // CRITICAL: Never suppress the FIRST message of an action.
             // The user sent a message and deserves a reply. Cross-action semantic
             // similarity is expected (similar reassurances like "on it" / "working on it").
@@ -559,7 +586,6 @@ export class DecisionPipeline {
 
         // If we dropped all proposed tools, decide whether to force-terminate or just warn
         if ((proposed.tools?.length || 0) > 0 && (filteredTools.length === 0)) {
-            const sendToolNames = ['send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat'];
             const allDroppedWereSends = proposed.tools!.every(t => sendToolNames.includes(t.name));
 
             if (allDroppedWereSends && ctx.messagesSent > 0) {

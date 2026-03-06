@@ -42,10 +42,11 @@ Think about:
 9. ENVIRONMENT AWARENESS: If the task involves running commands or CLI tools, the plan should account for the host OS/shell environment. Include a verification step (e.g., check OS, check if tool is installed) before running environment-dependent commands.
 10. BATCHING: Group tools into dependency-aware batches when possible (e.g., [search -> open] then [extract -> deliver]). This minimizes repeated LLM round-trips. If any tool in a batch fails, pause the remaining batch and re-plan from the failure.
 11. PROGRESS CHECKPOINTS: For tasks with 3+ steps, include explicit checkpoints where the agent should update the user on progress. The user cannot see internal work — silence feels like failure.
+12. STATUS QUALITY: Progress checkpoints must include concrete evidence of work completed (tool used, finding discovered, blocker encountered). Avoid vague updates like "working on it" unless accompanied by a specific next action.
 
 OUTPUT FORMAT:
 Provide a concise "Execution Plan" as a numbered checklist with contingency notes.
-At the top, provide a "STEP BUDGET" estimate.
+At the top, provide a "STEP BUDGET" estimate (minimum 6 for user-facing work unless truly trivial).
 
 Example:
 "STEP BUDGET: 5 steps
