@@ -7835,9 +7835,15 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 } else if (source === 'email') {
                     return false;
                 }
-                // gateway-chat has no typing indicator; fall back to status text below.
             } catch {
                 // Typing indicators are non-critical; if unavailable, fall back to status text.
+            }
+
+            // If typing-only mode is enabled, avoid turning routine progress pings into
+            // visible text on channels without typing support. Reserve visible updates for
+            // real recovery/error states so they don't consume the action's message budget.
+            if (type === 'start' || type === 'working') {
+                return false;
             }
         }
 
@@ -7912,7 +7918,9 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     chatId,
                     sourceId,
                     userId: action.payload?.userId,
-                    progressType: type
+                    progressType: type,
+                    progressOnly: true,
+                    lowSignal: true
                 }
             });
         } catch (e) {
@@ -8011,16 +8019,6 @@ The plugin handles all logic internally. See the plugin source for implementatio
 
             const result = await this.blockReviewer.reviewBlock(task, history, error, context);
 
-            // SPECIAL CASE: Messaging budget blocks should almost always be respected
-            // to avoid spamming the user with 'recovery' attempts.
-            if (failureType === 'message_budget' && result.verdict === 'CONTINUE') {
-                logger.info(`Agent: Overriding BlockReviewer CONTINUE verdict for message_budget to prevent spam.`);
-                return { 
-                    verdict: 'STOP', 
-                    reasoning: 'Messaging budget reached. Stopping to avoid excessive follow-ups and respect user attention.' 
-                };
-            }
-
             if (result.verdict === 'CONTINUE') {                logger.info(`BlockReviewer: Decision = CONTINUE — ${result.reasoning}`);
                 if (result.suggestedStrategy) {
                     this.memory.saveMemory({
@@ -8049,7 +8047,19 @@ The plugin handles all logic internally. See the plugin source for implementatio
         deliveryContext?: { messagesSent: number; anyUserDeliverySuccess: boolean; substantiveDeliveriesSent: number }
     ): Promise<'continue' | 'terminate'> {
         try {
-            const taskDescription = action.payload?.description || 'Unknown task';
+            if (reason === 'message_budget') {
+                const messagesSent = deliveryContext?.messagesSent ?? 0;
+                const anyUserDeliverySuccess = deliveryContext?.anyUserDeliverySuccess ?? false;
+                const substantiveDeliveriesSent = deliveryContext?.substantiveDeliveriesSent ?? 0;
+
+                // Hitting the message budget with only progress/retry chatter is not a reason
+                // to abandon the task. Let the action continue silently so it can finish and
+                // deliver one real result instead of dying behind a guardrail.
+                if (substantiveDeliveriesSent === 0 || (messagesSent > 0 && !anyUserDeliverySuccess)) {
+                    logger.info(`Agent: Forced termination review (${reason}): CONTINUE — progress budget exhausted before any substantive delivery; continue silently.`);
+                    return 'continue';
+                }
+            }
 
             const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
             const review = await this.reviewHardBlock(action, `Forced Termination: ${reason}. Details: ${details}`, currentStep, history);
@@ -8678,7 +8688,16 @@ REFLECTION: <1-2 sentences>`;
         const sourceId = String(payload?.sourceId || payload?.chatId || payload?.userId || payload?.senderId || '');
         const sessionContinuityHint = this.buildSessionContinuityHint(payload);
         const recentHist = this.memory.getRecentContext(20);
+        const isLowSignalMemory = (entry: any): boolean => {
+            const md = entry?.metadata || {};
+            const content = String(entry?.content || '');
+            if (md.progressOnly || md.progressType || md.lowSignal) return true;
+            if (content.startsWith('[SYSTEM: WORKFLOW_SIGNAL')) return true;
+            if (content.startsWith('Pipeline notes:')) return true;
+            return false;
+        };
         const recentContext = recentHist
+            .filter(c => !isLowSignalMemory(c))
             .map(c => `[${c.type}] ${String(c.content || '').slice(0, 280)}`)
             .join('\n');
 

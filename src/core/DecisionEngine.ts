@@ -683,10 +683,23 @@ ${lastTurnInvolvedMessage
             } catch (e) { }
         }
 
+        const isLowSignalMemory = (m: any): boolean => {
+            const content = (m?.content || '').toString();
+            const md = m?.metadata || {};
+            if (md?.progressOnly || md?.progressType || md?.lowSignal) return true;
+            if (md?.tool) return true;
+            if (content.startsWith('Observation: Tool ')) return true;
+            if (content.startsWith('[SYSTEM:')) return true;
+            if (content.startsWith('Pipeline notes:')) return true;
+            if (content.startsWith('Assistant sent status update to ')) return true;
+            return false;
+        };
+
         // Include limited other context for background awareness (configurable)
         const otherContextN = Number(this.config?.get('threadContextOtherMemoriesN') ?? 5);
         const otherMemories = recentContext
             .filter(c => !c.id || !c.id.startsWith(actionPrefix))
+            .filter(c => !isLowSignalMemory(c))
             .filter(c => {
                 const content = (c.content || '').toString();
                 const id = (c.id || '').toString();
@@ -732,16 +745,6 @@ ${lastTurnInvolvedMessage
                     if (taskTokens.has(t)) overlap++;
                 }
                 return overlap;
-            };
-
-            const isLowSignal = (m: any): boolean => {
-                const content = (m?.content || '').toString();
-                const md = m?.metadata || {};
-                if (md?.tool) return true;
-                if (content.startsWith('Observation: Tool ')) return true;
-                if (content.startsWith('[SYSTEM:')) return true;
-                if (content.startsWith('Pipeline notes:')) return true;
-                return false;
             };
 
             const shortAll = this.memory.searchMemory('short');
@@ -808,7 +811,7 @@ ${lastTurnInvolvedMessage
                     }
                     return false;
                 })
-                .filter(m => !isLowSignal(m))
+                .filter(m => !isLowSignalMemory(m))
                 .sort((a, b) => {
                     const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
                     const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;

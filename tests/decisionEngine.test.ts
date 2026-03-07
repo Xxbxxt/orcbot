@@ -176,9 +176,13 @@ describe('DecisionEngine - System Prompt Persistence', () => {
       payload: {
         description: 'Test task',
         messagesSent: 0,
-        currentStep: 1
+        currentStep: 1,
+        source: 'telegram',
+        sourceId: 'test-user'
       }
     });
+
+    expect(llmCalls.length).toBe(2);
 
     // Both calls should contain the agent identity
     expect(llmCalls[0].systemMessage).toContain(testIdentity);
@@ -294,6 +298,13 @@ describe('DecisionEngine - Thread Context Grounding', () => {
             metadata: { source: 'telegram', role: 'assistant', chatId: '12345' }
           },
           {
+            id: 'tg-progress-1',
+            type: 'short',
+            content: 'Assistant sent status update to telegram 12345: ⏳ Working on it...',
+            timestamp: '2026-02-05T10:01:30.000Z',
+            metadata: { source: 'telegram', role: 'assistant', chatId: '12345', progressType: 'working', progressOnly: true, lowSignal: true }
+          },
+          {
             id: 'noise-1',
             type: 'short',
             content: 'Observation: Tool web_search returned: "..."',
@@ -350,6 +361,7 @@ describe('DecisionEngine - Thread Context Grounding', () => {
     expect(systemPrompt).toContain('THREAD CONTEXT (Same Chat)');
     expect(systemPrompt).toContain('Frederick');
     expect(systemPrompt).not.toContain('Observation: Tool web_search returned');
+    expect(systemPrompt).not.toContain('Working on it');
   });
 });
 
