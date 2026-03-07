@@ -2204,8 +2204,16 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'send_voice_note',
             description: 'Convert text to speech and send it as a voice note/voice message to a contact. The message will appear as a playable voice bubble (not a file attachment). Available voices: OpenAI (alloy, echo, fable, onyx, nova, shimmer) or Google (achernar, achird, algenib, algieba, alnilam, aoede, autonoe, callirrhoe, charon, despina, enceladus, erinome, fenrir, gacrux, iapetus, kore, laomedeia, leda, orus, puck, pulcherrima, rasalgethi, sadachbia, sadaltager, schedar, sulafat, umbriel, vindemiatrix, zephyr, zubenelgenubi).',
             usage: 'send_voice_note(jid, text, voice?)',
+            isSideEffect: true,
+            isDeep: false,
             handler: async (args: any) => {
-                const jid = args.jid || args.to;
+                const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                const explicitChannel = args.channel || args.via;
+                const actionSource = explicitChannel || currentAction?.payload?.source || 'telegram';
+                const jid = this.resolveContextualChatId(
+                    args.jid || args.to || args.chat_id || args.chatId || args.id,
+                    actionSource
+                );
                 const text = args.text || args.message || args.content;
                 const voice = args.voice;
 
@@ -2222,10 +2230,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
 
                     // Send as voice note through the appropriate channel
                     // Resolve channel: explicit arg > action source > JID pattern
-                    const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
-                    const actionSource = currentAction?.payload?.source;
-                    const explicitChannel = args.channel || args.via;
-                    const channelHint = explicitChannel || actionSource;
+                    const channelHint = actionSource;
                     const isWhatsApp = channelHint === 'whatsapp' || jid.includes('@s.whatsapp.net') || jid.includes('@g.us');
                     const isDiscord = channelHint === 'discord' || (!isWhatsApp && /^\d{15,20}$/.test(String(jid)));
                     const isTelegram = channelHint === 'telegram' || (!isWhatsApp && !isDiscord);
@@ -5952,6 +5957,65 @@ export default ${name};
                 const list = Array.from(this.heartbeatJobMeta.values());
                 if (list.length === 0) return 'No heartbeat schedules found.';
                 return list.map((s: any) => `• ${s.id} → ${s.schedule} → ${s.task} (priority ${s.priority})`).join('\n');
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'heartbeat_mark_check',
+            description: 'Mark one or more heartbeat check categories as completed by safely updating heartbeat-state.json.',
+            usage: 'heartbeat_mark_check(checks, timestamp?)',
+            handler: async (args: any) => {
+                const checksInput = args.checks || args.check || args.categories || args.category;
+                if (!checksInput) return 'Error: Missing checks.';
+
+                try {
+                    const timestamp = args.timestamp !== undefined ? Number(args.timestamp) : Date.now();
+                    const checks = this.updateHeartbeatCheckState(checksInput, timestamp);
+                    const safeTimestamp = Number.isFinite(timestamp) && timestamp > 0 ? Math.floor(timestamp) : Date.now();
+                    return `Heartbeat state updated for: ${checks.join(', ')} at ${new Date(safeTimestamp).toISOString()}`;
+                } catch (e) {
+                    return `Failed to update heartbeat state: ${e}`;
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'heartbeat_instructions',
+            description: 'Read or update heartbeat.md, which stores concise persistent instructions for future heartbeats. Supported actions: read, replace, append, clear.',
+            usage: 'heartbeat_instructions(action, content?)',
+            handler: async (args: any) => {
+                const action = String(args.action || args.mode || 'read').toLowerCase();
+                const content = args.content ?? args.text ?? args.instructions ?? '';
+
+                try {
+                    if (action === 'read' || action === 'show') {
+                        const current = this.manageHeartbeatInstructions('read');
+                        return current ? `Current heartbeat instructions:\n${current}` : 'Heartbeat instructions are currently empty.';
+                    }
+
+                    if (action === 'clear' || action === 'reset') {
+                        this.manageHeartbeatInstructions('clear');
+                        return 'Heartbeat instructions cleared.';
+                    }
+
+                    if ((action === 'replace' || action === 'set' || action === 'append') && !String(content).trim()) {
+                        return `Error: Missing content for heartbeat_instructions(${action}).`;
+                    }
+
+                    if (action === 'replace' || action === 'set') {
+                        const updated = this.manageHeartbeatInstructions('replace', String(content));
+                        return `Heartbeat instructions replaced (${updated.length} chars).`;
+                    }
+
+                    if (action === 'append' || action === 'add') {
+                        const updated = this.manageHeartbeatInstructions('append', String(content));
+                        return `Heartbeat instructions updated (${updated.length} chars total).`;
+                    }
+
+                    return `Error: Unsupported heartbeat_instructions action "${action}". Use read, replace, append, or clear.`;
+                } catch (e) {
+                    return `Failed to manage heartbeat instructions: ${e}`;
+                }
             }
         });
 
@@ -10351,7 +10415,7 @@ REFLECTION: <1-2 sentences>`;
                 await this.delegateHeartbeatResearch(availableAgents);
             } else {
                 // No workers, do it ourselves but be efficient
-                this.pushTask(proactivePrompt, 2, { isHeartbeat: true }, 'autonomy');
+                this.pushTask(proactivePrompt, 2, { isHeartbeat: true, heartbeatKind: 'idle' }, 'autonomy');
             }
 
             // Preset productivity to false — processNextAction will set it back to true
@@ -10371,13 +10435,8 @@ REFLECTION: <1-2 sentences>`;
         // ── 0. Heartbeat state — per-check cadence tracking ──────────────────
         // heartbeat-state.json tracks when each class of proactive check last ran.
         // The LLM reads this to avoid redundant rechecks and updates it via write_file.
-        const heartbeatStatePath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-state.json');
-        let heartbeatState: Record<string, number> = {};
-        try {
-            if (fs.existsSync(heartbeatStatePath)) {
-                heartbeatState = JSON.parse(fs.readFileSync(heartbeatStatePath, 'utf-8'));
-            }
-        } catch { /* use empty state */ }
+        const heartbeatStatePath = this.getHeartbeatStatePath();
+        const heartbeatState = this.readHeartbeatCheckState();
 
         const formatCheckAge = (ts: number | undefined): string => {
             if (!ts) return 'never';
@@ -10441,7 +10500,8 @@ REFLECTION: <1-2 sentences>`;
 
         // ── 4. Active heartbeat schedules ──
         const activeSchedules = Array.from(this.heartbeatJobMeta.values())
-            .map((s: any) => `  🔁 "${s.task}" — ${s.schedule}`)
+            .slice(0, 8)
+            .map((s: any) => `  🔁 "${String(s.task || '').slice(0, 120)}" — ${s.schedule}`)
             .join('\n') || 'None';
 
         // ── 5. User profile ──
@@ -10454,11 +10514,15 @@ REFLECTION: <1-2 sentences>`;
         } catch { /* ignore */ }
 
         // ── 5b. Custom Heartbeat Instructions ──
-        const heartbeatMdPath = path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat.md');
+        const heartbeatMdPath = this.getHeartbeatInstructionsPath();
         let heartbeatMdContent = '';
         try {
             if (fs.existsSync(heartbeatMdPath)) {
-                heartbeatMdContent = fs.readFileSync(heartbeatMdPath, 'utf-8');
+                const rawHeartbeatMd = fs.readFileSync(heartbeatMdPath, 'utf-8');
+                const heartbeatMdLimit = 1500;
+                heartbeatMdContent = rawHeartbeatMd.length > heartbeatMdLimit
+                    ? rawHeartbeatMd.slice(0, heartbeatMdLimit) + '\n...[truncated]'
+                    : rawHeartbeatMd;
             }
         } catch { /* ignore */ }
 
@@ -10614,7 +10678,7 @@ MODE C — SYSTEM AUDIT & SELF-REPAIR
 You are responsible for your own health and stability:
 1. **Error Forensics** — Search logs for recent crashes or tool failures. Find the source code responsible and fix it.
 2. **Implementation Debt** — Look for "TODO" comments or known limitations in your core files (e.g., 'EmailChannel.ts', 'Agent.ts') and resolve them.
-3. **Build Health** — Periodically run 'npm run build' via 'run_terminal_command' to ensure your current state is valid.
+3. **Build Health** — Periodically run 'npm run build' via 'run_command' to ensure your current state is valid.
 
 👥 **Relationship Intelligence**
 - Review contact profiles — who haven't you heard from in a while? Consider a check-in.
@@ -10636,9 +10700,9 @@ You are responsible for your own health and stability:
 DECISION FRAMEWORK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Update heartbeat state:** After completing any proactive check (email/calendar/social/weather/news), use write_file on \`${heartbeatStatePath}\` with updated timestamps so future heartbeats skip redundant rechecks. Example JSON: {"email": ${now}, "news": ${now}}
+**Update heartbeat state:** After completing any proactive check (email/calendar/social/weather/news), use \`heartbeat_mark_check(checks, timestamp?)\` so future heartbeats skip redundant rechecks. Examples: \`heartbeat_mark_check("email")\`, \`heartbeat_mark_check(["news", "weather"], ${now})\`
 
-**Modify your own heartbeat behavior:** You can manage and update your own proactive behavior by using write_file to edit \`${heartbeatMdPath}\`. Whatever you write there will be included as custom instructions in all future heartbeats. Use this to maintain your own long-term proactive agenda, persistent tasks, or custom routines.
+**Modify your own heartbeat behavior:** Use \`heartbeat_instructions(read|replace|append|clear, content?)\` to manage concise persistent heartbeat instructions stored in \`${heartbeatMdPath}\`. Keep them short and durable.
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
@@ -10670,6 +10734,18 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 - Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
 - If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
 `;
+    }
+
+    private composeHeartbeatExecutionDescription(payload: any, idleTimeMs: number, workerCount: number, availableWorkers: number): string {
+        const contextPrompt = this.buildSmartHeartbeatPrompt(idleTimeMs, workerCount, availableWorkers);
+        const heartbeatKind = String(payload?.heartbeatKind || (payload?.heartbeatId ? 'scheduled' : 'idle')).toLowerCase();
+        const scheduledTask = String(payload?.heartbeatTask || payload?.task || '').trim();
+
+        if (heartbeatKind === 'scheduled' && scheduledTask) {
+            return `SCHEDULED HEARTBEAT TASK\nTask: ${scheduledTask}\n\nPRIMARY OBJECTIVE:\n- Execute this recurring task now: ${scheduledTask}\n- Use the autonomy context below as supporting context only.\n- Do NOT replace this scheduled task with a generic idle-time initiative unless the task is already satisfied or impossible.\n\n${contextPrompt}`;
+        }
+
+        return contextPrompt;
     }
 
     private async delegateHeartbeatResearch(availableAgents: any[]) {
@@ -10832,6 +10908,92 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
     // --- One-off Scheduled Task persistence ---
 
+    private getHeartbeatStatePath(): string {
+        return path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat-state.json');
+    }
+
+    private getHeartbeatInstructionsPath(): string {
+        return path.join(path.dirname(this.config.get('actionQueuePath')), 'heartbeat.md');
+    }
+
+    private manageHeartbeatInstructions(mode: 'read' | 'replace' | 'append' | 'clear', content: string = ''): string {
+        const heartbeatInstructionsPath = this.getHeartbeatInstructionsPath();
+        const current = fs.existsSync(heartbeatInstructionsPath)
+            ? fs.readFileSync(heartbeatInstructionsPath, 'utf8')
+            : '';
+
+        if (mode === 'read') {
+            return current;
+        }
+
+        let next = current;
+        if (mode === 'clear') {
+            next = '';
+        } else if (mode === 'replace') {
+            next = String(content || '').trim();
+        } else if (mode === 'append') {
+            const addition = String(content || '').trim();
+            next = [current.trim(), addition].filter(Boolean).join('\n\n');
+        }
+
+        const maxChars = 4000;
+        if (next.length > maxChars) {
+            next = next.slice(0, maxChars).trimEnd() + '\n...[truncated]';
+        }
+
+        fs.writeFileSync(heartbeatInstructionsPath, next, 'utf8');
+        return next;
+    }
+
+    private readHeartbeatCheckState(): Record<string, number> {
+        const heartbeatStatePath = this.getHeartbeatStatePath();
+        try {
+            if (!fs.existsSync(heartbeatStatePath)) {
+                return {};
+            }
+            const raw = fs.readFileSync(heartbeatStatePath, 'utf-8');
+            const parsed = JSON.parse(raw || '{}');
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                return {};
+            }
+            return Object.fromEntries(
+                Object.entries(parsed)
+                    .filter(([key, value]) => /^[a-z0-9_-]{1,40}$/i.test(String(key)) && Number.isFinite(Number(value)))
+                    .map(([key, value]) => [String(key).toLowerCase(), Number(value)])
+            );
+        } catch {
+            return {};
+        }
+    }
+
+    private updateHeartbeatCheckState(checksInput: string | string[], timestamp: number = Date.now()): string[] {
+        const rawChecks = Array.isArray(checksInput)
+            ? checksInput
+            : String(checksInput)
+                .split(',')
+                .map(part => part.trim())
+                .filter(Boolean);
+
+        const checks = Array.from(new Set(
+            rawChecks
+                .map(check => String(check).trim().toLowerCase())
+                .filter(check => /^[a-z0-9_-]{1,40}$/.test(check))
+        ));
+
+        if (checks.length === 0) {
+            throw new Error('No valid heartbeat checks provided.');
+        }
+
+        const safeTimestamp = Number.isFinite(timestamp) && timestamp > 0 ? Math.floor(timestamp) : Date.now();
+        const state = this.readHeartbeatCheckState();
+        for (const check of checks) {
+            state[check] = safeTimestamp;
+        }
+
+        fs.writeFileSync(this.getHeartbeatStatePath(), JSON.stringify(state, null, 2), 'utf8');
+        return checks;
+    }
+
     private loadScheduledTasks() {
         try {
             if (!fs.existsSync(this.scheduledTasksPath)) {
@@ -10945,7 +11107,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
 
                 logger.info(`Heartbeat Schedule Triggered: ${scheduleDef.task}`);
-                this.pushTask(`Heartbeat Task: ${scheduleDef.task}`, scheduleDef.priority || 6, { isHeartbeat: true, heartbeatId: id }, 'autonomy');
+                this.pushTask(
+                    `Heartbeat Task: ${scheduleDef.task}`,
+                    scheduleDef.priority || 6,
+                    { isHeartbeat: true, heartbeatId: id, heartbeatKind: 'scheduled', heartbeatTask: scheduleDef.task },
+                    'autonomy'
+                );
                 this.lastHeartbeatPushAt = Date.now();
             });
         } catch (e) {
@@ -11330,7 +11497,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const isSideEffectDefault = [
             'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
             'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
-            'send_file', 'send_image', 'send_discord_file', 'send_slack_file', 'send_email'
+            'send_file', 'send_image', 'send_voice_note', 'send_discord_file', 'send_slack_file', 'send_email'
         ].includes(name);
 
         return { 
@@ -12849,11 +13016,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 const idleTimeMs = Date.now() - this.lastActionTime;
                 const runningWorkers = this.orchestrator.getRunningWorkers();
                 const availableAgents = this.orchestrator.getAvailableAgents('execute');
-                const freshDescription = this.buildSmartHeartbeatPrompt(
-                    idleTimeMs,
-                    runningWorkers.length,
-                    availableAgents.length
-                );
+                const freshDescription = this.composeHeartbeatExecutionDescription(action.payload, idleTimeMs, runningWorkers.length, availableAgents.length);
                 action.payload.description = freshDescription;
                 logger.info(`Agent: Refreshed heartbeat ${action.id} context at execution time (was ${Math.floor((Date.now() - new Date(action.timestamp).getTime()) / 60000)}min old)`);
             }
@@ -12900,7 +13063,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             
             // HEARTBEAT HEURISTIC: If heartbeat is generic, it's trivial. 
             // If it has a custom description (e.g. follow-up), classify it.
-            const isGenericHeartbeat = isHeartbeatTask && (!action.payload.description || action.payload.description.includes('Proactive Heartbeat'));
+            const heartbeatKind = String(action.payload.heartbeatKind || '').toLowerCase();
+            const isGenericHeartbeat = isHeartbeatTask && heartbeatKind !== 'scheduled' && (!action.payload.description || action.payload.description.includes('PROACTIVE HEARTBEAT'));
             
             let taskComplexity = isGenericHeartbeat ? 'trivial' as const
                 : await this.classifyTaskComplexity(classificationTarget);
@@ -12923,7 +13087,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
-            const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isHeartbeatTask;
+            const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isGenericHeartbeat;
             const actionStartedAtMs = Date.now();
             let lastUserDeliveryAtMs = actionStartedAtMs;
 
@@ -12996,7 +13160,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 const isSideEffectDefault = [
                     'send_telegram', 'send_whatsapp', 'send_discord', 'send_slack', 'send_gateway_chat',
                     'telegram_send_buttons', 'telegram_edit_message', 'telegram_send_poll', 'telegram_react', 'telegram_pin_message',
-                    'send_file', 'send_image', 'send_discord_file', 'send_slack_file'
+                    'send_file', 'send_image', 'send_voice_note', 'send_discord_file', 'send_slack_file'
                 ].includes(name);
 
                 const isDangerousDefault = [

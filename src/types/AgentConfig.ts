@@ -117,6 +117,7 @@ export const AgentConfigSchema = z.object({
     slackAutoReplyEnabled: coerceBool.default(false),
     emailEnabled: coerceBool.default(false),
     emailAutoReplyEnabled: coerceBool.default(false),
+    emailProcessUnreadOnStart: coerceBool.default(false),
     emailAddress: z.string().optional(),
     emailFromName: z.string().optional(),
     emailDefaultSubject: z.string().default('OrcBot response'),

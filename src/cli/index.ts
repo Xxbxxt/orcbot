@@ -4462,6 +4462,7 @@ async function showSlackConfig() {
 async function showEmailConfig() {
     const enabled = agent.config.get('emailEnabled') === true;
     const autoReply = agent.config.get('emailAutoReplyEnabled') === true;
+    const processUnreadOnStart = agent.config.get('emailProcessUnreadOnStart') === true;
     const emailAddress = agent.config.get('emailAddress') || agent.config.get('smtpUsername') || 'Not Set';
     const smtpHost = agent.config.get('smtpHost') || 'Not Set';
     const imapHost = agent.config.get('imapHost') || 'Not Set';
@@ -4486,12 +4487,13 @@ async function showEmailConfig() {
         `${dim('IMAP Security')} ${imapSecure ? green('Direct TLS (IMAPS)') : (imapStartTls ? green('STARTTLS') : yellow('Plain (not recommended)'))}`,
         `${dim('Socket Timeout')} ${timeoutMs}ms`,
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Startup Inbox')} ${processUnreadOnStart ? yellow('Process existing unread') : green('Ignore existing unread')}`,
     ];
     box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
     console.log(dim('SMTP = sending outbound mail.'));
     console.log(dim('IMAP = reading inbound inbox (auto-reply/tasks). Not required for SMTP-only sending/tests.'));
-    console.log(yellow('Note: On first connect, OrcBot processes existing UNREAD (UNSEEN) inbox emails as inbound messages.'));
-    console.log(dim('Tip: mark/archive old mail before enabling email if you only want brand-new messages.'));
+    console.log(dim('Default: OrcBot ignores unread backlog on connect and only processes new inbound mail.'));
+    console.log(dim('Enable startup backlog processing only if you intentionally want the agent to catch up on old unread mail.'));
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -4505,6 +4507,7 @@ async function showEmailConfig() {
                 { name: 'Set SMTP Settings', value: 'set_smtp' },
                 { name: 'Set IMAP Settings', value: 'set_imap' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: processUnreadOnStart ? 'Disable Startup Backlog Processing' : 'Enable Startup Backlog Processing', value: 'toggle_startup_backlog' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: 'Test SMTP Connection', value: 'test_smtp' },
                 { name: 'Test IMAP Connection', value: 'test_imap' },
@@ -4582,6 +4585,11 @@ async function showEmailConfig() {
 
     if (action === 'toggle_auto') {
         agent.config.set('emailAutoReplyEnabled', !autoReply);
+        return showEmailConfig();
+    }
+
+    if (action === 'toggle_startup_backlog') {
+        agent.config.set('emailProcessUnreadOnStart', !processUnreadOnStart);
         return showEmailConfig();
     }
 

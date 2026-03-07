@@ -476,4 +476,38 @@ describe('Agent runtime recovery supervision', () => {
         ]);
         expect(action.status).toBe('completed');
     });
+
+    it('treats send_voice_note as a delivered side effect so completion does not retry silently', async () => {
+        const action = createAction('voice-note-action');
+        const decisions = [
+            {
+                reasoning: 'Send the requested audio reply.',
+                verification: { goals_met: false, analysis: 'Need to deliver the voice note first' },
+                tools: [
+                    { name: 'send_voice_note', metadata: { chatId: '8077489121', message: 'Here is the audio update about my day.' } }
+                ]
+            },
+            {
+                reasoning: 'The voice note has already been sent.',
+                verification: { goals_met: true, analysis: 'Task is complete after delivery' },
+                tools: []
+            }
+        ];
+
+        const harness = createAgentHarness({
+            action,
+            decisions,
+            executeSkill: async (_name: string, metadata: any) => ({
+                success: true,
+                message: `Voice note sent via Telegram to ${metadata?.chatId}`
+            })
+        });
+
+        await (harness.agent as any).processNextAction();
+
+        expect(harness.decisionMock).toHaveBeenCalledTimes(2);
+        const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
+        expect(executedToolNames).toEqual(['send_voice_note']);
+        expect(action.status).toBe('completed');
+    });
 });
