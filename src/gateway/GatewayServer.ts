@@ -177,6 +177,273 @@ export class GatewayServer {
             });
     }
 
+    private getMemoryStats(): { totalMemories: number; fileSize: number } {
+        const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
+        const memoryPath = path.join(dataDir, 'memory.json');
+
+        if (!fs.existsSync(memoryPath)) {
+            return { totalMemories: 0, fileSize: 0 };
+        }
+
+        try {
+            const content = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
+            const memories = Array.isArray(content?.memories) ? content.memories : (Array.isArray(content) ? content : []);
+            return {
+                totalMemories: memories.length || 0,
+                fileSize: fs.statSync(memoryPath).size
+            };
+        } catch {
+            return { totalMemories: 0, fileSize: 0 };
+        }
+    }
+
+    private getConnectionsSummary() {
+        return {
+            telegram: {
+                configured: !!this.config.get('telegramToken'),
+                autoReply: this.config.get('telegramAutoReplyEnabled') || false
+            },
+            whatsapp: {
+                configured: !!this.config.get('whatsappEnabled'),
+                autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
+                statusReply: this.config.get('whatsappStatusReplyEnabled') || false,
+                autoReact: this.config.get('whatsappAutoReactEnabled') || false,
+                linkedAccount: this.config.get('whatsappOwnerJID') || null
+            },
+            discord: {
+                configured: !!this.config.get('discordToken'),
+                autoReply: this.config.get('discordAutoReplyEnabled') || false
+            },
+            slack: {
+                configured: !!this.config.get('slackBotToken'),
+                autoReply: this.config.get('slackAutoReplyEnabled') || false
+            },
+            email: {
+                configured: !!this.config.get('emailEnabled'),
+                address: this.config.get('emailAddress') || null
+            }
+        };
+    }
+
+    private getModelsSummary() {
+        return {
+            currentModel: this.config.get('modelName'),
+            provider: this.config.get('llmProvider') || 'auto',
+            inferredProvider: this.inferProviderFromModel(this.config.get('modelName') || ''),
+            configuredProviders: this.getConfiguredProviders()
+        };
+    }
+
+    private getSecuritySummary() {
+        return {
+            safeMode: this.config.get('safeMode') || false,
+            autoExecuteCommands: this.config.get('autoExecuteCommands') || false,
+            pluginAllowList: this.config.get('pluginAllowList') || [],
+            pluginDenyList: this.config.get('pluginDenyList') || []
+        };
+    }
+
+    private getQueueSummary() {
+        const counts = this.agent.actionQueue?.getCounts?.() || {
+            pending: 0,
+            waiting: 0,
+            'in-progress': 0,
+            completed: 0,
+            failed: 0
+        };
+        const active = this.agent.actionQueue?.getActive?.() || [];
+        const queue = this.agent.actionQueue?.getQueue?.() || [];
+        return {
+            counts,
+            activeCount: active.length,
+            total: queue.length,
+            active: active.slice(0, 10)
+        };
+    }
+
+    private getChatSummary() {
+        const messages = this.getChatHistory();
+        return {
+            messageCount: messages.length,
+            lastMessageAt: messages[0]?.timestamp || null,
+            latest: messages.slice(0, 20)
+        };
+    }
+
+    private getServiceRegistry() {
+        const status = this.getAgentStatus();
+        const queue = this.getQueueSummary();
+        const chat = this.getChatSummary();
+        const memory = this.getMemoryStats();
+        const skills = this.agent.skills.getAllSkills();
+        const orchestratorAgents = this.agent.orchestrator.getAgents?.() || [];
+        const orchestratorTasks = this.agent.orchestrator.getTasks?.() || [];
+        const tokenStatus = {
+            authEnabled: !!(this.gatewayConfig.apiKey || this.config.get('gatewayApiKey')),
+            wsClients: this.clients.size
+        };
+
+        return [
+            {
+                id: 'gateway',
+                title: 'Gateway',
+                category: 'core',
+                status: 'healthy',
+                description: 'REST, WebSocket, auth, and browser dashboard transport layer.',
+                metrics: { wsClients: this.clients.size, mode: status.mode },
+                endpoints: ['/api/status', '/api/health', '/api/gateway/capabilities', '/api/dashboard/overview']
+            },
+            {
+                id: 'agent',
+                title: 'Agent Runtime',
+                category: 'core',
+                status: status.running ? 'healthy' : 'degraded',
+                description: 'Main agent loop, model routing, and orchestration status.',
+                metrics: { running: status.running, model: status.model, provider: status.provider },
+                endpoints: ['/api/status', '/api/models', '/api/providers', '/api/agent/start', '/api/agent/stop']
+            },
+            {
+                id: 'tasks',
+                title: 'Task Queue',
+                category: 'operations',
+                status: queue.counts.failed > 0 ? 'warning' : 'healthy',
+                description: 'Queued, in-progress, waiting, and historical actions.',
+                metrics: { total: queue.total, active: queue.activeCount, failed: queue.counts.failed },
+                endpoints: ['/api/tasks', '/api/tasks/:id', '/api/tasks/:id/cancel', '/api/tasks/clear', '/api/queue/stats']
+            },
+            {
+                id: 'chat',
+                title: 'Gateway Chat',
+                category: 'workspace',
+                status: 'healthy',
+                description: 'Web chat session transport, history, and assistant responses.',
+                metrics: { messages: chat.messageCount, lastMessageAt: chat.lastMessageAt },
+                endpoints: ['/api/chat/send', '/api/chat/history', '/api/chat/export', '/api/chat/clear']
+            },
+            {
+                id: 'memory',
+                title: 'Memory',
+                category: 'data',
+                status: memory.totalMemories > 0 ? 'healthy' : 'degraded',
+                description: 'Recent context, search, and file-backed memory statistics.',
+                metrics: { totalMemories: memory.totalMemories, fileSize: memory.fileSize },
+                endpoints: ['/api/memory', '/api/memory/stats', '/api/memory/search']
+            },
+            {
+                id: 'skills',
+                title: 'Skills',
+                category: 'extensions',
+                status: 'healthy',
+                description: 'Built-in and plugin skill registry, install, execute, and health checks.',
+                metrics: { totalSkills: skills.length, pluginSkills: skills.filter(s => !!s.pluginPath).length },
+                endpoints: ['/api/skills', '/api/skills/health', '/api/skills/install', '/api/skills/:name/execute']
+            },
+            {
+                id: 'orchestrator',
+                title: 'Orchestrator',
+                category: 'operations',
+                status: orchestratorTasks.length > 0 ? 'healthy' : 'idle',
+                description: 'Delegated agents and distributed task execution state.',
+                metrics: { agents: orchestratorAgents.length, delegatedTasks: orchestratorTasks.length },
+                endpoints: ['/api/orchestrator/agents', '/api/orchestrator/tasks', '/api/orchestrator/tasks/:id/cancel']
+            },
+            {
+                id: 'channels',
+                title: 'Channels',
+                category: 'integrations',
+                status: 'healthy',
+                description: 'Messaging channel configuration and connection settings.',
+                metrics: { configured: Object.values(this.getConnectionsSummary()).filter((entry: any) => entry.configured).length },
+                endpoints: ['/api/connections', '/api/connections/:channel']
+            },
+            {
+                id: 'security',
+                title: 'Security',
+                category: 'admin',
+                status: tokenStatus.authEnabled ? 'healthy' : 'warning',
+                description: 'Gateway auth token, safe mode, and plugin policy controls.',
+                metrics: { authEnabled: tokenStatus.authEnabled, wsClients: tokenStatus.wsClients },
+                endpoints: ['/api/gateway/token/status', '/api/gateway/token/rotate', '/api/security']
+            }
+        ];
+    }
+
+    private getServiceSnapshot(serviceId: string) {
+        const lower = String(serviceId || '').toLowerCase();
+        const services = this.getServiceRegistry();
+        const service = services.find(entry => entry.id === lower);
+        if (!service) return null;
+
+        const snapshots: Record<string, any> = {
+            gateway: {
+                status: this.getAgentStatus(),
+                health: {
+                    uptimeSeconds: Math.floor(process.uptime()),
+                    wsClients: this.clients.size,
+                    memoryUsage: process.memoryUsage()
+                },
+                capabilities: this.getGatewayCapabilities()
+            },
+            agent: this.getAgentStatus(),
+            tasks: this.getQueueSummary(),
+            chat: this.getChatSummary(),
+            memory: {
+                stats: this.getMemoryStats(),
+                recent: this.agent.memory?.getRecentContext(20) || []
+            },
+            skills: {
+                skills: this.agent.skills.getAllSkills().map(s => ({
+                    name: s.name,
+                    description: s.description,
+                    usage: s.usage,
+                    isPlugin: !!s.pluginPath,
+                    pluginPath: s.pluginPath
+                }))
+            },
+            orchestrator: {
+                agents: this.agent.orchestrator.getAgents?.() || [],
+                tasks: this.agent.orchestrator.getTasks?.() || []
+            },
+            channels: {
+                connections: this.getConnectionsSummary()
+            },
+            security: {
+                token: {
+                    authEnabled: !!(this.gatewayConfig.apiKey || this.config.get('gatewayApiKey')),
+                    wsClients: this.clients.size
+                },
+                security: this.getSecuritySummary()
+            }
+        };
+
+        return {
+            ...service,
+            snapshot: snapshots[lower] || null,
+            timestamp: new Date().toISOString()
+        };
+    }
+
+    private getDashboardOverview() {
+        return {
+            status: this.getAgentStatus(),
+            health: {
+                status: 'ok',
+                timestamp: new Date().toISOString(),
+                uptimeSeconds: Math.floor(process.uptime()),
+                wsClients: this.clients.size,
+                memoryUsage: process.memoryUsage()
+            },
+            queue: this.getQueueSummary(),
+            models: this.getModelsSummary(),
+            connections: this.getConnectionsSummary(),
+            security: this.getSecuritySummary(),
+            memory: this.getMemoryStats(),
+            chat: this.getChatSummary(),
+            services: this.getServiceRegistry(),
+            capabilities: this.getGatewayCapabilities()
+        };
+    }
+
     private setupMiddleware() {
         this.app.disable('x-powered-by');
 
@@ -298,6 +565,7 @@ export class GatewayServer {
             },
             api: {
                 status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
+                dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
                 security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
@@ -373,6 +641,20 @@ export class GatewayServer {
 
         router.get('/gateway/capabilities', (_req: Request, res: Response) => {
             res.json(this.getGatewayCapabilities());
+        });
+
+        router.get('/dashboard/overview', (_req: Request, res: Response) => {
+            res.json(this.getDashboardOverview());
+        });
+
+        router.get('/services', (_req: Request, res: Response) => {
+            res.json({ services: this.getServiceRegistry() });
+        });
+
+        router.get('/services/:id', (req: Request, res: Response) => {
+            const snapshot = this.getServiceSnapshot(req.params.id);
+            if (!snapshot) return res.status(404).json({ error: 'Service not found' });
+            res.json(snapshot);
         });
 
         // ===== GATEWAY TOKEN MANAGEMENT =====
@@ -597,17 +879,7 @@ export class GatewayServer {
         });
 
         router.get('/memory/stats', (_req: Request, res: Response) => {
-            const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
-            const memoryPath = path.join(dataDir, 'memory.json');
-            
-            let stats = { totalMemories: 0, fileSize: 0 };
-            if (fs.existsSync(memoryPath)) {
-                const content = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
-                const memories = Array.isArray(content?.memories) ? content.memories : (Array.isArray(content) ? content : []);
-                stats.totalMemories = memories.length || 0;
-                stats.fileSize = fs.statSync(memoryPath).size;
-            }
-            res.json(stats);
+            res.json(this.getMemoryStats());
         });
 
         router.get('/memory/search', (req: Request, res: Response) => {
@@ -633,25 +905,7 @@ export class GatewayServer {
 
         // ===== CONNECTIONS / CHANNELS =====
         router.get('/connections', (_req: Request, res: Response) => {
-            const connections = {
-                telegram: {
-                    configured: !!this.config.get('telegramToken'),
-                    autoReply: this.config.get('telegramAutoReplyEnabled') || false
-                },
-                whatsapp: {
-                    configured: !!this.config.get('whatsappEnabled'),
-                    autoReply: this.config.get('whatsappAutoReplyEnabled') || false,
-                    linkedAccount: this.config.get('whatsappOwnerJID') || null
-                },
-                discord: {
-                    configured: !!this.config.get('discordToken'),
-                    autoReply: this.config.get('discordAutoReplyEnabled') || false
-                },
-                slack: {
-                    configured: !!this.config.get('slackBotToken'),
-                    autoReply: this.config.get('slackAutoReplyEnabled') || false
-                }
-            };
+            const connections = this.getConnectionsSummary();
             res.json({ connections });
         });
 
@@ -682,16 +936,7 @@ export class GatewayServer {
 
         // ===== AI MODELS =====
         router.get('/models', (_req: Request, res: Response) => {
-            const models = {
-                currentModel: this.config.get('modelName'),
-                provider: this.config.get('llmProvider') || 'auto',
-                providers: {
-                    openai: { configured: !!this.config.get('openaiApiKey') },
-                    google: { configured: !!this.config.get('googleApiKey') },
-                    openrouter: { configured: !!this.config.get('openrouterApiKey') },
-                    bedrock: { configured: !!this.config.get('bedrockAccessKeyId') }
-                }
-            };
+            const models = this.getModelsSummary();
             res.json(models);
         });
 
@@ -797,12 +1042,7 @@ export class GatewayServer {
 
         // ===== SECURITY =====
         router.get('/security', (_req: Request, res: Response) => {
-            res.json({
-                safeMode: this.config.get('safeMode') || false,
-                autoExecuteCommands: this.config.get('autoExecuteCommands') || false,
-                pluginAllowList: this.config.get('pluginAllowList') || [],
-                pluginDenyList: this.config.get('pluginDenyList') || []
-            });
+            res.json(this.getSecuritySummary());
         });
 
         router.put('/security', (req: Request, res: Response) => {
