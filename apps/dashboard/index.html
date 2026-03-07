@@ -21,13 +21,14 @@
                 </div>
             </div>
 
-            <nav class="nav-stack">
+            <nav class="nav-stack scroll-region">
                 <button class="nav-item active" data-view="overview"><i class="fas fa-grid-2"></i><span>Overview</span></button>
                 <button class="nav-item" data-view="canvas"><i class="fas fa-object-group"></i><span>Canvas</span></button>
                 <button class="nav-item" data-view="chat"><i class="fas fa-comments"></i><span>Gateway Chat</span></button>
                 <button class="nav-item" data-view="tasks"><i class="fas fa-list-check"></i><span>Queue</span></button>
                 <button class="nav-item" data-view="skills"><i class="fas fa-wand-magic-sparkles"></i><span>Skills</span></button>
                 <button class="nav-item" data-view="services"><i class="fas fa-cubes"></i><span>Services</span></button>
+                <button class="nav-item" data-view="data-home"><i class="fas fa-folder-tree"></i><span>Data Home</span></button>
                 <button class="nav-item" data-view="memory"><i class="fas fa-brain"></i><span>Memory</span></button>
                 <button class="nav-item" data-view="logs"><i class="fas fa-wave-square"></i><span>Logs</span></button>
                 <button class="nav-item" data-view="api"><i class="fas fa-flask"></i><span>API Lab</span></button>
@@ -162,34 +163,13 @@
                     <div>
                         <div class="eyebrow">Live Workspace</div>
                         <h3>Monitor OrcBot in one place and inspect what each subsystem is doing.</h3>
+                        <p class="canvas-subtitle">The canvas is the operator view: bounded panels, live state, and internal scroll inside each panel instead of one long page.</p>
                     </div>
                     <div class="canvas-actions">
                         <button class="btn ghost" id="canvasCompactBtn">Compact</button>
                         <button class="btn ghost" id="canvasResetBtn">Reset Layout</button>
                     </div>
                 </div>
-                <article class="panel canvas-explainer">
-                    <div class="panel-head">
-                        <div>
-                            <div class="eyebrow">Canvas Role</div>
-                            <h3>Not a separate feature, a live control surface</h3>
-                        </div>
-                    </div>
-                    <div class="detail-stack compact-stack three-up">
-                        <article class="detail-card">
-                            <div class="mini-label">Observe</div>
-                            <div>Follow queue activity, recent events, and conversations without jumping across pages.</div>
-                        </article>
-                        <article class="detail-card">
-                            <div class="mini-label">Inspect</div>
-                            <div>Open service snapshots and API results in the inspector to understand runtime state.</div>
-                        </article>
-                        <article class="detail-card">
-                            <div class="mini-label">Bridge</div>
-                            <div>External A2UI clients can use <code>window.a2uiGatewayBridge</code> to feed the same workspace.</div>
-                        </article>
-                    </div>
-                </article>
                 <div class="ops-canvas" id="opsCanvas">
                     <section class="canvas-panel emphasis" data-panel="command">
                         <div class="canvas-panel-head"><span>Command Deck</span><button class="icon-btn" data-canvas-action="focus-chat"><i class="fas fa-arrow-up-right-from-square"></i></button></div>
@@ -303,6 +283,50 @@
                 </div>
             </section>
 
+            <section class="content view" id="view-data-home">
+                <div class="workspace-grid two-up data-home-layout">
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
+                            <div><div class="eyebrow">Browser</div><h3>Managed .orcbot directory</h3></div>
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeUpBtn">Up</button>
+                                <button class="btn ghost small" id="dataHomeRootBtn">Root</button>
+                                <button class="btn ghost small" id="refreshDataHomeBtn">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="detail-stack compact-list data-home-summary" id="dataHomeSummary"></div>
+                        <div class="data-home-breadcrumbs" id="dataHomeBreadcrumbs"></div>
+                        <div class="data-home-toolbar">
+                            <input id="dataHomePathInput" class="field-input" placeholder="folder path within data home">
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeBrowseBtn">Browse</button>
+                                <button class="btn ghost small" id="dataHomeCreateDirBtn">New Folder</button>
+                            </div>
+                        </div>
+                        <div class="data-home-tree scroll-region" id="dataHomeTree"></div>
+                    </article>
+                    <article class="panel panel-tall">
+                        <div class="panel-head">
+                            <div><div class="eyebrow">Editor</div><h3 id="dataHomeEditorTitle">Select a file or folder</h3></div>
+                            <div class="inline-actions">
+                                <button class="btn ghost small" id="dataHomeNewFileBtn">New File</button>
+                                <button class="btn ghost small" id="dataHomeRenameBtn">Rename</button>
+                                <button class="btn ghost small" id="dataHomeDeleteBtn">Delete</button>
+                            </div>
+                        </div>
+                        <div class="compose-stack">
+                            <input id="dataHomeFilePath" class="field-input mono" placeholder="relative file path">
+                            <textarea id="dataHomeEditor" class="text-area code-input data-home-editor" rows="18" placeholder="Select a text file to edit its contents."></textarea>
+                            <div class="inline-actions">
+                                <button class="btn primary" id="dataHomeSaveBtn">Save File</button>
+                                <button class="btn ghost" id="dataHomeInspectBtn">Inspect Selection</button>
+                            </div>
+                            <div class="stack-list compact-list scroll-region" id="dataHomeMeta"></div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
             <section class="content view" id="view-memory">
                 <div class="workspace-grid two-up">
                     <article class="panel">
@@ -368,11 +392,11 @@
                 <div class="workspace-grid two-up">
                     <article class="panel">
                         <div class="panel-head"><div><div class="eyebrow">Gateway Auth</div><h3>Token and connection state</h3></div></div>
-                        <div class="stack-list" id="securitySummary"></div>
+                        <div class="stack-list compact-list scroll-region" id="securitySummary"></div>
                     </article>
                     <article class="panel panel-tall">
-                        <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div>
-                        <div class="config-grid" id="configGrid"></div>
+                        <div class="panel-head"><div><div class="eyebrow">Safe Config</div><h3>Runtime configuration</h3></div><div class="inline-actions"><input id="configSearchInput" class="field-input compact wide-input" placeholder="filter config"><button class="btn ghost small" id="refreshConfigBtn">Refresh</button></div></div>
+                        <div class="config-grid compact-list scroll-region" id="configGrid"></div>
                     </article>
                 </div>
             </section>

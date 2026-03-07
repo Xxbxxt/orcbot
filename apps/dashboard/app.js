@@ -10,6 +10,13 @@
         skills: [],
         serviceSnapshots: new Map(),
         selectedSkill: null,
+        dataHomeSummary: null,
+        dataHomeTree: null,
+        dataHomeFile: null,
+        selectedDataHomePath: '',
+        selectedDataHomeType: 'directory',
+        selectedDataHomeEntry: null,
+        dataHomeBrowsePath: '',
         tasks: [],
         chatMessages: [],
         memoryItems: [],
@@ -31,6 +38,7 @@
         tasks: { eyebrow: 'Operations', title: 'Queue' },
         skills: { eyebrow: 'Capabilities', title: 'Skills' },
         services: { eyebrow: 'Runtime', title: 'Services' },
+        'data-home': { eyebrow: 'Administration', title: 'Data Home' },
         memory: { eyebrow: 'Context', title: 'Memory' },
         logs: { eyebrow: 'Observability', title: 'Logs' },
         api: { eyebrow: 'Diagnostics', title: 'API Lab' },
@@ -61,14 +69,19 @@
             'canvasInspector', 'chatThread', 'chatInput', 'chatClientId', 'chatSummary',
             'taskComposerText', 'taskComposerPriority', 'taskComposerLane', 'taskComposerSource',
             'taskComposerMeta', 'taskListView', 'servicesGrid', 'serviceDetailTitle', 'serviceDetail',
+            'dataHomeSummary', 'dataHomeBreadcrumbs', 'dataHomePathInput', 'dataHomeTree', 'dataHomeEditorTitle', 'dataHomeFilePath',
+            'dataHomeEditor', 'dataHomeMeta',
             'skillSearchInput', 'refreshSkillsBtn', 'skillsGrid', 'skillDetailTitle', 'skillDetail',
+            'configSearchInput',
             'memorySearchInput', 'memorySearchType', 'memorySearchLimit', 'memoryTimeline',
             'logLevel', 'logSearch', 'logSurface', 'apiMethod', 'apiEndpointInput', 'apiPayload',
             'apiResponse', 'endpointCatalog', 'securitySummary', 'configGrid', 'toastStack',
             'refreshBtn', 'newTaskBtn', 'quickTaskSend', 'canvasCompactBtn', 'canvasResetBtn',
             'canvasEventClear', 'chatSendBtn', 'clearChatBtn', 'taskComposerSubmit', 'refreshTasksBtn',
             'memorySearchBtn', 'refreshMemoryBtn', 'refreshLogsBtn', 'runApiBtn', 'loadCapabilitiesBtn',
-            'refreshConfigBtn', 'clearEventsBtn'
+            'refreshConfigBtn', 'clearEventsBtn', 'refreshDataHomeBtn', 'dataHomeUpBtn', 'dataHomeRootBtn', 'dataHomeBrowseBtn',
+            'dataHomeCreateDirBtn', 'dataHomeNewFileBtn', 'dataHomeRenameBtn', 'dataHomeDeleteBtn',
+            'dataHomeSaveBtn', 'dataHomeInspectBtn'
         ].forEach((id) => {
             elements[id] = document.getElementById(id);
         });
@@ -117,6 +130,20 @@
         elements.canvasResetBtn?.addEventListener('click', resetCanvas);
         elements.refreshSkillsBtn?.addEventListener('click', loadSkills);
         elements.skillSearchInput?.addEventListener('input', renderSkills);
+        elements.configSearchInput?.addEventListener('input', renderConfig);
+        elements.refreshDataHomeBtn?.addEventListener('click', () => loadDataHome(elements.dataHomePathInput?.value || state.dataHomeBrowsePath || ''));
+        elements.dataHomeUpBtn?.addEventListener('click', () => loadDataHome(parentRelativePath(state.dataHomeBrowsePath || '')));
+        elements.dataHomeRootBtn?.addEventListener('click', () => loadDataHome(''));
+        elements.dataHomeBrowseBtn?.addEventListener('click', browseDataHomePath);
+        elements.dataHomeCreateDirBtn?.addEventListener('click', createDataHomeDirectory);
+        elements.dataHomeNewFileBtn?.addEventListener('click', createDataHomeFile);
+        elements.dataHomeRenameBtn?.addEventListener('click', renameDataHomeSelection);
+        elements.dataHomeDeleteBtn?.addEventListener('click', deleteDataHomeSelection);
+        elements.dataHomeSaveBtn?.addEventListener('click', saveDataHomeFile);
+        elements.dataHomeInspectBtn?.addEventListener('click', inspectDataHomeSelection);
+        elements.dataHomePathInput?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') browseDataHomePath();
+        });
 
         elements.logLevel?.addEventListener('change', loadLogs);
         elements.logSearch?.addEventListener('keydown', (event) => {
@@ -135,6 +162,7 @@
             loadServices(),
             loadTasks(),
             loadSkills(),
+            loadDataHome(state.dataHomeBrowsePath || ''),
             loadChatHistory(),
             loadMemory(),
             loadLogs(),
@@ -184,6 +212,61 @@
         }
         renderSkills();
         return state.skills;
+    }
+
+    async function loadDataHome(requestedPath = '') {
+        const normalizedPath = normalizeRelativePath(requestedPath);
+        const params = new URLSearchParams({ depth: '1' });
+        if (normalizedPath) params.set('path', normalizedPath);
+
+        const [summary, treeResponse] = await Promise.all([
+            apiFetch('/data-home/summary'),
+            apiFetch(`/data-home/tree?${params.toString()}`)
+        ]);
+
+        state.dataHomeSummary = summary;
+        state.dataHomeTree = treeResponse.entry || null;
+        state.dataHomeBrowsePath = treeResponse.requestedPath || '';
+        if (elements.dataHomePathInput) {
+            elements.dataHomePathInput.value = state.dataHomeBrowsePath;
+        }
+
+        if (!state.selectedDataHomePath && state.dataHomeTree) {
+            state.selectedDataHomePath = state.dataHomeTree.path || '';
+            state.selectedDataHomeType = state.dataHomeTree.type || 'directory';
+            state.selectedDataHomeEntry = state.dataHomeTree;
+        } else if (state.selectedDataHomePath) {
+            state.selectedDataHomeEntry = findDataHomeEntry(state.dataHomeTree, state.selectedDataHomePath)
+                || (state.selectedDataHomeType === 'directory' ? state.dataHomeTree : state.selectedDataHomeEntry);
+        }
+
+        renderDataHome();
+        return treeResponse;
+    }
+
+    async function loadDataHomeFile(filePath) {
+        const normalizedPath = normalizeRelativePath(filePath);
+        if (!normalizedPath) {
+            toast('A file path is required', 'warn');
+            return null;
+        }
+
+        const response = await apiFetch(`/data-home/file?path=${encodeURIComponent(normalizedPath)}`);
+        state.dataHomeFile = response;
+        state.selectedDataHomePath = response.path;
+        state.selectedDataHomeType = 'file';
+        state.selectedDataHomeEntry = {
+            path: response.path,
+            name: basename(response.path),
+            type: 'file',
+            size: response.size,
+            modifiedAt: response.modifiedAt,
+            protected: false
+        };
+
+        renderDataHome();
+        inspectPayload(response, `data-home:file:${response.path}`);
+        return response;
     }
 
     async function loadTasks() {
@@ -470,6 +553,137 @@
         renderSkillDetail(state.skills.find((skill) => skill.name === state.selectedSkill) || null);
     }
 
+    function renderDataHome() {
+        renderDataHomeSummary();
+        renderDataHomeBreadcrumbs();
+        renderDataHomeTree();
+        renderDataHomeEditor();
+    }
+
+    function renderDataHomeBreadcrumbs() {
+        const currentPath = normalizeRelativePath(state.dataHomeBrowsePath || '');
+        const segments = currentPath ? currentPath.split('/') : [];
+        const crumbs = [{ label: 'root', path: '' }];
+        let runningPath = '';
+
+        segments.forEach((segment) => {
+            runningPath = runningPath ? `${runningPath}/${segment}` : segment;
+            crumbs.push({ label: segment, path: runningPath });
+        });
+
+        elements.dataHomeBreadcrumbs.innerHTML = crumbs.map((crumb, index) => `
+            <button class="breadcrumb-chip ${crumb.path === currentPath ? 'active' : ''}" data-data-home-nav="${escapeAttribute(crumb.path)}">${escapeHtml(crumb.label)}</button>
+            ${index < crumbs.length - 1 ? '<span class="breadcrumb-separator">/</span>' : ''}
+        `).join('');
+
+        document.querySelectorAll('[data-data-home-nav]').forEach((node) => {
+            node.addEventListener('click', () => loadDataHome(node.dataset.dataHomeNav || ''));
+        });
+    }
+
+    function renderDataHomeSummary() {
+        const summary = state.dataHomeSummary;
+        if (!summary) {
+            elements.dataHomeSummary.innerHTML = emptyState('Data home summary unavailable');
+            return;
+        }
+
+        const rootChildren = summary.tree?.children || [];
+        const fileCount = rootChildren.filter((entry) => entry.type === 'file').length;
+        const directoryCount = rootChildren.filter((entry) => entry.type === 'directory').length;
+
+        elements.dataHomeSummary.innerHTML = renderKeyValueRows([
+            { label: 'Root', hint: 'managed workspace root', value: summary.root, mono: true },
+            { label: 'Visible directories', hint: 'top-level directory count', value: String(directoryCount), mono: false },
+            { label: 'Visible files', hint: 'top-level file count', value: String(fileCount), mono: false },
+            { label: 'Protected patterns', hint: 'cannot be edited through gateway', value: (summary.protectedPatterns || []).join(', '), mono: true }
+        ]);
+    }
+
+    function renderDataHomeTree() {
+        if (!state.dataHomeTree) {
+            elements.dataHomeTree.innerHTML = emptyState('No data-home tree available');
+            return;
+        }
+
+        const currentDirectory = state.dataHomeTree;
+        const parentPath = parentRelativePath(currentDirectory.path || '');
+        const entries = Array.isArray(currentDirectory.children) ? currentDirectory.children : [];
+
+        elements.dataHomeTree.innerHTML = `
+            <div class="data-home-directory-head">
+                <div>
+                    <div class="mini-label">Current directory</div>
+                    <div class="mono">${escapeHtml(currentDirectory.path || '(root)')}</div>
+                </div>
+                <div class="mini-label">${escapeHtml(String(entries.length))} items</div>
+            </div>
+            <div class="data-home-directory-list">
+                <div class="data-home-list-header">
+                    <span>Name</span>
+                    <span>Type</span>
+                    <span>Size</span>
+                    <span>Modified</span>
+                </div>
+                ${currentDirectory.path ? `
+                    <button class="data-home-row data-home-row-parent" data-data-home-path="${escapeAttribute(parentPath)}" data-data-home-type="directory">
+                        <span class="data-home-row-name"><i class="fas fa-arrow-up"></i><strong>..</strong></span>
+                        <span>directory</span>
+                        <span>-</span>
+                        <span>Parent directory</span>
+                    </button>
+                ` : ''}
+                ${entries.length ? entries.map((entry) => renderDirectoryEntry(entry)).join('') : `<div class="data-home-list-empty">${emptyState('This directory is empty')}</div>`}
+            </div>
+        `;
+
+        document.querySelectorAll('[data-data-home-path]').forEach((node) => {
+            node.addEventListener('click', async () => {
+                const entryPath = node.dataset.dataHomePath || '';
+                const entryType = node.dataset.dataHomeType || 'file';
+                if (entryType === 'directory') {
+                    state.selectedDataHomePath = entryPath;
+                    state.selectedDataHomeType = 'directory';
+                    state.selectedDataHomeEntry = findDataHomeEntry(state.dataHomeTree, entryPath) || state.selectedDataHomeEntry;
+                    await loadDataHome(entryPath);
+                    return;
+                }
+                await loadDataHomeFile(entryPath);
+            });
+        });
+    }
+
+    function renderDataHomeEditor() {
+        const selectedPath = state.selectedDataHomePath || '';
+        const selectedEntry = state.selectedDataHomeEntry;
+        const isFileSelection = state.selectedDataHomeType === 'file';
+        const filePath = state.dataHomeFile?.path || (isFileSelection ? selectedPath : '');
+        const fileContent = state.dataHomeFile?.path === filePath ? state.dataHomeFile.content || '' : '';
+        const directoryOverview = selectedEntry && selectedEntry.type === 'directory'
+            ? describeDirectorySelection(selectedEntry)
+            : 'Select a text file to edit its contents.';
+
+        elements.dataHomeEditorTitle.textContent = isFileSelection
+            ? (filePath || 'File editor')
+            : `Directory ${selectedPath || '(root)'}`;
+        elements.dataHomeFilePath.value = filePath;
+        elements.dataHomeEditor.value = isFileSelection ? fileContent : directoryOverview;
+        elements.dataHomeEditor.readOnly = !isFileSelection;
+        elements.dataHomeSaveBtn.disabled = !isFileSelection;
+
+        const rows = selectedEntry ? [
+            { label: 'Path', hint: 'relative to data home', value: selectedEntry.path || '(root)', mono: true },
+            { label: 'Type', hint: 'entry kind', value: selectedEntry.type || '-', mono: false },
+            { label: 'Modified', hint: 'last write timestamp', value: selectedEntry.modifiedAt || state.dataHomeFile?.modifiedAt || '-', mono: false },
+            { label: 'Size', hint: 'file payload size', value: selectedEntry.type === 'file' ? formatBytes(selectedEntry.size || 0) : '-', mono: false },
+            { label: 'Protected', hint: 'gateway protection boundary', value: String(!!selectedEntry.protected), mono: false }
+        ] : [
+            { label: 'Selection', hint: 'current data-home focus', value: 'None', mono: false }
+        ];
+
+        elements.dataHomeMeta.innerHTML = renderKeyValueRows(rows);
+    }
+
     function renderSkillDetail(skill) {
         if (!skill) {
             elements.skillDetailTitle.textContent = 'Select a skill';
@@ -591,13 +805,22 @@
     }
 
     function renderConfig() {
-        const entries = Object.entries(state.config || {}).sort(([left], [right]) => left.localeCompare(right));
-        elements.configGrid.innerHTML = entries.length ? entries.map(([key, value]) => `
-            <article class="config-card">
-                <div class="mini-label">${escapeHtml(key)}</div>
-                <div class="mono">${escapeHtml(formatValue(value))}</div>
-            </article>
-        `).join('') : emptyState('No safe config exposed');
+        const query = (elements.configSearchInput?.value || '').trim().toLowerCase();
+        const entries = Object.entries(state.config || {})
+            .sort(([left], [right]) => left.localeCompare(right))
+            .filter(([key, value]) => {
+                if (!query) return true;
+                return key.toLowerCase().includes(query) || formatValue(value).toLowerCase().includes(query);
+            });
+
+        elements.configGrid.innerHTML = entries.length
+            ? renderKeyValueRows(entries.map(([key, value]) => ({
+                label: key,
+                hint: configHintForKey(key),
+                value: formatValue(value),
+                mono: true
+            })))
+            : emptyState(query ? 'No config entries matched the current filter' : 'No safe config exposed');
     }
 
     function renderSecurity() {
@@ -616,12 +839,12 @@
             { label: 'Plugin deny list', value: Array.isArray(security.pluginDenyList) && security.pluginDenyList.length ? security.pluginDenyList.join(', ') : 'empty' }
         ];
 
-        elements.securitySummary.innerHTML = blocks.map((block) => `
-            <article class="stack-card">
-                <div class="mini-label">${escapeHtml(block.label)}</div>
-                <div>${escapeHtml(block.value)}</div>
-            </article>
-        `).join('');
+        elements.securitySummary.innerHTML = renderKeyValueRows(blocks.map((block) => ({
+            label: block.label,
+            hint: securityHintForLabel(block.label),
+            value: block.value,
+            mono: false
+        })));
     }
 
     function renderEvents() {
@@ -875,6 +1098,124 @@
         await loadSkills();
     }
 
+    async function browseDataHomePath() {
+        await loadDataHome(elements.dataHomePathInput?.value || '');
+    }
+
+    async function createDataHomeDirectory() {
+        const basePath = getDataHomeDirectoryContext();
+        const suggested = joinRelativePath(basePath, 'new-folder');
+        const targetPath = window.prompt('New folder path', suggested);
+        if (!targetPath) return;
+
+        await apiFetch('/data-home/directory', {
+            method: 'POST',
+            body: JSON.stringify({ path: targetPath })
+        });
+        toast(`Created folder ${normalizeRelativePath(targetPath)}`);
+        await loadDataHome(parentRelativePath(normalizeRelativePath(targetPath)));
+    }
+
+    function createDataHomeFile() {
+        const basePath = getDataHomeDirectoryContext();
+        const targetPath = window.prompt('New file path', joinRelativePath(basePath, 'notes.txt'));
+        if (!targetPath) return;
+
+        const normalizedPath = normalizeRelativePath(targetPath);
+        state.selectedDataHomePath = normalizedPath;
+        state.selectedDataHomeType = 'file';
+        state.selectedDataHomeEntry = {
+            path: normalizedPath,
+            name: basename(normalizedPath),
+            type: 'file',
+            size: 0,
+            modifiedAt: null,
+            protected: false
+        };
+        state.dataHomeFile = { path: normalizedPath, content: '', size: 0, modifiedAt: null };
+        renderDataHome();
+        elements.dataHomeEditor?.focus();
+    }
+
+    async function saveDataHomeFile() {
+        const filePath = normalizeRelativePath(elements.dataHomeFilePath?.value || '');
+        if (!filePath) {
+            toast('A file path is required before saving', 'warn');
+            return;
+        }
+
+        const content = elements.dataHomeEditor?.value || '';
+        const response = await apiFetch('/data-home/file', {
+            method: 'PUT',
+            body: JSON.stringify({ path: filePath, content })
+        });
+
+        toast(`Saved ${response.path}`);
+        await loadDataHome(parentRelativePath(filePath));
+        await loadDataHomeFile(filePath);
+    }
+
+    async function renameDataHomeSelection() {
+        const currentPath = getDataHomeSelectedPath();
+        if (!currentPath) {
+            toast('Select a file or folder first', 'warn');
+            return;
+        }
+
+        const nextPath = window.prompt('Rename or move to', currentPath);
+        if (!nextPath || normalizeRelativePath(nextPath) === currentPath) return;
+
+        const response = await apiFetch('/data-home/rename', {
+            method: 'POST',
+            body: JSON.stringify({ fromPath: currentPath, toPath: nextPath })
+        });
+
+        toast(`Renamed ${response.fromPath} to ${response.toPath}`);
+        state.selectedDataHomePath = response.toPath;
+        state.selectedDataHomeType = response.type;
+        state.dataHomeFile = response.type === 'file' ? { path: response.toPath, content: elements.dataHomeEditor?.value || '' } : null;
+        await loadDataHome(parentRelativePath(response.toPath));
+        if (response.type === 'file') {
+            await loadDataHomeFile(response.toPath);
+        } else {
+            state.selectedDataHomeEntry = findDataHomeEntry(state.dataHomeTree, response.toPath) || null;
+            renderDataHome();
+        }
+    }
+
+    async function deleteDataHomeSelection() {
+        const currentPath = getDataHomeSelectedPath();
+        if (!currentPath) {
+            toast('Select a file or folder first', 'warn');
+            return;
+        }
+        if (!window.confirm(`Delete ${currentPath}?`)) return;
+
+        const response = await apiFetch(`/data-home/entry?path=${encodeURIComponent(currentPath)}`, {
+            method: 'DELETE'
+        });
+
+        toast(`Deleted ${response.path}`);
+        const parentPath = parentRelativePath(currentPath);
+        state.selectedDataHomePath = parentPath;
+        state.selectedDataHomeType = 'directory';
+        state.selectedDataHomeEntry = null;
+        state.dataHomeFile = null;
+        await loadDataHome(parentPath);
+    }
+
+    function inspectDataHomeSelection() {
+        if (state.dataHomeFile) {
+            inspectPayload(state.dataHomeFile, `data-home:file:${state.dataHomeFile.path}`);
+            return;
+        }
+        if (state.selectedDataHomeEntry) {
+            inspectPayload(state.selectedDataHomeEntry, `data-home:entry:${state.selectedDataHomeEntry.path || '(root)'}`);
+            return;
+        }
+        toast('No data-home selection to inspect', 'warn');
+    }
+
     function connectWebSocket() {
         if (state.ws) {
             state.ws.close();
@@ -945,8 +1286,20 @@
             return;
         }
 
-        if (message.type === 'chat') {
+        if (message.type === 'chat' || message.type === 'chat:message') {
             state.chatMessages.push(normalizeChatMessage(message));
+            renderChat();
+            return;
+        }
+
+        if (message.type === 'chat:file') {
+            state.chatMessages.push({
+                id: message.messageId || `chat-file-${Date.now()}`,
+                role: 'assistant',
+                content: `[File] ${message.filename || message.name || message.path || 'attachment'}`,
+                timestamp: message.timestamp || new Date().toISOString(),
+                metadata: message.metadata || { kind: 'file', path: message.path }
+            });
             renderChat();
             return;
         }
@@ -1134,16 +1487,107 @@
         return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
     }
 
+    function renderDirectoryEntry(entry) {
+        const isActive = (entry.path || '') === (state.selectedDataHomePath || '');
+        const isDirectory = entry.type === 'directory';
+        const icon = isDirectory ? 'fa-folder' : 'fa-file-lines';
+        const size = isDirectory ? '-' : formatBytes(entry.size || 0);
+        const modified = entry.modifiedAt ? formatTimestamp(entry.modifiedAt) : '-';
+
+        return `
+            <button class="data-home-row ${isActive ? 'active' : ''}" data-data-home-path="${escapeAttribute(entry.path || '')}" data-data-home-type="${escapeAttribute(entry.type || 'file')}">
+                <span class="data-home-row-name">
+                    <i class="fas ${icon}"></i>
+                    <strong>${escapeHtml(entry.name || '(root)')}</strong>
+                    ${entry.protected ? '<span class="tag">protected</span>' : ''}
+                </span>
+                <span>${escapeHtml(entry.type || '-')}</span>
+                <span>${escapeHtml(size)}</span>
+                <span>${escapeHtml(modified)}</span>
+            </button>
+        `;
+    }
+
+    function findDataHomeEntry(entry, targetPath) {
+        if (!entry) return null;
+        if ((entry.path || '') === (targetPath || '')) return entry;
+        if (!Array.isArray(entry.children)) return null;
+        for (const child of entry.children) {
+            const match = findDataHomeEntry(child, targetPath);
+            if (match) return match;
+        }
+        return null;
+    }
+
+    function describeDirectorySelection(entry) {
+        const children = Array.isArray(entry.children) ? entry.children : [];
+        const folders = children.filter((child) => child.type === 'directory');
+        const files = children.filter((child) => child.type === 'file');
+        const previewLines = children.slice(0, 12).map((child) => {
+            const prefix = child.type === 'directory' ? '[dir]' : '[file]';
+            const size = child.type === 'file' ? ` ${formatBytes(child.size || 0)}` : '';
+            const protectedLabel = child.protected ? ' protected' : '';
+            return `${prefix} ${child.name}${size}${protectedLabel}`;
+        });
+
+        return [
+            `Directory: ${entry.path || '(root)'}`,
+            `Folders: ${folders.length}`,
+            `Files: ${files.length}`,
+            '',
+            children.length ? 'Visible entries:' : 'This directory is empty.',
+            ...previewLines,
+            children.length > 12 ? '' : '',
+            children.length > 12 ? `...and ${children.length - 12} more entries` : '',
+            '',
+            'Select a file from the tree to edit it, or use New File / New Folder to create content here.'
+        ].filter(Boolean).join('\n');
+    }
+
     function renderMetricPairs(metrics) {
         const pairs = Object.entries(metrics || {});
         if (!pairs.length) return '<div class="mini-label">No metrics</div>';
         return pairs.map(([key, value]) => `<div><span class="mini-label">${escapeHtml(key)}</span> ${escapeHtml(formatValue(value))}</div>`).join('');
     }
 
+    function renderKeyValueRows(rows) {
+        return rows.map((row) => `
+            <article class="kv-row">
+                <div class="kv-key">
+                    <div class="mini-label">${escapeHtml(row.label)}</div>
+                    <div class="eyebrow">${escapeHtml(row.hint || 'runtime field')}</div>
+                </div>
+                <div class="kv-value ${row.mono ? 'mono' : ''}">${formatMultiline(row.value || '-')}</div>
+            </article>
+        `).join('');
+    }
+
     function formatValue(value) {
         if (value === null || value === undefined || value === '') return '-';
         if (typeof value === 'object') return prettyJson(value);
         return String(value);
+    }
+
+    function configHintForKey(key) {
+        const normalized = String(key || '').toLowerCase();
+        if (normalized.includes('apikey') || normalized.includes('token') || normalized.includes('secret')) return 'credential placeholder';
+        if (normalized.includes('model')) return 'llm selection';
+        if (normalized.includes('provider')) return 'provider routing';
+        if (normalized.includes('port') || normalized.includes('host')) return 'network setting';
+        if (normalized.includes('path') || normalized.includes('dir')) return 'filesystem setting';
+        if (normalized.includes('enabled')) return 'feature toggle';
+        return 'runtime field';
+    }
+
+    function securityHintForLabel(label) {
+        const normalized = String(label || '').toLowerCase();
+        if (normalized.includes('auth')) return 'gateway access';
+        if (normalized.includes('token')) return 'authentication status';
+        if (normalized.includes('safe mode')) return 'execution safety';
+        if (normalized.includes('auto execute')) return 'command policy';
+        if (normalized.includes('allow')) return 'explicit allow policy';
+        if (normalized.includes('deny')) return 'explicit block policy';
+        return 'security field';
     }
 
     function prettyJson(value) {
@@ -1185,6 +1629,49 @@
         if (normalized === 'warning') return 'state-warning';
         if (normalized === 'degraded') return 'state-degraded';
         return 'state-idle';
+    }
+
+    function normalizeRelativePath(value) {
+        return String(value || '')
+            .trim()
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '')
+            .replace(/\/+/g, '/');
+    }
+
+    function basename(relativePath) {
+        const normalized = normalizeRelativePath(relativePath);
+        if (!normalized) return '';
+        const segments = normalized.split('/');
+        return segments[segments.length - 1];
+    }
+
+    function parentRelativePath(relativePath) {
+        const normalized = normalizeRelativePath(relativePath);
+        if (!normalized || !normalized.includes('/')) return '';
+        return normalized.split('/').slice(0, -1).join('/');
+    }
+
+    function joinRelativePath(basePath, leaf) {
+        const base = normalizeRelativePath(basePath);
+        const next = normalizeRelativePath(leaf);
+        if (!base) return next;
+        if (!next) return base;
+        return `${base}/${next}`;
+    }
+
+    function getDataHomeDirectoryContext() {
+        if (state.selectedDataHomeType === 'directory') {
+            return normalizeRelativePath(state.selectedDataHomePath || state.dataHomeBrowsePath || '');
+        }
+        const filePath = normalizeRelativePath(elements.dataHomeFilePath?.value || state.selectedDataHomePath || '');
+        return parentRelativePath(filePath);
+    }
+
+    function getDataHomeSelectedPath() {
+        const filePath = normalizeRelativePath(elements.dataHomeFilePath?.value || '');
+        if (filePath) return filePath;
+        return normalizeRelativePath(state.selectedDataHomePath || '');
     }
 
     function scrollToBottom(node) {

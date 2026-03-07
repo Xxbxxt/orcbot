@@ -35,6 +35,7 @@ export class GatewayServer {
     private gatewayConfig: GatewayConfig;
     private clients: Set<WebSocket> = new Set();
     private requestBuckets: Map<string, { count: number; windowStart: number }> = new Map();
+    private static readonly DATA_HOME_TEXT_LIMIT_BYTES = 1_000_000;
 
     constructor(agent: Agent, config: ConfigManager, gatewayConfig: Partial<GatewayConfig> = {}) {
         this.agent = agent;
@@ -178,7 +179,7 @@ export class GatewayServer {
     }
 
     private getMemoryStats(): { totalMemories: number; fileSize: number } {
-        const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
+        const dataDir = this.getDataHome();
         const memoryPath = path.join(dataDir, 'memory.json');
 
         if (!fs.existsSync(memoryPath)) {
@@ -195,6 +196,140 @@ export class GatewayServer {
         } catch {
             return { totalMemories: 0, fileSize: 0 };
         }
+    }
+
+    private getDataHome(): string {
+        return path.resolve(this.config.getDataHome?.() || this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot'));
+    }
+
+    private isProtectedDataHomePath(relativePath: string): boolean {
+        const normalized = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+        if (!normalized) return false;
+        return normalized === '.env'
+            || normalized.endsWith('/.env')
+            || normalized === 'orcbot.lock'
+            || normalized.endsWith('/orcbot.lock')
+            || normalized.endsWith('.pid');
+    }
+
+    private resolveDataHomeTarget(relativePath: string = ''): { root: string; absolutePath: string; relativePath: string } {
+        const root = this.getDataHome();
+        const requested = String(relativePath || '').trim();
+        if (path.isAbsolute(requested)) {
+            throw new Error('Absolute paths are not allowed');
+        }
+
+        const absolutePath = path.resolve(root, requested || '.');
+        const relative = path.relative(root, absolutePath);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) {
+            throw new Error('Path escapes the OrcBot data directory');
+        }
+
+        const normalizedRelative = (relative || '').replace(/\\/g, '/');
+        if (this.isProtectedDataHomePath(normalizedRelative)) {
+            throw new Error('Requested path is protected');
+        }
+
+        return {
+            root,
+            absolutePath,
+            relativePath: normalizedRelative
+        };
+    }
+
+    private deleteDataHomeEntry(relativePath: string): { path: string; type: 'file' | 'directory' } {
+        const target = this.resolveDataHomeTarget(relativePath);
+        if (!target.relativePath) {
+            throw new Error('Root data directory cannot be deleted');
+        }
+        if (!fs.existsSync(target.absolutePath)) {
+            throw new Error('Path not found');
+        }
+
+        const stats = fs.statSync(target.absolutePath);
+        if (stats.isDirectory()) {
+            fs.rmSync(target.absolutePath, { recursive: true, force: false });
+            return { path: target.relativePath, type: 'directory' };
+        }
+
+        fs.unlinkSync(target.absolutePath);
+        return { path: target.relativePath, type: 'file' };
+    }
+
+    private renameDataHomeEntry(fromPath: string, toPath: string): { fromPath: string; toPath: string; type: 'file' | 'directory' } {
+        const source = this.resolveDataHomeTarget(fromPath);
+        const destination = this.resolveDataHomeTarget(toPath);
+
+        if (!source.relativePath) {
+            throw new Error('Root data directory cannot be renamed');
+        }
+        if (!destination.relativePath) {
+            throw new Error('Destination path is required');
+        }
+        if (!fs.existsSync(source.absolutePath)) {
+            throw new Error('Source path not found');
+        }
+        if (fs.existsSync(destination.absolutePath)) {
+            throw new Error('Destination path already exists');
+        }
+
+        fs.mkdirSync(path.dirname(destination.absolutePath), { recursive: true });
+        const stats = fs.statSync(source.absolutePath);
+        fs.renameSync(source.absolutePath, destination.absolutePath);
+
+        return {
+            fromPath: source.relativePath,
+            toPath: destination.relativePath,
+            type: stats.isDirectory() ? 'directory' : 'file'
+        };
+    }
+
+    private describeDataHomeEntry(absolutePath: string, relativePath: string, depth: number): any {
+        const stats = fs.statSync(absolutePath);
+        const isDirectory = stats.isDirectory();
+        const entry: any = {
+            name: relativePath ? path.basename(absolutePath) : path.basename(this.getDataHome()),
+            path: relativePath,
+            type: isDirectory ? 'directory' : 'file',
+            size: isDirectory ? undefined : stats.size,
+            modifiedAt: stats.mtime.toISOString(),
+            protected: this.isProtectedDataHomePath(relativePath)
+        };
+
+        if (isDirectory && depth > 0 && !entry.protected) {
+            const children = fs.readdirSync(absolutePath, { withFileTypes: true })
+                .map((child) => {
+                    const childRelative = [relativePath, child.name].filter(Boolean).join('/');
+                    const childAbsolute = path.join(absolutePath, child.name);
+                    const childProtected = this.isProtectedDataHomePath(childRelative);
+                    if (childProtected) {
+                        return {
+                            name: child.name,
+                            path: childRelative,
+                            type: child.isDirectory() ? 'directory' : 'file',
+                            protected: true
+                        };
+                    }
+                    return this.describeDataHomeEntry(childAbsolute, childRelative, depth - 1);
+                })
+                .sort((left, right) => {
+                    if (left.type !== right.type) return left.type === 'directory' ? -1 : 1;
+                    return String(left.name).localeCompare(String(right.name));
+                });
+            entry.children = children;
+        }
+
+        return entry;
+    }
+
+    private getDataHomeSummary() {
+        const root = this.getDataHome();
+        const tree = this.describeDataHomeEntry(root, '', 1);
+        return {
+            root,
+            protectedPatterns: ['.env', 'orcbot.lock', '*.pid'],
+            tree
+        };
     }
 
     private getConnectionsSummary() {
@@ -330,6 +465,15 @@ export class GatewayServer {
                 endpoints: ['/api/memory', '/api/memory/stats', '/api/memory/search']
             },
             {
+                id: 'data-home',
+                title: 'Data Home',
+                category: 'data',
+                status: 'healthy',
+                description: 'Managed view over ~/.orcbot files including bootstrap docs, memory artifacts, tools, and workspace folders.',
+                metrics: { root: this.getDataHome() },
+                endpoints: ['/api/data-home/summary', '/api/data-home/tree', '/api/data-home/file', '/api/data-home/directory', '/api/data-home/rename', '/api/data-home/entry']
+            },
+            {
                 id: 'skills',
                 title: 'Skills',
                 category: 'extensions',
@@ -391,6 +535,7 @@ export class GatewayServer {
                 stats: this.getMemoryStats(),
                 recent: this.agent.memory?.getRecentContext(20) || []
             },
+            'data-home': this.getDataHomeSummary(),
             skills: {
                 skills: this.agent.skills.getAllSkills().map(s => ({
                     name: s.name,
@@ -566,6 +711,7 @@ export class GatewayServer {
             api: {
                 status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
                 dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
+                dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
                 security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
@@ -655,6 +801,126 @@ export class GatewayServer {
             const snapshot = this.getServiceSnapshot(req.params.id);
             if (!snapshot) return res.status(404).json({ error: 'Service not found' });
             res.json(snapshot);
+        });
+
+        // ===== ORCBOT DATA HOME =====
+        router.get('/data-home/summary', (_req: Request, res: Response) => {
+            res.json(this.getDataHomeSummary());
+        });
+
+        router.get('/data-home/tree', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '');
+                const depth = Math.max(0, Math.min(5, parseInt(String(req.query.depth || '2'), 10) || 2));
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'Path not found' });
+                }
+                res.json({
+                    root: this.getDataHome(),
+                    requestedPath: target.relativePath,
+                    entry: this.describeDataHomeEntry(target.absolutePath, target.relativePath, depth)
+                });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.get('/data-home/file', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                if (!fs.existsSync(target.absolutePath)) {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                const stats = fs.statSync(target.absolutePath);
+                if (!stats.isFile()) {
+                    return res.status(400).json({ error: 'Requested path is not a file' });
+                }
+                if (stats.size > GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES) {
+                    return res.status(413).json({ error: `File too large to read via gateway API (limit ${GatewayServer.DATA_HOME_TEXT_LIMIT_BYTES} bytes)` });
+                }
+                const content = fs.readFileSync(target.absolutePath, 'utf8');
+                res.json({
+                    root: this.getDataHome(),
+                    path: target.relativePath,
+                    size: stats.size,
+                    modifiedAt: stats.mtime.toISOString(),
+                    content
+                });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.put('/data-home/file', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.body?.path || '').trim();
+                const content = req.body?.content;
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path is required' });
+                }
+                if (typeof content !== 'string') {
+                    return res.status(400).json({ error: 'content must be a string' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                fs.mkdirSync(path.dirname(target.absolutePath), { recursive: true });
+                fs.writeFileSync(target.absolutePath, content, 'utf8');
+                const stats = fs.statSync(target.absolutePath);
+                res.json({ success: true, path: target.relativePath, size: stats.size, modifiedAt: stats.mtime.toISOString() });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.post('/data-home/directory', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.body?.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path is required' });
+                }
+                const target = this.resolveDataHomeTarget(requestedPath);
+                fs.mkdirSync(target.absolutePath, { recursive: true });
+                res.json({ success: true, path: target.relativePath });
+            } catch (error: any) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
+        router.post('/data-home/rename', (req: Request, res: Response) => {
+            try {
+                const fromPath = String(req.body?.fromPath || '').trim();
+                const toPath = String(req.body?.toPath || '').trim();
+                if (!fromPath || !toPath) {
+                    return res.status(400).json({ error: 'fromPath and toPath are required' });
+                }
+
+                const result = this.renameDataHomeEntry(fromPath, toPath);
+                res.json({ success: true, ...result });
+            } catch (error: any) {
+                const message = String(error?.message || error);
+                const status = message.includes('already exists') ? 409 : (message.includes('not found') ? 404 : 400);
+                res.status(status).json({ error: message });
+            }
+        });
+
+        router.delete('/data-home/entry', (req: Request, res: Response) => {
+            try {
+                const requestedPath = String(req.query.path || '').trim();
+                if (!requestedPath) {
+                    return res.status(400).json({ error: 'path query is required' });
+                }
+
+                const result = this.deleteDataHomeEntry(requestedPath);
+                res.json({ success: true, ...result });
+            } catch (error: any) {
+                const message = String(error?.message || error);
+                const status = message.includes('not found') ? 404 : 400;
+                res.status(status).json({ error: message });
+            }
         });
 
         // ===== GATEWAY TOKEN MANAGEMENT =====
@@ -1003,7 +1269,7 @@ export class GatewayServer {
             const lines = parseInt(req.query.lines as string) || 200;
             const level = req.query.level as string; // Filter by log level (info, error, warn, debug)
             const search = req.query.search as string; // Search term
-            const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
+            const dataDir = this.getDataHome();
             const logPath = path.join(dataDir, 'foreground.log');
 
             if (!fs.existsSync(logPath)) {
@@ -1329,7 +1595,7 @@ export class GatewayServer {
     }
 
     private getAgentStatus() {
-        const dataDir = this.config.get('dataDir') || path.join(process.env.HOME || '', '.orcbot');
+        const dataDir = this.getDataHome();
         const lockPath = path.join(dataDir, 'orcbot.lock');
         let lockFileValid = false;
         let lockInfo = null;
