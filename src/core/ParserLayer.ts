@@ -86,6 +86,29 @@ export class ParserLayer {
                 }
             }
 
+            if (toolName === 'send_slack') {
+                if (metadata.channel_id == null) {
+                    metadata.channel_id = metadata.channelId ?? metadata.channel ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            if (toolName === 'send_gateway_chat') {
+                if (metadata.chatId == null) {
+                    metadata.chatId = metadata.chat_id ?? metadata.chatid ?? metadata.id ?? metadata.to ?? metadata.sourceId;
+                }
+            }
+
+            if (toolName === 'browser_navigate') {
+                if (metadata.url == null) {
+                    const urlCandidate = metadata.link ?? metadata.site ?? metadata.href;
+                    if (urlCandidate != null) {
+                        metadata.url = String(urlCandidate);
+                    } else if (typeof metadata.query === 'string' && /^https?:\/\//i.test(metadata.query.trim())) {
+                        metadata.url = metadata.query.trim();
+                    }
+                }
+            }
+
             // Normalize browser tool fields to what ResponseValidator expects.
             // The LLM frequently uses selector_or_ref/ref/css/value, while the executor and validator
             // prefer canonical keys: selector + text.

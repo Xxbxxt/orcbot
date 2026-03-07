@@ -37,6 +37,7 @@ import { resolveEmoji, detectChannelFromMetadata } from '../utils/ReactionHelper
 import { renderMarkdown, hasMarkdown } from '../utils/MarkdownRenderer';
 import { fetchWorldEvents, summarizeWorldEvents, WorldEventSource } from '../tools/WorldEvents';
 import { buildWorkflowSignalLog, buildWorkflowSignalMemory, shouldInjectWorkflowSignal, WorkflowSignalLevel } from './WorkflowReviewHelper';
+import { ErrorClassifier } from './ErrorClassifier';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -8646,6 +8647,721 @@ REFLECTION: <1-2 sentences>`;
         return `${String(toolName || '').toLowerCase()}:${String(salient || '').toLowerCase().slice(0, 280)}`;
     }
 
+    private injectDecisionRecoveryGuidance(action: Action, currentStep: number, decision: any): void {
+        try {
+            const pipelineNotes = decision?.metadata?.pipelineNotes || {};
+            const dropped: string[] = Array.isArray(pipelineNotes.dropped) ? pipelineNotes.dropped : [];
+            const warnings: string[] = Array.isArray(pipelineNotes.warnings) ? pipelineNotes.warnings : [];
+            const validationFeedback = decision?.metadata?.validationFeedback || {};
+            const validationErrors: string[] = Array.isArray(validationFeedback.errors) ? validationFeedback.errors : [];
+            const validationWarnings: string[] = Array.isArray(validationFeedback.warnings) ? validationFeedback.warnings : [];
+            const recoveryHint = String(decision?.metadata?.recoveryHint || '').trim();
+
+            const parts: string[] = [];
+            if (validationErrors.length > 0) parts.push(`Validation errors: ${validationErrors.slice(0, 4).join(' | ')}`);
+            if (validationWarnings.length > 0) parts.push(`Validation warnings: ${validationWarnings.slice(0, 3).join(' | ')}`);
+            if (dropped.length > 0) parts.push(`Pipeline dropped: ${dropped.slice(0, 6).join(', ')}`);
+            if (warnings.length > 0) parts.push(`Pipeline notes: ${warnings.slice(0, 4).join(' | ')}`);
+            if (recoveryHint) parts.push(`Recovery hint: ${recoveryHint}`);
+
+            const details = parts.join(' ');
+            const guidance = details
+                ? `[SYSTEM: RECOVERY REQUIRED. Your previous response did not produce executable progress. ${details} Do NOT repeat the same blocked or invalid plan. Choose a different valid tool, adjust the arguments, or provide a substantive final answer if the work is already complete.]`
+                : `[SYSTEM: RECOVERY REQUIRED. You set goals_met=false but produced no executable tools. Do NOT repeat the same response. Choose at least one valid tool with the required arguments, or provide a substantive final answer if the task is actually complete.]`;
+
+            this.memory.saveMemory({
+                id: `${action.id}-step-${currentStep}-recovery-guidance`,
+                type: 'short',
+                content: guidance,
+                metadata: {
+                    actionId: action.id,
+                    step: currentStep,
+                    error: 'no_executable_tools',
+                    dropped,
+                    validationErrors: validationErrors.slice(0, 4)
+                }
+            });
+        } catch (e) {
+            logger.debug(`Agent: Failed to inject decision recovery guidance: ${e}`);
+        }
+    }
+
+    private doesToolResultIndicateError(toolResult: any): boolean {
+        const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
+        if (hasStructuredResult && 'success' in toolResult) return toolResult.success === false;
+        if (hasStructuredResult && 'error' in toolResult) return true;
+        if (typeof toolResult === 'string') {
+            const lower = toolResult.toLowerCase();
+            return lower.startsWith('error') || lower.startsWith('failed');
+        }
+        return false;
+    }
+
+    private extractToolFailureMessage(toolResult: any, executionError?: any): string {
+        if (executionError) {
+            return String(executionError?.message || executionError || '').trim();
+        }
+
+        if (toolResult && typeof toolResult === 'object') {
+            if (typeof toolResult.error === 'string') return toolResult.error.trim();
+            if (toolResult.error) return JSON.stringify(toolResult.error).slice(0, 240);
+            if (typeof toolResult.message === 'string' && toolResult.success === false) return toolResult.message.trim();
+        }
+
+        return String(toolResult || '').trim();
+    }
+
+    private emitWorkflowSignal(
+        action: Action,
+        currentStep: number,
+        toolName: string,
+        level: WorkflowSignalLevel,
+        options: {
+            toolDurationMs?: number;
+            errorMessage?: string;
+            consecutiveFailures?: number;
+            queuedToolsSkipped?: number;
+            errorType?: string;
+            retryable?: boolean;
+            hasExistingErrorGuidance?: boolean;
+        }
+    ): void {
+        const input = {
+            actionId: action.id,
+            step: currentStep,
+            toolName,
+            level,
+            toolDurationMs: options.toolDurationMs,
+            errorMessage: options.errorMessage,
+            consecutiveFailures: options.consecutiveFailures,
+            queuedToolsSkipped: options.queuedToolsSkipped,
+            errorType: options.errorType,
+            retryable: options.retryable,
+            hasExistingErrorGuidance: options.hasExistingErrorGuidance,
+        };
+
+        if (!shouldInjectWorkflowSignal(input)) return;
+
+        logger.info(buildWorkflowSignalLog(input));
+        this.memory.saveMemory({
+            id: `${action.id}-step-${currentStep}-${toolName}-workflow-${Math.random().toString(36).slice(2, 7)}`,
+            type: 'short',
+            content: buildWorkflowSignalMemory(input),
+            metadata: {
+                actionId: action.id,
+                step: currentStep,
+                tool: toolName,
+                workflowSignal: true,
+                level,
+                lowSignal: true,
+                errorType: options.errorType,
+                retryable: options.retryable,
+            }
+        });
+    }
+
+    private recordSuccessfulSideEffectDelivery(
+        action: Action,
+        toolCall: { name: string; metadata?: any },
+        resultString: string,
+        successfulSideEffectKeys: Set<string>
+    ): { substantiveDelivery: boolean; outboundMessage: string } {
+        const toolMetadata = toolCall.metadata || {};
+        const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolMetadata);
+        successfulSideEffectKeys.add(sideEffectKey);
+
+        const outboundMessage = String(
+            toolMetadata.message || toolMetadata.text || toolMetadata.newText || ''
+        ).trim();
+
+        const lowerMsg = resultString.toLowerCase();
+        const isRefusal = lowerMsg.includes('understood') &&
+            (lowerMsg.includes('respect your preference') ||
+             lowerMsg.includes('problem at all') ||
+             lowerMsg.includes('change your mind'));
+
+        if (isRefusal && action.payload.source && action.payload.sourceId) {
+            const profileKey = `${action.payload.source}:${action.payload.sourceId}`;
+            const existingRaw = this.memory.getContactProfile(profileKey);
+            if (existingRaw) {
+                try {
+                    const profile = JSON.parse(existingRaw);
+                    profile.calibrationDeclined = true;
+                    this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
+                    logger.info(`Agent: User ${profileKey} declined calibration. Stored preference.`);
+                } catch (e) { }
+            }
+        }
+
+        return {
+            substantiveDelivery: this.isSubstantiveDeliveryMessage(resultString),
+            outboundMessage
+        };
+    }
+
+    private async assessToolExecutionOutcome(params: {
+        action: Action;
+        currentStep: number;
+        toolCall: { name: string; metadata?: any };
+        toolMeta: { isSideEffect?: boolean };
+        toolResult: any;
+        executionError?: any;
+        toolDurationMs?: number;
+        remainingQueuedTools: number;
+        blockedFailedSignatures: Set<string>;
+        skillFailCounts: Record<string, number>;
+    }): Promise<{
+        resultString: string;
+        resultIndicatesError: boolean;
+        forceBreak: boolean;
+    }> {
+        const {
+            action,
+            currentStep,
+            toolCall,
+            toolMeta,
+            toolResult,
+            executionError,
+            toolDurationMs,
+            remainingQueuedTools,
+            blockedFailedSignatures,
+            skillFailCounts,
+        } = params;
+
+        const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
+        const resultString = JSON.stringify(toolResult) || '';
+        const resultIndicatesError = this.doesToolResultIndicateError(toolResult);
+
+        if (resultIndicatesError) {
+            if (!toolMeta.isSideEffect) blockedFailedSignatures.add(toolSignature);
+            const errorMessage = this.extractToolFailureMessage(toolResult, executionError);
+            const classified = ErrorClassifier.classify(errorMessage || executionError || toolResult);
+            const consecutiveFailures = (skillFailCounts[toolCall.name] || 0) + 1;
+            skillFailCounts[toolCall.name] = consecutiveFailures;
+
+            this.emitWorkflowSignal(action, currentStep, toolCall.name, 'error', {
+                toolDurationMs,
+                errorMessage,
+                consecutiveFailures,
+                queuedToolsSkipped: remainingQueuedTools,
+                errorType: classified.type,
+                retryable: classified.retryable,
+            });
+
+            if (consecutiveFailures >= 3) {
+                const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
+                const review = await this.reviewHardBlock(action, String(toolResult), currentStep, history);
+                if (review.verdict === 'STOP') {
+                    return {
+                        resultString,
+                        resultIndicatesError,
+                        forceBreak: true,
+                    };
+                }
+                skillFailCounts[toolCall.name] = 0;
+            }
+        } else {
+            skillFailCounts[toolCall.name] = 0;
+            this.emitWorkflowSignal(action, currentStep, toolCall.name, 'info', {
+                toolDurationMs,
+                consecutiveFailures: 0,
+            });
+            this.saveSessionAnchorFromToolResult(action, currentStep, toolCall.name, toolCall.metadata || {}, toolResult, false);
+        }
+
+        return {
+            resultString,
+            resultIndicatesError,
+            forceBreak: false,
+        };
+    }
+
+    private getToolExecutionBlockReason(params: {
+        action: Action;
+        toolCall: { name: string; metadata?: any };
+        toolMeta: { isSend?: boolean; isSideEffect?: boolean };
+        successfulSideEffectKeys: Set<string>;
+        blockedFailedSignatures: Set<string>;
+        blockedFailedTools?: Set<string>;
+        sentMessagesInAction?: string[];
+        sentMessageAlreadyInStep?: boolean;
+        bonusMessageSent?: boolean;
+        applyTurnCooldown?: boolean;
+        contextLabel: 'main' | 'bonus';
+    }): string | null {
+        const {
+            action,
+            toolCall,
+            toolMeta,
+            successfulSideEffectKeys,
+            blockedFailedSignatures,
+            blockedFailedTools,
+            sentMessagesInAction = [],
+            sentMessageAlreadyInStep = false,
+            bonusMessageSent = false,
+            applyTurnCooldown = false,
+            contextLabel,
+        } = params;
+
+        if (toolMeta.isSideEffect) {
+            const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolCall.metadata || {});
+            if (successfulSideEffectKeys.has(sideEffectKey)) {
+                return contextLabel === 'bonus'
+                    ? `Blocked duplicate side-effect call '${toolCall.name}' in bonus step for action ${action.id}`
+                    : `Blocked duplicate side-effect call '${toolCall.name}' in action ${action.id}`;
+            }
+        }
+
+        if (blockedFailedTools?.has(toolCall.name)) {
+            return `Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`;
+        }
+
+        const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
+        if (blockedFailedSignatures.has(toolSignature)) {
+            return contextLabel === 'bonus'
+                ? `Blocked repeated failed signature for ${toolCall.name} in bonus step for action ${action.id}`
+                : `Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`;
+        }
+
+        if (!toolMeta.isSideEffect) {
+            return null;
+        }
+
+        if (applyTurnCooldown && toolMeta.isSend && sentMessageAlreadyInStep && !this.isSequentialUIComponent(toolCall.name)) {
+            return `Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`;
+        }
+
+        if (contextLabel !== 'bonus') {
+            return null;
+        }
+
+        const outboundMessage = String(
+            toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.newText || ''
+        ).trim();
+
+        if (sentMessagesInAction.includes(outboundMessage)) {
+            return `Blocked duplicate message in bonus step (action ${action.id}).`;
+        }
+
+        if (this.isSemanticallyDuplicateOutboundMessage(outboundMessage, sentMessagesInAction)) {
+            return `Blocked semantic duplicate message in bonus step (action ${action.id}).`;
+        }
+
+        if (sentMessageAlreadyInStep) {
+            return `Blocked double-message in bonus step (action ${action.id}).`;
+        }
+
+        if (bonusMessageSent) {
+            return `Blocked extra message in bonus steps - already sent final message (action ${action.id}).`;
+        }
+
+        return null;
+    }
+
+    private buildToolBatches(
+        toolCalls: Array<{ name: string; metadata?: any; parameters?: any }>,
+        getSkillMeta: (name: string) => { isParallelSafe?: boolean }
+    ): Array<{ tools: Array<{ name: string; metadata?: any; parameters?: any }>; isParallel: boolean }> {
+        const toolBatches: Array<{ tools: Array<{ name: string; metadata?: any; parameters?: any }>; isParallel: boolean }> = [];
+        let currentBatchTools: Array<{ name: string; metadata?: any; parameters?: any }> = [];
+        let currentBatchIsParallel = false;
+
+        for (const toolCall of toolCalls) {
+            const toolMeta = getSkillMeta(toolCall.name);
+            const isSafe = !!toolMeta.isParallelSafe;
+
+            if (currentBatchTools.length === 0) {
+                currentBatchTools.push(toolCall);
+                currentBatchIsParallel = isSafe;
+            } else if (isSafe && currentBatchIsParallel) {
+                currentBatchTools.push(toolCall);
+            } else {
+                toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
+                currentBatchTools = [toolCall];
+                currentBatchIsParallel = isSafe;
+            }
+        }
+
+        if (currentBatchTools.length > 0) {
+            toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
+        }
+
+        return toolBatches;
+    }
+
+    private async executeSequentialToolQueue(params: {
+        action: Action;
+        currentStep: number;
+        toolCalls: Array<{ name: string; metadata?: any }>;
+        getSkillMeta: (name: string) => any;
+        state: {
+            forceBreak: boolean;
+            goalsMet: boolean;
+            waitingForClarification: boolean;
+            deepToolExecutedSinceLastMessage: boolean;
+            messagesSent: number;
+            anyUserDeliverySuccess: boolean;
+            substantiveDeliveriesSent: number;
+            sentMessageCountInStep: number;
+            bonusMessageSent: boolean;
+            lastUserDeliveryAtMs: number;
+        };
+        options: {
+            contextLabel: 'main' | 'bonus';
+            successfulSideEffectKeys: Set<string>;
+            blockedFailedSignatures: Set<string>;
+            blockedFailedTools?: Set<string>;
+            skillFailCounts: Record<string, number>;
+            sentMessagesInAction?: string[];
+            applyTurnCooldown?: boolean;
+            remainingQueuedToolsOffset?: number;
+            memoryIdPrefix: string;
+            memoryContentPrefix?: string;
+            pauseLogMessage: string;
+            onBlocked?: (blockReason: string) => void;
+        };
+    }): Promise<{ replanAfterFailure: boolean }> {
+        const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
+        const sentMessagesInAction = options.sentMessagesInAction || [];
+        let replanAfterFailure = false;
+
+        for (let toolIndex = 0; toolIndex < toolCalls.length; toolIndex++) {
+            const toolCall = toolCalls[toolIndex];
+            const toolMeta = getSkillMeta(toolCall.name);
+            const isSendTool = options.contextLabel === 'bonus' ? toolMeta.isSideEffect : toolMeta.isSend;
+            const remainingQueuedTools = Math.max(0, (options.remainingQueuedToolsOffset || 0) + toolCalls.length - toolIndex - 1);
+
+            const blockReason = this.getToolExecutionBlockReason({
+                action,
+                toolCall,
+                toolMeta,
+                successfulSideEffectKeys: options.successfulSideEffectKeys,
+                blockedFailedSignatures: options.blockedFailedSignatures,
+                blockedFailedTools: options.blockedFailedTools,
+                sentMessagesInAction,
+                sentMessageAlreadyInStep: state.sentMessageCountInStep > 0,
+                bonusMessageSent: state.bonusMessageSent,
+                applyTurnCooldown: options.applyTurnCooldown,
+                contextLabel: options.contextLabel,
+            });
+            if (blockReason) {
+                options.onBlocked?.(blockReason);
+                continue;
+            }
+
+            if (options.contextLabel === 'main' && toolMeta.isDeep) {
+                state.deepToolExecutedSinceLastMessage = true;
+            }
+
+            const toolStartedAt = Date.now();
+            let toolResult;
+            let executionError;
+            try {
+                toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
+            } catch (e) {
+                executionError = e;
+                if (options.contextLabel === 'bonus') logger.error(`Bonus step skill failed: ${toolCall.name} - ${e}`);
+                else logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
+                toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+            }
+
+            if (options.contextLabel === 'main' && toolCall.name === 'request_supporting_data') {
+                state.waitingForClarification = true;
+                state.forceBreak = true;
+                break;
+            }
+
+            const resultString = options.contextLabel === 'bonus'
+                ? JSON.stringify(toolResult).slice(0, 500)
+                : (JSON.stringify(toolResult) || '');
+            const toolDurationMs = Date.now() - toolStartedAt;
+            const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
+            const assessed = await this.assessToolExecutionOutcome({
+                action,
+                currentStep,
+                toolCall,
+                toolMeta,
+                toolResult,
+                executionError,
+                toolDurationMs,
+                remainingQueuedTools,
+                blockedFailedSignatures: options.blockedFailedSignatures,
+                skillFailCounts: options.skillFailCounts,
+            });
+            const { resultIndicatesError, forceBreak: toolForceBreak } = assessed;
+
+            if (toolForceBreak) {
+                state.forceBreak = true;
+                break;
+            }
+
+            if (resultIndicatesError) {
+                replanAfterFailure = true;
+            } else {
+                if (toolMeta.isDeep && !isInternalTool) {
+                    state.deepToolExecutedSinceLastMessage = true;
+                }
+
+                if (toolMeta.isSideEffect) {
+                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    state.messagesSent++;
+                    state.anyUserDeliverySuccess = true;
+                    state.sentMessageCountInStep++;
+                    state.deepToolExecutedSinceLastMessage = false;
+                    if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+
+                    if (options.contextLabel === 'bonus') {
+                        state.bonusMessageSent = true;
+                        state.goalsMet = true;
+                        sentMessagesInAction.push(delivery.outboundMessage);
+                        state.lastUserDeliveryAtMs = Date.now();
+                    }
+                }
+            }
+
+            this.memory.saveMemory({
+                id: `${options.memoryIdPrefix}-${toolCall.name}`,
+                type: 'short',
+                content: options.memoryContentPrefix
+                    ? `${options.memoryContentPrefix} Tool ${toolCall.name} returned: ${resultString}`
+                    : `Tool ${toolCall.name} returned: ${resultString.slice(0, 1000)}`,
+                metadata: options.contextLabel === 'bonus'
+                    ? { actionId: action.id, step: currentStep, tool: toolCall.name, result: toolResult }
+                    : { tool: toolCall.name, result: toolResult }
+            });
+
+            if (resultIndicatesError && remainingQueuedTools > 0) {
+                logger.info(`Agent: ${options.pauseLogMessage.replace('{tool}', toolCall.name)}`);
+                break;
+            }
+
+            if (options.contextLabel === 'main' &&
+                (toolCall.name === 'schedule_task' || toolCall.name === 'send_image' || toolCall.name === 'create_time_capsule') &&
+                !resultIndicatesError) {
+                state.goalsMet = true;
+                state.forceBreak = true;
+                break;
+            }
+        }
+
+        return { replanAfterFailure };
+    }
+
+    private async executeParallelToolBatch(params: {
+        action: Action;
+        currentStep: number;
+        toolCalls: Array<{ name: string; metadata?: any; parameters?: any }>;
+        getSkillMeta: (name: string) => any;
+        state: {
+            forceBreak: boolean;
+            goalsMet: boolean;
+            waitingForClarification: boolean;
+            deepToolExecutedSinceLastMessage: boolean;
+            messagesSent: number;
+            anyUserDeliverySuccess: boolean;
+            substantiveDeliveriesSent: number;
+            sentMessageCountInStep: number;
+            bonusMessageSent: boolean;
+            lastUserDeliveryAtMs: number;
+        };
+        options: {
+            successfulSideEffectKeys: Set<string>;
+            blockedFailedSignatures: Set<string>;
+            skillFailCounts: Record<string, number>;
+            remainingQueuedToolsOffset?: number;
+            memoryIdPrefix: string;
+        };
+    }): Promise<{ replanAfterFailure: boolean }> {
+        const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
+
+        logger.info(`Agent: Executing ${toolCalls.length} tools in parallel: ${toolCalls.map(t => t.name).join(', ')}`);
+
+        const parallelResults = await Promise.all(toolCalls.map(async (toolCall) => {
+            const toolMeta = getSkillMeta(toolCall.name);
+            const isAdmin = action.payload?.isAdmin !== false;
+            if (!isAdmin && toolMeta.isElevated) {
+                return {
+                    toolCall,
+                    toolMeta,
+                    toolResult: `Error: Skill '${toolCall.name}' requires admin privileges.`,
+                    executionError: undefined,
+                    toolDurationMs: 0,
+                };
+            }
+
+            try {
+                const startedAt = Date.now();
+                const toolResult = await this.skills.executeSkill(toolCall.name, {
+                    ...toolCall.metadata,
+                    ...toolCall.parameters,
+                    ...action.payload,
+                    actionId: action.id,
+                    step: currentStep,
+                });
+                return {
+                    toolCall,
+                    toolMeta,
+                    toolResult,
+                    executionError: undefined,
+                    toolDurationMs: Date.now() - startedAt,
+                };
+            } catch (e) {
+                return {
+                    toolCall,
+                    toolMeta,
+                    toolResult: `Error executing ${toolCall.name}: ${e}`,
+                    executionError: e,
+                    toolDurationMs: 0,
+                };
+            }
+        }));
+
+        let replanAfterFailure = false;
+
+        for (let index = 0; index < parallelResults.length; index++) {
+            const parallelResult = parallelResults[index];
+            const { toolCall, toolMeta, toolResult, executionError, toolDurationMs } = parallelResult;
+            const remainingQueuedTools = Math.max(0, options.remainingQueuedToolsOffset || 0);
+            const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
+            const assessed = await this.assessToolExecutionOutcome({
+                action,
+                currentStep,
+                toolCall,
+                toolMeta,
+                toolResult,
+                executionError,
+                toolDurationMs,
+                remainingQueuedTools,
+                blockedFailedSignatures: options.blockedFailedSignatures,
+                skillFailCounts: options.skillFailCounts,
+            });
+            const { resultIndicatesError, resultString, forceBreak: toolForceBreak } = assessed;
+
+            if (toolForceBreak) {
+                state.forceBreak = true;
+            }
+
+            if (resultIndicatesError) {
+                replanAfterFailure = true;
+            } else {
+                if (toolMeta.isDeep && !isInternalTool) {
+                    state.deepToolExecutedSinceLastMessage = true;
+                }
+
+                if (toolMeta.isSideEffect) {
+                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    state.messagesSent++;
+                    state.anyUserDeliverySuccess = true;
+                    state.deepToolExecutedSinceLastMessage = false;
+                    if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+                }
+            }
+
+            this.memory.saveMemory({
+                id: `${options.memoryIdPrefix}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
+                type: 'short',
+                content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
+                metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: !resultIndicatesError }
+            });
+
+            if (state.forceBreak) break;
+        }
+
+        return { replanAfterFailure };
+    }
+
+    private extractMutableExecutionState(state: {
+        forceBreak: boolean;
+        goalsMet: boolean;
+        waitingForClarification: boolean;
+        deepToolExecutedSinceLastMessage: boolean;
+        messagesSent: number;
+        anyUserDeliverySuccess: boolean;
+        substantiveDeliveriesSent: number;
+        lastUserDeliveryAtMs: number;
+    }): {
+        forceBreak: boolean;
+        goalsMet: boolean;
+        waitingForClarification: boolean;
+        deepToolExecutedSinceLastMessage: boolean;
+        messagesSent: number;
+        anyUserDeliverySuccess: boolean;
+        substantiveDeliveriesSent: number;
+        lastUserDeliveryAtMs: number;
+    } {
+        return {
+            forceBreak: state.forceBreak,
+            goalsMet: state.goalsMet,
+            waitingForClarification: state.waitingForClarification,
+            deepToolExecutedSinceLastMessage: state.deepToolExecutedSinceLastMessage,
+            messagesSent: state.messagesSent,
+            anyUserDeliverySuccess: state.anyUserDeliverySuccess,
+            substantiveDeliveriesSent: state.substantiveDeliveriesSent,
+            lastUserDeliveryAtMs: state.lastUserDeliveryAtMs,
+        };
+    }
+
+    private handleNoToolDecision(params: {
+        action: Action;
+        currentStep: number;
+        decision: any;
+        isChannelTask: boolean;
+        messagesSent: number;
+        maxSteps: number;
+        maxNoToolsRetries: number;
+        noToolsRetryCount: number;
+    }): {
+        noToolsRetryCount: number;
+        outcome: 'continue' | 'break' | 'complete';
+    } {
+        const {
+            action,
+            currentStep,
+            decision,
+            isChannelTask,
+            messagesSent,
+            maxSteps,
+            maxNoToolsRetries,
+            noToolsRetryCount,
+        } = params;
+
+        const goalsNotMet = decision?.verification?.goals_met === false;
+        if (goalsNotMet) {
+            this.injectDecisionRecoveryGuidance(action, currentStep, decision);
+            const nextRetryCount = noToolsRetryCount + 1;
+            return {
+                noToolsRetryCount: nextRetryCount,
+                outcome: nextRetryCount >= maxNoToolsRetries ? 'break' : 'continue',
+            };
+        }
+
+        if (isChannelTask && messagesSent === 0 && currentStep < maxSteps) {
+            const nextRetryCount = noToolsRetryCount + 1;
+            if (nextRetryCount < maxNoToolsRetries) {
+                logger.warn(`Agent: Action ${action.id} tried to terminate without sending ANY message to channel user. Forcing retry ${nextRetryCount}/${maxNoToolsRetries}...`);
+                this.memory.saveMemory({
+                    id: `${action.id}-step-${currentStep}-silent-termination-blocked`,
+                    type: 'short',
+                    content: `[SYSTEM: BLOCKED SILENT TERMINATION. You tried to finish the task without sending ANY message to the user. Your text/reasoning output is NOT visible to them — the ONLY way to respond is by calling send_${action.payload.source === 'gateway-chat' ? 'gateway_chat' : action.payload.source}. You MUST include a send skill in your next response. The user is waiting for a reply.]`,
+                    metadata: { actionId: action.id, step: currentStep, error: 'silent_termination_blocked' }
+                });
+                return {
+                    noToolsRetryCount: nextRetryCount,
+                    outcome: 'continue',
+                };
+            }
+            return {
+                noToolsRetryCount: nextRetryCount,
+                outcome: 'break',
+            };
+        }
+
+        return {
+            noToolsRetryCount,
+            outcome: 'complete',
+        };
+    }
+
     private buildSessionContinuityHint(payload: any): string {
         if (!this.config.get('sessionAnchorEnabled')) return '';
         if (!payload?.source) return '';
@@ -12383,17 +13099,6 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 : 4;
             const forceInitialProgress = this.config.get('progressFeedbackForceInitial') !== false;
 
-            const buildSideEffectKey = (toolName: string, metadata: any): string => {
-                const md = metadata || {};
-                const name = String(toolName || '').toLowerCase();
-                const target = String(
-                    md.chatId || md.channel_id || md.channelId || md.jid || md.to || md.sourceId || ''
-                ).trim().toLowerCase();
-                const message = String(md.message || md.text || md.caption || '').trim().replace(/\s+/g, ' ').toLowerCase();
-                const payload = String(md.path || md.file_path || md.filePath || md.prompt || '').trim().toLowerCase();
-                return `${name}|${target}|${message.slice(0, 240)}|${payload.slice(0, 240)}`;
-            };
-
             if (!isSimpleTask) {
                 const checklistMessage = this.buildChecklistPreviewMessage(executionPlan);
                 if (checklistMessage) {
@@ -12736,196 +13441,112 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     forceBreak = false;
                     let sentMessageCountInThisStep = 0;
-                    let firstSentMessageInThisStep = '';
-                    let toolsBlockedByCooldown = 0;
-                    let totalSendToolsInStep = 0;
-                    let duplicateSideEffectsBlockedInStep = 0;
-                    let totalSideEffectToolsInStep = 0;
                     let remainingToolsInBatch = decision.tools.length;
+                    let replanAfterFailure = false;
+                    const executionState = {
+                        forceBreak,
+                        goalsMet,
+                        waitingForClarification,
+                        deepToolExecutedSinceLastMessage,
+                        messagesSent,
+                        anyUserDeliverySuccess,
+                        substantiveDeliveriesSent,
+                        sentMessageCountInStep: sentMessageCountInThisStep,
+                        bonusMessageSent: false,
+                        lastUserDeliveryAtMs,
+                    };
 
                     // Group tools into parallel batches
-                    const toolBatches = [];
-                    let currentBatchTools = [];
-                    let currentBatchIsParallel = false;
-
-                    for (const toolCall of decision.tools) {
-                        const toolMeta = getSkillMeta(toolCall.name);
-                        const isSafe = !!toolMeta.isParallelSafe;
-
-                        if (currentBatchTools.length === 0) {
-                            currentBatchTools.push(toolCall);
-                            currentBatchIsParallel = isSafe;
-                        } else if (isSafe && currentBatchIsParallel) {
-                            currentBatchTools.push(toolCall);
-                        } else {
-                            toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
-                            currentBatchTools = [toolCall];
-                            currentBatchIsParallel = isSafe;
-                        }
-                    }
-                    if (currentBatchTools.length > 0) {
-                        toolBatches.push({ tools: currentBatchTools, isParallel: currentBatchIsParallel });
-                    }
+                    const toolBatches = this.buildToolBatches(decision.tools, getSkillMeta);
 
                     for (const batch of toolBatches) {
                         if (forceBreak) break;
 
                         if (batch.isParallel && batch.tools.length > 1) {
-                            logger.info(`Agent: Executing ${batch.tools.length} tools in parallel: ${batch.tools.map(t => t.name).join(', ')}`);
-                            
-                            const parallelResults = await Promise.all(batch.tools.map(async (toolCall) => {
-                                const toolMeta = getSkillMeta(toolCall.name);
-                                const isAdmin = action.payload?.isAdmin !== false;
-                                if (!isAdmin && toolMeta.isElevated) return `Error: Skill '${toolCall.name}' requires admin privileges.`;
+                            const parallelResult = await this.executeParallelToolBatch({
+                                action,
+                                currentStep,
+                                toolCalls: batch.tools,
+                                getSkillMeta,
+                                state: executionState,
+                                options: {
+                                    successfulSideEffectKeys,
+                                    blockedFailedSignatures,
+                                    skillFailCounts,
+                                    remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
+                                    memoryIdPrefix: `${action.id}-step-${currentStep}`,
+                                }
+                            });
 
-                                try {
-                                    const toolResult = await this.skills.executeSkill(toolCall.name, { ...toolCall.parameters, ...action.payload, actionId: action.id, step: currentStep });
-                                    this.memory.saveMemory({
-                                        id: `${action.id}-step-${currentStep}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
-                                        type: 'short',
-                                        content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
-                                        metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: true }
-                                    });
-                                    return toolResult;
-                                } catch (e) { return `Error executing ${toolCall.name}: ${e}`; }
-                            }));
+                            replanAfterFailure = replanAfterFailure || parallelResult.replanAfterFailure;
+                            ({
+                                forceBreak,
+                                goalsMet,
+                                waitingForClarification,
+                                deepToolExecutedSinceLastMessage,
+                                messagesSent,
+                                anyUserDeliverySuccess,
+                                substantiveDeliveriesSent,
+                                lastUserDeliveryAtMs,
+                            } = this.extractMutableExecutionState(executionState));
+                            sentMessageCountInThisStep = executionState.sentMessageCountInStep;
                             remainingToolsInBatch -= batch.tools.length;
+
+                            if (forceBreak) break;
+                            if (replanAfterFailure) {
+                                logger.info(`Agent: Parallel batch produced a failure. Re-planning before executing later batches.`);
+                                break;
+                            }
                         } else {
-                            for (const toolCall of batch.tools) {
-                                if (forceBreak) break;
-                                remainingToolsInBatch--;
-                                const toolMeta = getSkillMeta(toolCall.name);
-
-                                if (toolMeta.isSend) {
-                                    totalSendToolsInStep++;
-                                    if (sentMessageCountInThisStep > 0 && !this.isSequentialUIComponent(toolCall.name)) {
-                                        toolsBlockedByCooldown++;
-                                        logger.info(`Agent: Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`);
-                                        continue;
+                            const sequentialResult = await this.executeSequentialToolQueue({
+                                action,
+                                currentStep,
+                                toolCalls: batch.tools,
+                                getSkillMeta,
+                                state: executionState,
+                                options: {
+                                    contextLabel: 'main',
+                                    successfulSideEffectKeys,
+                                    blockedFailedSignatures,
+                                    blockedFailedTools,
+                                    skillFailCounts,
+                                    applyTurnCooldown: true,
+                                    remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
+                                    memoryIdPrefix: `${action.id}-step-${currentStep}`,
+                                    pauseLogMessage: 'Paused queued tools after {tool} failure.',
+                                    onBlocked: (blockReason) => {
+                                        if (blockReason.includes('repeated failures')) logger.warn(`Agent: ${blockReason}`);
+                                        else if (blockReason.includes('turn cooldown')) logger.info(`Agent: ${blockReason}`);
+                                        else logger.warn(`Agent: ${blockReason}`);
                                     }
                                 }
+                            });
 
-                                if (toolMeta.isSideEffect) {
-                                    totalSideEffectToolsInStep++;
-                                    const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolCall.metadata || {});
-                                    if (successfulSideEffectKeys.has(sideEffectKey)) {
-                                        duplicateSideEffectsBlockedInStep++;
-                                        logger.warn(`Agent: Blocked duplicate side-effect call '${toolCall.name}' in action ${action.id}`);
-                                        continue;
-                                    }
-                                }
+                            replanAfterFailure = replanAfterFailure || sequentialResult.replanAfterFailure;
+                            ({
+                                forceBreak,
+                                goalsMet,
+                                waitingForClarification,
+                                deepToolExecutedSinceLastMessage,
+                                messagesSent,
+                                anyUserDeliverySuccess,
+                                substantiveDeliveriesSent,
+                                lastUserDeliveryAtMs,
+                            } = this.extractMutableExecutionState(executionState));
+                            sentMessageCountInThisStep = executionState.sentMessageCountInStep;
+                            remainingToolsInBatch -= batch.tools.length;
 
-                                if (blockedFailedTools.has(toolCall.name)) {
-                                    logger.warn(`Agent: Blocked tool '${toolCall.name}' after repeated failures in action ${action.id}`);
-                                    continue;
-                                }
-
-                                const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
-                                if (blockedFailedSignatures.has(toolSignature)) {
-                                    logger.warn(`Agent: Blocked repeated failed signature for ${toolCall.name} in action ${action.id}`);
-                                    continue;
-                                }
-
-                                if (toolMeta.isDeep) {
-                                    deepToolExecutedSinceLastMessage = true;
-                                }
-
-                                const toolStartedAt = Date.now();
-                                let toolResult;
-                                let executionError;
-                                try {
-                                    toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
-                                    skillFailCounts[toolCall.name] = 0;
-                                } catch (e) {
-                                    executionError = e;
-                                    logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
-                                    toolResult = `Error executing skill ${toolCall.name}: ${e}`;
-                                    skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
-                                    
-                                    if (skillFailCounts[toolCall.name] >= MAX_CONSECUTIVE_FAILURES) {
-                                        const history = this.memory.getActionMemories(action.id).map(m => m.content).join('\n');
-                                        const review = await this.reviewHardBlock(action, String(toolResult), currentStep, history);
-                                        if (review.verdict === 'STOP') {
-                                            forceBreak = true;
-                                            break;
-                                        } else {
-                                            skillFailCounts[toolCall.name] = 0;
-                                        }
-                                    }
-                                }
-
-                                if (toolCall.name === 'request_supporting_data') {
-                                    waitingForClarification = true;
-                                    forceBreak = true;
-                                    break;
-                                }
-
-                                const resultString = JSON.stringify(toolResult) || '';
-                                const hasStructuredResult = toolResult && typeof toolResult === 'object' && !Array.isArray(toolResult);
-                                let resultIndicatesError = false;
-                                if (hasStructuredResult && 'success' in toolResult) resultIndicatesError = toolResult.success === false;
-                                else if (hasStructuredResult && 'error' in toolResult) resultIndicatesError = true;
-                                else if (typeof toolResult === 'string') {
-                                    const lower = toolResult.toLowerCase();
-                                    resultIndicatesError = lower.startsWith('error') || lower.startsWith('failed');
-                                }
-
-                                const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
-
-                                if (toolMeta.isDeep && !resultIndicatesError && !isInternalTool) {
-                                    deepToolExecutedSinceLastMessage = true;
-                                } else if (resultIndicatesError) {
-                                    if (!toolMeta.isSideEffect) blockedFailedSignatures.add(toolSignature);
-                                    skillFailCounts[toolCall.name] = (skillFailCounts[toolCall.name] || 0) + 1;
-                                }
-
-                                if (toolMeta.isSideEffect && !resultIndicatesError) {
-                                    messagesSent++;
-                                    anyUserDeliverySuccess = true;
-                                    // Reset the deep tool flag because we just delivered a message to the user
-                                    deepToolExecutedSinceLastMessage = false; 
-                                    if (this.isSubstantiveDeliveryMessage(resultString)) substantiveDeliveriesSent++;
-
-                                    // NEW: Check if user is declining calibration in this message
-                                    const lowerMsg = resultString.toLowerCase();
-                                    const isRefusal = lowerMsg.includes('understood') && 
-                                                     (lowerMsg.includes('respect your preference') || 
-                                                      lowerMsg.includes('problem at all') ||
-                                                      lowerMsg.includes('change your mind'));
-                                    
-                                    if (isRefusal && action.payload.source && action.payload.sourceId) {
-                                        const profileKey = `${action.payload.source}:${action.payload.sourceId}`;
-                                        const existingRaw = this.memory.getContactProfile(profileKey);
-                                        if (existingRaw) {
-                                            try {
-                                                const profile = JSON.parse(existingRaw);
-                                                profile.calibrationDeclined = true;
-                                                this.memory.saveContactProfile(profileKey, JSON.stringify(profile));
-                                                logger.info(`Agent: User ${profileKey} declined calibration. Stored preference.`);
-                                            } catch (e) {}
-                                        }
-                                    }
-                                }
-
-                                this.memory.saveMemory({
-                                    id: `${action.id}-step-${currentStep}-${toolCall.name}`,
-                                    type: 'short',
-                                    content: `Tool ${toolCall.name} returned: ${resultString.slice(0, 1000)}`,
-                                    metadata: { tool: toolCall.name, result: toolResult }
-                                });
-
-                                if (resultIndicatesError && remainingToolsInBatch > 0) {
-                                    logger.info(`Agent: Paused queued tools after ${toolCall.name} failure.`);
-                                    break;
-                                }
-
-                                if ((toolCall.name === 'schedule_task' || toolCall.name === 'send_image' || toolCall.name === 'create_time_capsule') && !resultIndicatesError) {
-                                    goalsMet = true;
-                                    forceBreak = true;
-                                    break;
-                                }
+                            if (forceBreak) break;
+                            if (replanAfterFailure) {
+                                logger.info(`Agent: Serial batch produced a failure. Re-planning before executing later batches.`);
+                                break;
                             }
                         }
+                    }
+
+                    if (replanAfterFailure && !forceBreak) {
+                        logger.info(`Agent: Re-planning action ${action.id} from the latest runtime failure context.`);
+                        continue;
                     }
 
                     if (decision.verification?.goals_met) {
@@ -12936,33 +13557,22 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     if (forceBreak) break;
                 } else {
-                    const toolsWereFiltered = (decision as any).toolsFiltered > 0;
-                    const goalsNotMet = decision.verification?.goals_met === false;
-
-                    if (toolsWereFiltered && goalsNotMet) {
-                        noToolsRetryCount++;
-                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) break;
+                    const noToolOutcome = this.handleNoToolDecision({
+                        action,
+                        currentStep,
+                        decision,
+                        isChannelTask,
+                        messagesSent,
+                        maxSteps: MAX_STEPS,
+                        maxNoToolsRetries: MAX_NO_TOOLS_RETRIES,
+                        noToolsRetryCount,
+                    });
+                    noToolsRetryCount = noToolOutcome.noToolsRetryCount;
+                    if (noToolOutcome.outcome === 'continue') {
                         continue;
                     }
-
-                    if (goalsNotMet && !toolsWereFiltered) {
-                        noToolsRetryCount++;
-                        if (noToolsRetryCount >= MAX_NO_TOOLS_RETRIES) break;
-                        continue;
-                    }
-
-                    if (isChannelTask && messagesSent === 0 && currentStep < MAX_STEPS) {
-                        noToolsRetryCount++;
-                        if (noToolsRetryCount < MAX_NO_TOOLS_RETRIES) {
-                            logger.warn(`Agent: Action ${action.id} tried to terminate without sending ANY message to channel user. Forcing retry ${noToolsRetryCount}/${MAX_NO_TOOLS_RETRIES}...`);
-                            this.memory.saveMemory({
-                                id: `${action.id}-step-${currentStep}-silent-termination-blocked`,
-                                type: 'short',
-                                content: `[SYSTEM: BLOCKED SILENT TERMINATION. You tried to finish the task without sending ANY message to the user. Your text/reasoning output is NOT visible to them — the ONLY way to respond is by calling send_${action.payload.source === 'gateway-chat' ? 'gateway_chat' : action.payload.source}. You MUST include a send skill in your next response. The user is waiting for a reply.]`,
-                                metadata: { actionId: action.id, step: currentStep, error: 'silent_termination_blocked' }
-                            });
-                            continue;
-                        }
+                    if (noToolOutcome.outcome === 'break') {
+                        break;
                     }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     goalsMet = true;
@@ -13050,59 +13660,68 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     });
                                     continue;
                                 }
+                                if (bonusDecision?.verification?.goals_met) {
+                                    logger.info(`Agent: Goals met during bonus steps without additional tool calls. Done.`);
+                                    goalsMet = true;
+                                }
                                 logger.info(`Agent: No tools in bonus step. Wrapping up.`);
                                 break;
                             }
 
                             let bonusMsgSentThisStep = false;
-                            for (const toolCall of bonusDecision.tools) {
-                                const toolMeta = getSkillMeta(toolCall.name);
-                                const isSendTool = toolMeta.isSideEffect;
-
-                                // Apply message guards to bonus steps too
-                                if (isSendTool) {
-                                    const bonusMsg = String(toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.newText || '').trim();
-                                    // Block duplicates
-                                    if (sentMessagesInAction.includes(bonusMsg)) {
-                                        logger.warn(`Agent: Blocked duplicate message in bonus step (action ${action.id}).`);
-                                        continue;
-                                    }
-                                    if (this.isSemanticallyDuplicateOutboundMessage(bonusMsg, sentMessagesInAction)) {
-                                        logger.warn(`Agent: Blocked semantic duplicate message in bonus step (action ${action.id}).`);
-                                        continue;
-                                    }
-                                    // Block double-message in same bonus step
-                                    if (bonusMsgSentThisStep) {
-                                        logger.warn(`Agent: Blocked double-message in bonus step (action ${action.id}).`);
-                                        continue;
-                                    }
-                                    // Bonus steps are for wrapping up — block if a message was already
-                                    // sent in a PREVIOUS bonus step (one final message is enough).
-                                    if (bonusMessageSent) {
-                                        logger.warn(`Agent: Blocked extra message in bonus steps — already sent final message (action ${action.id}).`);
-                                        continue;
+                            const bonusExecutionState = {
+                                forceBreak,
+                                goalsMet,
+                                waitingForClarification,
+                                deepToolExecutedSinceLastMessage,
+                                messagesSent,
+                                anyUserDeliverySuccess,
+                                substantiveDeliveriesSent,
+                                sentMessageCountInStep: bonusMsgSentThisStep ? 1 : 0,
+                                bonusMessageSent,
+                                lastUserDeliveryAtMs,
+                            };
+                            const bonusSequentialResult = await this.executeSequentialToolQueue({
+                                action,
+                                currentStep,
+                                toolCalls: bonusDecision.tools,
+                                getSkillMeta,
+                                state: bonusExecutionState,
+                                options: {
+                                    contextLabel: 'bonus',
+                                    successfulSideEffectKeys,
+                                    blockedFailedSignatures,
+                                    skillFailCounts,
+                                    sentMessagesInAction,
+                                    memoryIdPrefix: `${action.id}-bonus-${bonus}`,
+                                    memoryContentPrefix: 'Bonus step:',
+                                    pauseLogMessage: 'Paused bonus-step queued tools after {tool} failure.',
+                                    onBlocked: (blockReason) => {
+                                        logger.warn(`Agent: ${blockReason}`);
                                     }
                                 }
+                            });
+                            let bonusReplanAfterFailure = bonusSequentialResult.replanAfterFailure;
+                            ({
+                                forceBreak,
+                                goalsMet,
+                                waitingForClarification,
+                                deepToolExecutedSinceLastMessage,
+                                messagesSent,
+                                anyUserDeliverySuccess,
+                                substantiveDeliveriesSent,
+                                lastUserDeliveryAtMs,
+                            } = this.extractMutableExecutionState(bonusExecutionState));
+                            bonusMsgSentThisStep = bonusExecutionState.sentMessageCountInStep > 0;
+                            bonusMessageSent = bonusExecutionState.bonusMessageSent;
 
-                                try {
-                                    const toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
-                                    if (isSendTool) {
-                                        messagesSent++;
-                                        anyUserDeliverySuccess = true;
-                                        bonusMsgSentThisStep = true;
-                                        bonusMessageSent = true;
-                                        sentMessagesInAction.push(String(toolCall.metadata?.message || toolCall.metadata?.text || toolCall.metadata?.newText || '').trim());
-                                        lastUserDeliveryAtMs = Date.now();
-                                    }
-                                    this.memory.saveMemory({
-                                        id: `${action.id}-bonus-${bonus}-${toolCall.name}`,
-                                        type: 'short',
-                                        content: `Bonus step: Tool ${toolCall.name} returned: ${JSON.stringify(toolResult).slice(0, 500)}`,
-                                        metadata: { tool: toolCall.name, result: toolResult }
-                                    });
-                                } catch (e) {
-                                    logger.error(`Bonus step skill failed: ${toolCall.name} - ${e}`);
-                                }
+                            if (forceBreak) {
+                                break;
+                            }
+
+                            if (bonusReplanAfterFailure) {
+                                logger.info(`Agent: Bonus step produced a failure. Re-planning before consuming more bonus steps.`);
+                                continue;
                             }
 
                             // Detect bonus-step looping on the same non-messaging tool

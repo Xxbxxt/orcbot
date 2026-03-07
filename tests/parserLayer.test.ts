@@ -62,4 +62,26 @@ describe('ParserLayer', () => {
         expect(snippet).toContain('"verification": {');
         expect(snippet).toContain('"tool": "web_search"');
     });
+
+    it('normalizes common tool metadata aliases before validation', () => {
+        const raw = `\
+\
+\`\`\`json
+{
+  action: 'EXECUTE',
+  verification: { goals_met: false, analysis: 'Continue' },
+  tools: [
+    { name: 'browser_navigate', metadata: { query: 'https://example.com' } },
+    { name: 'send_slack', metadata: { channel: 'C123', message: 'hello' } },
+    { name: 'send_gateway_chat', metadata: { sourceId: 'chat-7', message: 'hi' } },
+  ],
+}
+\`\`\``;
+
+        const result = ParserLayer.normalize(raw);
+
+        expect(result.tools?.[0]?.metadata?.url).toBe('https://example.com');
+        expect(result.tools?.[1]?.metadata?.channel_id).toBe('C123');
+        expect(result.tools?.[2]?.metadata?.chatId).toBe('chat-7');
+    });
 });
