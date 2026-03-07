@@ -53,6 +53,7 @@ function createAgentHarness(options: {
     agent.isBusy = false;
     agent.currentActionId = null;
     agent.currentActionStartAt = null;
+    agent.activeToolExecutions = new Map();
     agent.lastActionTime = Date.now();
     agent.lastHeartbeatProductive = true;
     agent.consecutiveIdleHeartbeats = 0;
@@ -165,6 +166,50 @@ function createAgentHarness(options: {
 }
 
 describe('Agent runtime recovery supervision', () => {
+    it('does not fail a long-running action while an active tool is still within its watchdog window', () => {
+        const action = createAction('stalled-action-active-tool');
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.isBusy = true;
+        harness.agent.currentActionId = action.id;
+        harness.agent.currentActionStartAt = Date.now() - 11 * 60 * 1000;
+        harness.agent.activeToolExecutions.set('tool-1', {
+            actionId: action.id,
+            toolName: 'run_command',
+            startedAt: Date.now() - 2 * 60 * 1000,
+            deadlineAt: Date.now() + 2 * 60 * 1000,
+        });
+
+        (harness.agent as any).detectStalledAction();
+
+        expect(harness.updateStatusMock).not.toHaveBeenCalled();
+        expect(harness.agent.isBusy).toBe(true);
+        expect(harness.agent.currentActionId).toBe(action.id);
+    });
+
+    it('fails an overlong action when no active tool window remains', () => {
+        const action = createAction('stalled-action-no-tool');
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.isBusy = true;
+        harness.agent.currentActionId = action.id;
+        harness.agent.currentActionStartAt = Date.now() - 11 * 60 * 1000;
+
+        (harness.agent as any).detectStalledAction();
+
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'failed');
+        expect(harness.agent.isBusy).toBe(false);
+        expect(harness.agent.currentActionId).toBeNull();
+    });
+
     it('replans immediately after a serial tool failure and skips later tools in that batch', async () => {
         const action = createAction('serial-action');
         const decisions = [

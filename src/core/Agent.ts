@@ -122,6 +122,7 @@ export class Agent {
     /** Per-lane action IDs for the parallel worker pool */
     private currentActionIds: Map<'user' | 'autonomy', string | null> = new Map();
     private currentActionStartAt: number | null = null;
+    private activeToolExecutions: Map<string, { actionId: string; toolName: string; startedAt: number; deadlineAt: number }> = new Map();
     private cancelledActions: Set<string> = new Set();
     private persistentTypingTimer: NodeJS.Timeout | null = null;
     private instanceLockPath: string | null = null;
@@ -8711,6 +8712,45 @@ REFLECTION: <1-2 sentences>`;
         return `${String(toolName || '').toLowerCase()}:${String(salient || '').toLowerCase().slice(0, 280)}`;
     }
 
+    private getSkillExecutionWatchdogMs(): number {
+        const raw = Number(this.config.get('skillExecutionTimeoutMs') || 900000);
+        return Number.isFinite(raw) && raw > 0 ? raw : 900000;
+    }
+
+    private beginActiveToolExecution(actionId: string, toolName: string): string {
+        const startedAt = Date.now();
+        const deadlineAt = startedAt + this.getSkillExecutionWatchdogMs() + 30000;
+        const token = `${actionId}:${toolName}:${startedAt}:${Math.random().toString(36).slice(2, 8)}`;
+        this.activeToolExecutions.set(token, { actionId, toolName, startedAt, deadlineAt });
+        return token;
+    }
+
+    private endActiveToolExecution(token?: string | null): void {
+        if (!token) return;
+        this.activeToolExecutions.delete(token);
+    }
+
+    private clearActiveToolExecutionsForAction(actionId?: string | null): void {
+        if (!actionId) return;
+        for (const [token, execution] of this.activeToolExecutions.entries()) {
+            if (execution.actionId === actionId) {
+                this.activeToolExecutions.delete(token);
+            }
+        }
+    }
+
+    private getCurrentActionActiveToolWindow(): { toolNames: string[]; latestDeadlineAt: number } | null {
+        if (!this.currentActionId) return null;
+
+        const activeExecutions = Array.from(this.activeToolExecutions.values()).filter(execution => execution.actionId === this.currentActionId);
+        if (activeExecutions.length === 0) return null;
+
+        return {
+            toolNames: Array.from(new Set(activeExecutions.map(execution => execution.toolName))),
+            latestDeadlineAt: Math.max(...activeExecutions.map(execution => execution.deadlineAt)),
+        };
+    }
+
     private injectDecisionRecoveryGuidance(action: Action, currentStep: number, decision: any): void {
         try {
             const pipelineNotes = decision?.metadata?.pipelineNotes || {};
@@ -9120,6 +9160,7 @@ REFLECTION: <1-2 sentences>`;
             const toolStartedAt = Date.now();
             let toolResult;
             let executionError;
+            const activeToolToken = this.beginActiveToolExecution(action.id, toolCall.name);
             try {
                 toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
             } catch (e) {
@@ -9127,6 +9168,8 @@ REFLECTION: <1-2 sentences>`;
                 if (options.contextLabel === 'bonus') logger.error(`Bonus step skill failed: ${toolCall.name} - ${e}`);
                 else logger.error(`Skill execution failed: ${toolCall.name} - ${e}`);
                 toolResult = `Error executing skill ${toolCall.name}: ${e}`;
+            } finally {
+                this.endActiveToolExecution(activeToolToken);
             }
 
             if (options.contextLabel === 'main' && toolCall.name === 'request_supporting_data') {
@@ -9255,13 +9298,19 @@ REFLECTION: <1-2 sentences>`;
 
             try {
                 const startedAt = Date.now();
-                const toolResult = await this.skills.executeSkill(toolCall.name, {
-                    ...toolCall.metadata,
-                    ...toolCall.parameters,
-                    ...action.payload,
-                    actionId: action.id,
-                    step: currentStep,
-                });
+                const activeToolToken = this.beginActiveToolExecution(action.id, toolCall.name);
+                let toolResult;
+                try {
+                    toolResult = await this.skills.executeSkill(toolCall.name, {
+                        ...toolCall.metadata,
+                        ...toolCall.parameters,
+                        ...action.payload,
+                        actionId: action.id,
+                        step: currentStep,
+                    });
+                } finally {
+                    this.endActiveToolExecution(activeToolToken);
+                }
                 return {
                     toolCall,
                     toolMeta,
@@ -11171,8 +11220,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
         const elapsedMs = Date.now() - this.currentActionStartAt;
         if (elapsedMs <= maxMinutes * 60 * 1000) return;
 
-        logger.error(`Agent: Action ${this.currentActionId} stalled for ${Math.floor(elapsedMs / 60000)}m. Forcing failure.`);
+        const activeToolWindow = this.getCurrentActionActiveToolWindow();
+        if (activeToolWindow && Date.now() <= activeToolWindow.latestDeadlineAt) {
+            logger.debug(
+                `Agent: Stall check deferred for action ${this.currentActionId}; active tool(s) ${activeToolWindow.toolNames.join(', ')} still within watchdog window (${Math.ceil((activeToolWindow.latestDeadlineAt - Date.now()) / 1000)}s remaining)`
+            );
+            return;
+        }
+
+        const toolSuffix = activeToolWindow
+            ? ` Active tool watchdog window was exceeded for: ${activeToolWindow.toolNames.join(', ')}.`
+            : '';
+        logger.error(`Agent: Action ${this.currentActionId} stalled for ${Math.floor(elapsedMs / 60000)}m. Forcing failure.${toolSuffix}`);
         this.actionQueue.updateStatus(this.currentActionId, 'failed');
+        this.clearActiveToolExecutionsForAction(this.currentActionId);
         this.isBusy = false;
         this.currentActionId = null;
         this.currentActionStartAt = null;
@@ -11652,6 +11713,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.clearRecoveryTasksForAction(action.id);
             return `Error: ${err.message}`;
         } finally {
+            this.clearActiveToolExecutionsForAction(action.id);
             this.isBusy = false;
             this.currentActionId = null;
             this.currentActionStartAt = null;
@@ -11812,6 +11874,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.clearRecoveryTasksForAction(action.id);
             return `Error: ${err.message}`;
         } finally {
+            this.clearActiveToolExecutionsForAction(action.id);
             this.busyLanes.delete(lane);
             this.currentActionIds.set(lane, null);
             if (lane === 'user') {
@@ -14172,6 +14235,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
         } finally {
+            this.clearActiveToolExecutionsForAction(action.id);
             this.stopPersistentTypingIndicator();
             this.isBusy = false;
             this.currentActionId = null;
