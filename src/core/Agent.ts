@@ -54,6 +54,7 @@ import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
+import { collectCompletionAuditIssues } from './CompletionAudit';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -8383,27 +8384,19 @@ The plugin handles all logic internally. See the plugin source for implementatio
         try {
             const source = action.payload?.source;
             const isChannelTask = source === 'telegram' || source === 'whatsapp' || source === 'discord' || source === 'slack' || source === 'email' || source === 'gateway-chat';
-            if (!isChannelTask) {
-                return { ok: true, issues: [] };
-            }
+            const loopDetected = !!action.payload?.loopDetected ||
+                (action.payload?.lastDecision?.verification?.analysis || '').includes('loop prevention');
 
-            const issues: string[] = [];
-
-            // If it's a channel task and NO messages were sent, that's still a clear failure to communicate
-            // unless it's explicitly a silent background task (which would not have a channel source).
-            if (context.messagesSent === 0) {
-                const loopDetected = !!action.payload?.loopDetected || 
-                                    (action.payload?.lastDecision?.verification?.analysis || '').includes('loop prevention');
-                                    
-                // Even if no messages were sent, if we hit a loop, we let it die instead of infinitely recovering
-                if (!loopDetected) {
-                    issues.push('No user-visible message was sent for this channel task.');
-                }
-            }
-
-            // We no longer block based on "deep tools" or "substantive deliveries".
-            // The LLM is now trusted to self-manage its estimated steps and set goals_met = true
-            // when it believes the task is complete or should be aborted.
+            const issues = collectCompletionAuditIssues({
+                isChannelTask,
+                messagesSent: context.messagesSent,
+                substantiveDeliveriesSent: context.substantiveDeliveriesSent,
+                deepToolExecutedSinceLastMessage: context.deepToolExecutedSinceLastMessage,
+                sentMessagesInAction: context.sentMessagesInAction,
+                taskComplexity: context.taskComplexity,
+                loopDetected,
+                isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message)
+            });
 
             return { ok: issues.length === 0, issues };
         } catch (e) {
