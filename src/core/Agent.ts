@@ -56,6 +56,7 @@ import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 import { collectCompletionAuditIssues } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
+import { resolveInboundRoute } from './InboundRouting';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -261,7 +262,12 @@ export class Agent {
                 browser: this.browser,
                 config: this.config,
                 agent: this,
-                logger: logger
+                logger: logger,
+                workerCapabilityProfile: this.isWorker ? {
+                    enforced: this.config.get('workerCapabilityEnforcement') !== false,
+                    capabilities: Array.isArray(this.config.get('workerCapabilities')) ? this.config.get('workerCapabilities') : [],
+                    allowChannels: this.config.get('allowWorkerChannels') === true
+                } : undefined
             }
         );
 
@@ -364,7 +370,12 @@ export class Agent {
             agent: this,
             logger: logger,
             workerProfile: this.workerProfile,
-            orchestrator: this.orchestrator
+            orchestrator: this.orchestrator,
+            workerCapabilityProfile: this.isWorker ? {
+                enforced: this.config.get('workerCapabilityEnforcement') !== false,
+                capabilities: Array.isArray(this.config.get('workerCapabilities')) ? this.config.get('workerCapabilities') : [],
+                allowChannels: this.config.get('allowWorkerChannels') === true
+            } : undefined
         });
 
         // Initialize RAG Knowledge Store
@@ -6926,13 +6937,31 @@ Be thorough and academic.`;
                     const description = args.description || args.task || args.text;
                     const priority = parseInt(args.priority || '5');
                     const agentId = args.agent_id || args.id;
+                    const requiredCapabilities = Array.isArray(args.required_capabilities)
+                        ? args.required_capabilities
+                        : (args.required_capabilities || args.requiredCapabilities)
+                            ? [args.required_capabilities || args.requiredCapabilities]
+                            : [];
+                    const preferredCapabilities = Array.isArray(args.preferred_capabilities)
+                        ? args.preferred_capabilities
+                        : (args.preferred_capabilities || args.preferredCapabilities)
+                            ? [args.preferred_capabilities || args.preferredCapabilities]
+                            : [];
+                    const preferredRole = args.preferred_role || args.preferredRole;
 
                     if (!description) return 'Error: Missing task description.';
+
+                    const taskMetadata = {
+                        ...this.buildDelegatedTaskMetadata(description, 'delegate_task'),
+                        requiredCapabilities,
+                        preferredCapabilities,
+                        preferredRole
+                    };
 
                     const task = this.orchestrator.createTask(
                         description,
                         priority,
-                        this.buildDelegatedTaskMetadata(description, 'delegate_task')
+                        taskMetadata
                     );
 
                     if (agentId) {
@@ -7136,7 +7165,12 @@ Be thorough and academic.`;
                         const task = this.orchestrator.createTask(
                             workerInstruction,
                             8,
-                            this.buildDelegatedTaskMetadata(goal, 'browse_async')
+                            {
+                                ...this.buildDelegatedTaskMetadata(goal, 'browse_async'),
+                                requiredCapabilities: ['browse'],
+                                preferredCapabilities: ['web_search', 'read_file'],
+                                preferredRole: 'browser_specialist'
+                            }
                         ); // High priority
                         const assigned = this.orchestrator.assignTask(task.id, browserAgent.id);
                         
@@ -12858,6 +12892,28 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 userId: metadata.userId,
                 chatId: metadata.chatId
             });
+        }
+
+        if (lane === 'user' && metadata?.source && metadata?.sourceId) {
+            const routeDecision = resolveInboundRoute(this.actionQueue.getQueue(), {
+                source: metadata.source,
+                sourceId: metadata.sourceId,
+                sessionScopeId: metadata.sessionScopeId,
+                messageId: metadata.messageId
+            });
+
+            metadata.inboundRoute = routeDecision.route;
+            metadata.inboundRouteTargetActionId = routeDecision.waitingActionId || routeDecision.activeActionId;
+            metadata.inboundSupersededActionIds = routeDecision.supersededActionIds;
+
+            for (const supersededId of routeDecision.supersededActionIds) {
+                this.actionQueue.updateStatus(supersededId, 'failed');
+                logger.info(`Agent: Superseded pending same-thread action ${supersededId} due to newer inbound message (${metadata.sessionScopeId})`);
+            }
+
+            if (routeDecision.route === 'queue_after_active' && routeDecision.activeActionId) {
+                logger.info(`Agent: Queueing inbound task behind active same-thread action ${routeDecision.activeActionId} (${metadata.sessionScopeId})`);
+            }
         }
 
         const threadScopeKey = metadata?.sessionScopeId || (metadata?.source && metadata?.sourceId

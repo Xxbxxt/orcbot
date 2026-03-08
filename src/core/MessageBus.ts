@@ -1,5 +1,6 @@
 import { Agent } from './Agent';
 import { logger } from '../utils/logger';
+import { resolveInboundRoute } from './InboundRouting';
 
 export interface InboundMessage {
     source: string; // e.g., 'discord', 'telegram', 'whatsapp', 'slack', 'email'
@@ -34,6 +35,12 @@ export class MessageBus {
             userId: msg.userId,
             chatId: msg.sourceId
         });
+        const routingDecision = resolveInboundRoute(this.agent.actionQueue.getQueue(), {
+            source: msg.source,
+            sourceId: msg.sourceId,
+            sessionScopeId,
+            messageId: msg.messageId
+        });
 
         // 2. Normalize Content & Log
         const sender = msg.senderName || msg.userId || 'Unknown';
@@ -63,6 +70,8 @@ export class MessageBus {
                 userId: msg.userId,
                 senderName: msg.senderName,
                 messageId: msg.messageId,
+                inboundRoute: routingDecision.route,
+                inboundRouteTargetActionId: routingDecision.waitingActionId || routingDecision.activeActionId,
                 ...msg.metadata
             }
         });
@@ -129,6 +138,9 @@ Goal: Decide if you should respond based on our history and my persona. If yes, 
                 source: msg.source,
                 sourceId: msg.sourceId,
                 sessionScopeId,
+                inboundRoute: routingDecision.route,
+                inboundRouteTargetActionId: routingDecision.waitingActionId || routingDecision.activeActionId,
+                inboundSupersededActionIds: routingDecision.supersededActionIds,
                 senderName: msg.senderName,
                 userId: msg.userId,
                 messageId: msg.messageId,

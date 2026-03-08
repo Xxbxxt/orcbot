@@ -218,6 +218,10 @@ class AgentWorkerProcess {
             // Enforce worker specific paths
             mergedCfg.agentName = config.name;
             mergedCfg.agentRole = config.role;
+            mergedCfg.workerCapabilities = Array.isArray(config.capabilities) ? config.capabilities : [];
+            mergedCfg.workerCapabilityEnforcement = existingCfg.workerCapabilityEnforcement !== undefined
+                ? existingCfg.workerCapabilityEnforcement
+                : true;
             mergedCfg.memoryPath = config.memoryPath;
             mergedCfg.actionQueuePath = path.join(workerDir, 'actions.json');
             mergedCfg.journalPath = path.join(workerDir, 'JOURNAL.md');

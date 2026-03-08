@@ -14,6 +14,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { Agent } from '../core/Agent';
 import { ConfigManager } from '../config/ConfigManager';
+import { collectDoctorReport } from '../cli/Doctor';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
 
@@ -781,10 +782,10 @@ export class GatewayServer {
                 websocket: '/'
             },
             api: {
-                status: ['GET /api/status', 'GET /api/health', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
+                status: ['GET /api/status', 'GET /api/health', 'GET /api/doctor', 'GET /api/gateway/capabilities', 'GET /api/system/info'],
                 dashboard: ['GET /api/dashboard/overview', 'GET /api/services', 'GET /api/services/:id'],
                 dataHome: ['GET /api/data-home/summary', 'GET /api/data-home/tree', 'GET /api/data-home/file', 'GET /api/data-home/asset', 'PUT /api/data-home/file', 'POST /api/data-home/directory', 'POST /api/data-home/rename', 'DELETE /api/data-home/entry'],
-                security: ['GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
+                security: ['GET /api/security', 'GET /api/security/audit', 'PUT /api/security', 'GET /api/gateway/token/status', 'POST /api/gateway/token/rotate'],
                 tasks: ['POST /api/tasks', 'GET /api/tasks', 'GET /api/tasks/:id', 'POST /api/tasks/:id/cancel', 'POST /api/tasks/clear', 'GET /api/queue/stats'],
                 chat: ['POST /api/chat/send', 'GET /api/chat/history', 'GET /api/chat/export', 'POST /api/chat/clear'],
                 memory: ['GET /api/memory', 'GET /api/memory/stats', 'GET /api/memory/search'],
@@ -855,6 +856,11 @@ export class GatewayServer {
                 wsClients: this.clients.size,
                 memoryUsage: process.memoryUsage()
             });
+        });
+
+        router.get('/doctor', (req: Request, res: Response) => {
+            const deep = String(req.query.deep || '').toLowerCase() === 'true';
+            res.json(collectDoctorReport(this.config, { deep }));
         });
 
         router.get('/gateway/capabilities', (_req: Request, res: Response) => {
@@ -1134,7 +1140,7 @@ export class GatewayServer {
 
         // ===== ORCHESTRATOR =====
         router.get('/orchestrator/agents', (_req: Request, res: Response) => {
-            const agents = this.agent.orchestrator.getAgents();
+            const agents = this.agent.orchestrator.getDetailedWorkerStatus();
             res.json({ agents });
         });
 
@@ -1420,6 +1426,23 @@ export class GatewayServer {
         // ===== SECURITY =====
         router.get('/security', (_req: Request, res: Response) => {
             res.json(this.getSecuritySummary());
+        });
+
+        router.get('/security/audit', (req: Request, res: Response) => {
+            const deep = String(req.query.deep || '').toLowerCase() === 'true';
+            const report = collectDoctorReport(this.config, { deep });
+            const findings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+
+            res.json({
+                ...report,
+                summary: {
+                    critical: findings.filter(f => f.severity === 'critical').length,
+                    warn: findings.filter(f => f.severity === 'warn').length,
+                    info: findings.filter(f => f.severity === 'info').length,
+                    ok: Math.max(0, 6 - findings.filter(f => f.severity !== 'info').length)
+                },
+                findings
+            });
         });
 
         router.put('/security', (req: Request, res: Response) => {

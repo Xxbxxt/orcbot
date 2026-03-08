@@ -51,6 +51,8 @@ export const AgentConfigSchema = z.object({
     autonomyBacklogLimit: coerceNumber.default(3),
     autonomyAllowedChannels: z.array(z.string()).default([]),
     workerPoolAllowAutonomyDuringUserWork: coerceBool.default(false),
+    workerCapabilityEnforcement: coerceBool.default(true),
+    workerCapabilities: z.array(z.string()).default([]),
     maxActionRunMinutes: coerceNumber.default(10),
     maxStaleActionMinutes: coerceNumber.default(30),
     memoryPath: z.string().optional(),

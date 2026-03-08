@@ -19,6 +19,7 @@ import { TokenTracker } from '../core/TokenTracker';
 import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
+import { collectDoctorReport } from './Doctor';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
@@ -1052,6 +1053,94 @@ program
 
         console.log('\n--- Memory & Queue ---');
         showStatus();
+    });
+
+program
+    .command('doctor')
+    .description('Run a local health and deployment audit for OrcBot')
+    .option('--deep', 'Include additional filesystem/state checks')
+    .option('--json', 'Print the report as JSON')
+    .action((opts) => {
+        const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+
+        if (opts.json) {
+            console.log(JSON.stringify(report, null, 2));
+            return;
+        }
+
+        console.log('\n=== OrcBot Doctor ===\n');
+        console.log(`Checked: ${report.checkedAt}`);
+        console.log(`Data home: ${report.facts.dataHome}`);
+        console.log(`Gateway: ${report.facts.gatewayHost}:${report.facts.gatewayPort} ${report.facts.gatewayAuthEnabled ? '(auth enabled)' : '(no auth)'}`);
+        console.log(`Channels: ${report.facts.channelsConfigured.length > 0 ? report.facts.channelsConfigured.join(', ') : 'none'}`);
+        console.log(`Providers: ${report.facts.providersConfigured.length > 0 ? report.facts.providersConfigured.join(', ') : 'none'}`);
+        console.log('');
+
+        const summaryLines = [
+            `${c.white}Critical${c.reset}  ${report.summary.critical > 0 ? brightRed(bold(String(report.summary.critical))) : green('0')}`,
+            `${c.white}Warnings${c.reset}  ${report.summary.warn > 0 ? brightYellow(bold(String(report.summary.warn))) : green('0')}`,
+            `${c.white}Info${c.reset}      ${report.summary.info > 0 ? brightCyan(String(report.summary.info)) : gray('0')}`,
+        ];
+        box(summaryLines, { title: '🩺 DOCTOR SUMMARY', width: 40, color: report.summary.critical > 0 ? c.red : (report.summary.warn > 0 ? c.yellow : c.green) });
+        console.log('');
+
+        if (report.findings.length === 0) {
+            console.log(`${green('✓')} No findings. Your current OrcBot setup looks healthy.\n`);
+            return;
+        }
+
+        for (const finding of report.findings) {
+            const tone = finding.severity === 'critical' ? brightRed('CRITICAL') : finding.severity === 'warn' ? brightYellow('WARN') : brightCyan('INFO');
+            console.log(`${tone} ${bold(finding.title)}`);
+            console.log(`  ${finding.message}`);
+            if (finding.recommendation) {
+                console.log(`  ${dim('Fix:')} ${finding.recommendation}`);
+            }
+            console.log('');
+        }
+    });
+
+const securityCommand = program
+    .command('security')
+    .description('Security-focused checks and configuration helpers');
+
+securityCommand
+    .command('audit')
+    .description('Run a security-oriented audit of the current OrcBot configuration')
+    .option('--deep', 'Include additional filesystem/state checks')
+    .option('--json', 'Print the report as JSON')
+    .action((opts) => {
+        const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+        const filtered = {
+            ...report,
+            summary: {
+                critical: securityFindings.filter(f => f.severity === 'critical').length,
+                warn: securityFindings.filter(f => f.severity === 'warn').length,
+                info: securityFindings.filter(f => f.severity === 'info').length,
+                ok: Math.max(0, 6 - securityFindings.filter(f => f.severity !== 'info').length)
+            },
+            findings: securityFindings
+        };
+
+        if (opts.json) {
+            console.log(JSON.stringify(filtered, null, 2));
+            return;
+        }
+
+        console.log('\n=== OrcBot Security Audit ===\n');
+        if (filtered.findings.length === 0) {
+            console.log(`${green('✓')} No security findings in the current audit scope.\n`);
+            return;
+        }
+
+        for (const finding of filtered.findings) {
+            const tone = finding.severity === 'critical' ? brightRed('CRITICAL') : finding.severity === 'warn' ? brightYellow('WARN') : brightCyan('INFO');
+            console.log(`${tone} ${bold(finding.title)}`);
+            console.log(`  ${finding.message}`);
+            if (finding.recommendation) console.log(`  ${dim('Fix:')} ${finding.recommendation}`);
+            console.log('');
+        }
     });
 
 program
