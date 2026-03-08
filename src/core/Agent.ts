@@ -52,6 +52,8 @@ import { registerChannelManagementSkills } from '../skills/channelManagement';
 import { registerFileTools } from '../skills/fileTools';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
+import { parseBrowserPerformActions } from './BrowserPerformParser';
+import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -4267,16 +4269,37 @@ Output ONLY the Markdown body, no YAML frontmatter, no code blocks wrapping it.`
         // Skill: Browser Run Script (Web Scratchpad)
         this.skills.registerSkill({
             name: 'browser_run_script',
-            description: 'Web Scratchpad: Execute custom JavaScript/Puppeteer code directly on the active browser page. Provides access to "page" (Puppeteer Page) and "browser" (Puppeteer Browser). Use this for complex custom logic, multi-step actions, or data extraction that standard tools cannot handle. (Admin only).',
-            usage: 'browser_run_script(code)',
+            description: 'Web Scratchpad: Write and execute persistent browser JavaScript directly against the active page. If "filename" is omitted, code is saved to a persistent `browser-scratchpad.js` file in the data directory. If "filename" is provided with "code", it saves the script under `browser-scripts/` for reuse. If only "filename" is provided, it executes the previously saved script. Provides access to "page", "browser", and "logger". Use this for complex browser logic, retries, DOM surgery, or multi-step web actions that standard tools cannot handle. (Admin only).',
+            usage: 'browser_run_script(code?: string, filename?: string)',
             isDeep: true,
             handler: async (args: any) => {
                 if (!this.isUserAdmin(args)) {
                     return 'Error: Only admin users can execute custom browser scripts for security reasons.';
                 }
                 const code = args.code || args.script;
-                if (!code) return 'Error: Missing code to execute.';
-                return this.browser.runScript(code);
+                const filename = args.filename || args.name;
+
+                if (!code && !filename) {
+                    return 'Error: Missing code or filename to execute.';
+                }
+
+                try {
+                    const target = resolveBrowserScratchpadTarget(this.config.getDataHome(), filename);
+                    if (!fs.existsSync(target.scriptsDir)) {
+                        fs.mkdirSync(target.scriptsDir, { recursive: true });
+                    }
+
+                    if (code) {
+                        fs.writeFileSync(target.scriptPath, code, 'utf8');
+                    } else if (!fs.existsSync(target.scriptPath)) {
+                        return `Error: Browser script '${filename}' does not exist and no code was provided to create it.`;
+                    }
+
+                    const scriptSource = fs.readFileSync(target.scriptPath, 'utf8');
+                    return this.browser.runScript(scriptSource, target.scriptPath);
+                } catch (error: any) {
+                    return `Error executing browser scratchpad: ${error.message || error}`;
+                }
             }
         });
 
@@ -4672,11 +4695,23 @@ Example: [{"tool": "type", "ref": "12", "text": "my search"}, {"tool": "press", 
 Output JSON now:`;
 
                 try {
-                    const response = await this.llm.callFast(prompt, "You are a web automation expert. Execute the goal using the provided snapshot.");
-                    const jsonMatch = response.match(/\[[\s\S]*\]/);
-                    if (!jsonMatch) return `Could not plan actions for goal: "${goal}".\n\nPlan response: ${response}`;
+                    const plannerSystemPrompt = 'You are a web automation expert. Return only valid JSON for the action plan.';
+                    const response = await this.llm.callFast(prompt, plannerSystemPrompt);
 
-                    const actions = JSON.parse(jsonMatch[0]);
+                    let actions;
+                    try {
+                        actions = parseBrowserPerformActions(response);
+                    } catch (initialError) {
+                        logger.warn(`Browser: Initial plan parse failed for goal "${goal}": ${initialError}`);
+                        const retryPrompt = `${prompt}\n\nYour last reply was invalid because it included prose or non-JSON bracket markers. Return ONLY valid JSON. No markdown. No explanation. No bare [ref=...] text outside JSON. If you cannot act, return [] exactly.`;
+                        const retryResponse = await this.llm.callFast(retryPrompt, plannerSystemPrompt);
+                        actions = parseBrowserPerformActions(retryResponse);
+                    }
+
+                    if (!actions.length) {
+                        return `Could not plan actions for goal: "${goal}". The planner returned no actionable steps.`;
+                    }
+
                     const results: string[] = [];
 
                     for (const action of actions) {
