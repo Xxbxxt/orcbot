@@ -13503,6 +13503,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const recentSkillNames: string[] = []; // Track skill name sequence for pattern detection
             const recentSkillSignatures: string[] = []; // Track skill name+args for smarter pattern detection
             let goalsMet = false; // Track if the task genuinely completed (prevents premature 'completed' marking)
+            let hasUnresolvedWorkFailure = false; // Track if deep/work tools (run_command, web_search, etc.) failed without later success
+            let deepWorkToolSucceeded = false; // Track if at least one deep work tool succeeded in this action
+            let workPersistenceOverrides = 0; // Cap how many times work persistence can override termination
+            const MAX_WORK_PERSISTENCE_OVERRIDES = 3; // After this many overrides, allow termination
             let imageGeneratedInAction = false; // Track if generate_image has been called in this action
             let imageDeliveredInAction = false; // Track if the generated image has been delivered
             let generatedImagePath = ''; // Path of the most recently generated image
@@ -13961,11 +13965,38 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
 
                     if (replanAfterFailure && !forceBreak) {
+                        // Track that a deep/work tool failed — this prevents premature
+                        // completion via the reconciler or goals_met when only status
+                        // messages have been sent.
+                        const failedDeepTools = Object.entries(skillFailCounts)
+                            .filter(([name, count]) => count > 0 && getSkillMeta(name).isDeep);
+                        if (failedDeepTools.length > 0) {
+                            hasUnresolvedWorkFailure = true;
+                        }
                         logger.info(`Agent: Re-planning action ${action.id} from the latest runtime failure context.`);
                         continue;
                     }
 
+                    // Track successful deep tool execution (clears unresolved work failure)
+                    if (deepToolExecutedSinceLastMessage && !replanAfterFailure) {
+                        deepWorkToolSucceeded = true;
+                    }
+
                     if (decision.verification?.goals_met) {
+                        // WORK PERSISTENCE CHECK: If work tools failed and the agent
+                        // only sent status messages (no substantive results), override
+                        // goals_met and force the agent to keep working.
+                        if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && substantiveDeliveriesSent === 0 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                            workPersistenceOverrides++;
+                            logger.warn(`Agent: Overriding goals_met for action ${action.id} \u2014 unresolved work failures exist and no substantive delivery was made. Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Continuing work.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-work-persistence`,
+                                type: 'short',
+                                content: `[SYSTEM: WORK PERSISTENCE OVERRIDE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) \u2014 You told the user you are working on the task, but a tool failed and you haven't actually fixed the problem yet. Do NOT set goals_met=true until the underlying work is completed or you have genuinely exhausted all approaches. Try a different strategy to solve the error.]`,
+                                metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                            });
+                            continue;
+                        }
                         logger.info(`Agent: Strategic goal satisfied after execution. Terminating action ${action.id}.`);
                         goalsMet = true;
                         break;
@@ -13989,6 +14020,21 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
                     if (noToolOutcome.outcome === 'break') {
                         break;
+                    }
+                    // WORK PERSISTENCE: If the agent wants to self-terminate but deep work
+                    // tools failed and the problem was never resolved, don't let it stop.
+                    // Inject guidance and force one more cycle so the LLM tries a different approach.
+                    if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && currentStep < MAX_STEPS - 1 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                        workPersistenceOverrides++;
+                        const isLoopTermination = (decision.verification?.analysis || '').includes('loop prevention');
+                        logger.warn(`Agent: Blocking self-termination for ${action.id} — unresolved work failures (loop=${isLoopTermination}). Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Injecting recovery guidance.`);
+                        this.memory.saveMemory({
+                            id: `${action.id}-step-${currentStep}-work-persist-no-tool`,
+                            type: 'short',
+                            content: `[SYSTEM: WORK PERSISTENCE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) — You are trying to finish this task, but you have NOT resolved the underlying problem. A tool failed earlier and you haven't successfully completed the work. Do NOT just send a status message. You MUST either: (1) try a fundamentally different approach to fix the error, (2) search the web for solutions, or (3) if truly stuck after multiple attempts, send the user an honest message explaining exactly what failed and what alternatives exist. Then set goals_met=true.]`,
+                            metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                        });
+                        continue;
                     }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     goalsMet = true;
@@ -14197,14 +14243,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
                 action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'email' || action.payload?.source === 'gateway-chat';
             if (!goalsMet && isUserFacingAction && substantiveDeliveriesSent > 0) {
-                logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
-                this.memory.saveMemory({
-                    id: `${action.id}-delivery-reconciled`,
-                    type: 'short',
-                    content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
-                    metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
-                });
-                goalsMet = true;
+                // Don't reconcile to completed if deep work tools failed and weren't resolved.
+                // Sending a status message like "I'm investigating" doesn't mean the task is done.
+                if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded) {
+                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — unresolved work failures exist (only status messages were sent).`);
+                } else {
+                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
+                    this.memory.saveMemory({
+                        id: `${action.id}-delivery-reconciled`,
+                        type: 'short',
+                        content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
+                        metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
+                    });
+                    goalsMet = true;
+                }
             }
 
             const finalStatus = this.actionQueue.getQueue().find(a => a.id === action.id)?.status;
