@@ -7,6 +7,15 @@ FROM node:22-slim AS builder
 
 WORKDIR /app
 
+# Install build dependencies (Python, make, build essentials for native modules)
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    gcc \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy package files first for better layer caching
 COPY package*.json ./
 
@@ -89,7 +98,8 @@ COPY --from=builder /app/dist ./dist
 # Copy additional assets
 COPY apps/ ./apps/
 COPY docs/ ./docs/
-COPY AGENTS.md ./.AI.md ./LICENSE ./README.md ./USER.md ./JOURNAL.md ./LEARNING.md ./
+COPY AGENTS.md LICENSE README.md USER.md JOURNAL.md LEARNING.md ./
+COPY .AI.md ./
 
 # Create data directory
 RUN mkdir -p /root/.orcbot
