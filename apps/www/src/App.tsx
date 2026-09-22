@@ -181,7 +181,7 @@ function App() {
             <div className="install-footnote">
               <span>Requires Node.js ≥ 18</span>
               <span className="dot-sep">·</span>
-              <a href="https://fredabila.github.io/orcbot/docs/getting-started.html" target="_blank" rel="noopener noreferrer">Full setup guide →</a>
+              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Full setup guide →</a>
             </div>
           </div>
         </section>
@@ -216,10 +216,12 @@ function App() {
               <div className="marquee-track marquee-track-reverse">
                 {[
                   { icon: '⚡', title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
+                  { icon: '🧪', title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
                   { icon: '🛡️', title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
                   { icon: '🧩', title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
                   { icon: '🔒', title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
                   { icon: '⚡', title: 'Self-Evolving Skills', desc: 'Researches, writes, and installs its own TypeScript plugins when new capabilities are needed.' },
+                  { icon: '🧪', title: 'Self-Training Sidecar', desc: 'Captures accepted trajectories, prepares offline datasets, evaluates candidates, and promotes new models under admin control.' },
                   { icon: '🛡️', title: 'Guard Rails & Safety', desc: 'Loop detection, termination review, skill frequency limits, and deduplication protection.' },
                   { icon: '🧩', title: 'Smart Skill Routing', desc: 'Intent-based skill selection with configurable routing rules for optimal tool matching.' },
                   { icon: '🔒', title: 'Privacy First', desc: 'All logs, memories, configs, and context stay on your hardware. You own everything.' },
@@ -289,20 +291,31 @@ function App() {
           <p className="section-desc">Guides that move fast — from first run to production ops.</p>
           <div className="docs-grid">
             {[
-              { icon: '🚀', title: 'Getting Started', desc: 'Quick setup guide — running in under 5 minutes.', url: 'https://fredabila.github.io/orcbot/docs/getting-started.html' },
-              { icon: '🏗️', title: 'Architecture', desc: 'Deep dive into modular design and component contracts.', url: 'https://fredabila.github.io/orcbot/docs/architecture.html' },
-              { icon: '🧩', title: 'Skills & Plugins', desc: 'Core skills reference and how to author custom ones.', url: 'https://fredabila.github.io/orcbot/docs/skills.html' },
-              { icon: '⚙️', title: 'Configuration', desc: 'Providers, channels, and every advanced setting.', url: 'https://fredabila.github.io/orcbot/docs/configuration.html' },
-              { icon: '🐳', title: 'Docker Deployment', desc: 'Run OrcBot anywhere with Docker Compose.', url: 'https://fredabila.github.io/orcbot/docs/docker.html' },
-              { icon: '📚', title: 'Full Documentation', desc: 'All guides, API references, and examples in one place.', url: 'https://fredabila.github.io/orcbot/docs/', featured: true },
+              { icon: '🚀', title: 'Getting Started', desc: 'Quick setup guide — running in under 5 minutes.', url: 'https://docs.orcbot.buzzchat.site/getting-started.html' },
+              { icon: '🏗️', title: 'Architecture', desc: 'Deep dive into modular design and component contracts.', url: 'https://docs.orcbot.buzzchat.site/architecture.html' },
+              { icon: '🧩', title: 'Skills & Plugins', desc: 'Core skills reference and how to author custom ones.', url: 'https://docs.orcbot.buzzchat.site/skills.html' },
+              { icon: '🧪', title: 'Self-Training', desc: 'How OrcBot captures trajectories, evaluates candidates, and promotes models safely.', url: '/self-training' },
+              { icon: '⚙️', title: 'Configuration', desc: 'Providers, channels, and every advanced setting.', url: 'https://docs.orcbot.buzzchat.site/configuration.html' },
+              { icon: '🐳', title: 'Docker Deployment', desc: 'Run OrcBot anywhere with Docker Compose.', url: 'https://docs.orcbot.buzzchat.site/docker.html' },
+              { icon: '📚', title: 'Full Documentation', desc: 'All guides, API references, and examples in one place.', url: 'https://docs.orcbot.buzzchat.site/', featured: true },
             ].map((doc, i) => (
-              <a href={doc.url} target="_blank" rel="noopener noreferrer" className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
-                <div className="doc-card-icon">{doc.icon}</div>
-                <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
-                <span className="doc-card-arrow">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
-                </span>
-              </a>
+              doc.url.startsWith('/') ? (
+                <Link to={doc.url} className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
+                  <div className="doc-card-icon">{doc.icon}</div>
+                  <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
+                  <span className="doc-card-arrow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+                  </span>
+                </Link>
+              ) : (
+                <a href={doc.url} target="_blank" rel="noopener noreferrer" className={`doc-card ${(doc as any).featured ? 'featured' : ''}`} key={i}>
+                  <div className="doc-card-icon">{doc.icon}</div>
+                  <div className="doc-card-body"><h3>{doc.title}</h3><p>{doc.desc}</p></div>
+                  <span className="doc-card-arrow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
+                  </span>
+                </a>
+              )
             ))}
           </div>
         </section>
@@ -327,11 +340,7 @@ function App() {
         <div className="footer-top">
           <div className="footer-brand">
             <Link to="/" className="logo footer-logo">
-              <svg className="logo-mark" width="26" height="26" viewBox="0 0 28 28" fill="none">
-                <rect width="28" height="28" rx="7" fill="#5cffb3" fillOpacity="0.15" />
-                <path d="M8 14l4 4 8-8" stroke="#5cffb3" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-                <circle cx="21" cy="7" r="2.5" fill="#5cffb3" />
-              </svg>
+              <img className="logo-mark logo-img" src="/orcbot.jpeg" alt="OrcBot logo" />
               <span>OrcBot</span>
             </Link>
             <p className="footer-brand-desc">An autonomous AI operating system for operators. Local-first, memory-aware, and always on your hardware.</p>
@@ -351,15 +360,16 @@ function App() {
               <a href="#how-it-works">How It Works</a>
               <a href="#architecture">Architecture</a>
               <a href="#install">Install</a>
+              <Link to="/self-training">Self-Training</Link>
               <Link to="/deploy">Cloud Deploy</Link>
             </div>
             <div className="footer-col">
               <h4>Docs</h4>
-              <a href="https://fredabila.github.io/orcbot/docs/getting-started.html" target="_blank" rel="noopener noreferrer">Getting Started</a>
-              <a href="https://fredabila.github.io/orcbot/docs/configuration.html" target="_blank" rel="noopener noreferrer">Configuration</a>
-              <a href="https://fredabila.github.io/orcbot/docs/skills.html" target="_blank" rel="noopener noreferrer">Skills &amp; Plugins</a>
-              <a href="https://fredabila.github.io/orcbot/docs/architecture.html" target="_blank" rel="noopener noreferrer">Architecture</a>
-              <a href="https://fredabila.github.io/orcbot/docs/" target="_blank" rel="noopener noreferrer">All Docs →</a>
+              <a href="https://docs.orcbot.buzzchat.site/getting-started.html" target="_blank" rel="noopener noreferrer">Getting Started</a>
+              <a href="https://docs.orcbot.buzzchat.site/configuration.html" target="_blank" rel="noopener noreferrer">Configuration</a>
+              <a href="https://docs.orcbot.buzzchat.site/skills.html" target="_blank" rel="noopener noreferrer">Skills &amp; Plugins</a>
+              <a href="https://docs.orcbot.buzzchat.site/architecture.html" target="_blank" rel="noopener noreferrer">Architecture</a>
+              <a href="https://docs.orcbot.buzzchat.site/" target="_blank" rel="noopener noreferrer">All Docs →</a>
             </div>
             <div className="footer-col">
               <h4>Project</h4>

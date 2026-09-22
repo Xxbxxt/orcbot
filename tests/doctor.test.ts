@@ -1,4 +1,40 @@
-import { describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { ConfigManager } from '../src/config/ConfigManager';
+import { collectLLMCompatibilityReport } from '../src/cli/Doctor';
+
+const tempPaths: string[] = [];
+
+afterEach(() => {
+    for (const tempPath of tempPaths.splice(0)) {
+        fs.rmSync(tempPath, { recursive: true, force: true });
+    }
+});
+
+describe('Doctor LLM compatibility report', () => {
+    it('reports configured provider readiness without live probes', async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orcbot-doctor-'));
+        tempPaths.push(tempDir);
+
+        const configPath = path.join(tempDir, 'orcbot.config.yaml');
+        fs.writeFileSync(configPath, [
+            'llmProvider: openrouter',
+            'modelName: openrouter:google/gemini-2.0-flash-exp:free',
+            'openrouterApiKey: test-openrouter-key',
+            'usePiAI: false',
+        ].join('\n'));
+
+        const config = new ConfigManager(configPath);
+        const report = await collectLLMCompatibilityReport(config, { live: false });
+
+        expect(report.activeProvider).toBe('openrouter');
+        expect(report.schemaContractOk).toBe(true);
+        expect(report.providers.some(provider => provider.provider === 'openrouter' && provider.ready)).toBe(true);
+        expect(report.providers.find(provider => provider.provider === 'openrouter')?.authMode).toBe('api-key');
+    });
+});import { describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import { collectDoctorReport } from '../src/cli/Doctor';
 
@@ -8,6 +44,10 @@ function makeConfig(overrides: Record<string, any> = {}) {
         gatewayPort: 3100,
         gatewayApiKey: undefined,
         gatewayCorsOrigins: ['*'],
+        mcpHost: '0.0.0.0',
+        mcpPort: 3190,
+        mcpPath: '/mcp',
+        mcpApiKey: undefined,
         safeMode: false,
         sudoMode: false,
         autoExecuteCommands: false,
@@ -39,6 +79,43 @@ describe('collectDoctorReport', () => {
 
         const report = collectDoctorReport(makeConfig());
         expect(report.findings.some(f => f.id === 'gateway.bind_no_auth' && f.severity === 'critical')).toBe(true);
+    });
+
+    it('flags non-loopback MCP HTTP without auth as critical', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({ gatewayApiKey: undefined, mcpApiKey: undefined }));
+        expect(report.findings.some(f => f.id === 'mcp.bind_no_auth' && f.severity === 'critical')).toBe(true);
+        expect(report.facts.mcpAuthEnabled).toBe(false);
+    });
+
+    it('uses dedicated MCP auth in doctor facts and warnings', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({
+            gatewayApiKey: undefined,
+            mcpApiKey: 'short-token'
+        }));
+
+        expect(report.facts.mcpAuthEnabled).toBe(true);
+        expect(report.facts.mcpAuthSource).toBe('mcpApiKey');
+        expect(report.findings.some(f => f.id === 'mcp.auth_weak_token' && f.severity === 'warn')).toBe(true);
+    });
+
+    it('falls back to gateway auth for MCP doctor facts when needed', () => {
+        vi.spyOn(fs, 'existsSync').mockImplementation((target: fs.PathLike) => String(target).includes('D:/orcbot-test'));
+        vi.spyOn(fs, 'readdirSync').mockReturnValue([] as any);
+
+        const report = collectDoctorReport(makeConfig({
+            gatewayApiKey: '1234567890123456',
+            mcpHost: '127.0.0.1'
+        }));
+
+        expect(report.facts.mcpAuthEnabled).toBe(true);
+        expect(report.facts.mcpAuthSource).toBe('gatewayApiKey');
+        expect(report.findings.some(f => f.id === 'mcp.bind_no_auth')).toBe(false);
     });
 
     it('flags sudo mode and auto execute as critical', () => {

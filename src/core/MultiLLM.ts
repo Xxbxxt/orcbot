@@ -122,6 +122,7 @@ export class MultiLLM {
         this.preferredProvider = config?.llmProvider;
         this.fallbackModelNames = config?.fallbackModelNames || {};
         this.usePiAI = config?.usePiAI ?? false;
+        this.maybePreferPiAiOAuthOverPlaceholderOpenAiKey();
 
         if (this.usePiAI) logger.info('MultiLLM: pi-ai backend enabled');
         logger.info(`MultiLLM: Initialized with model ${this.modelName}`);
@@ -172,8 +173,37 @@ export class MultiLLM {
         if (config.googleLocation !== undefined) this.googleLocation = config.googleLocation;
         if (config.fallbackModelNames !== undefined) this.fallbackModelNames = config.fallbackModelNames;
         if (config.fastModelName !== undefined) this.fastModelName = config.fastModelName;
+        this.maybePreferPiAiOAuthOverPlaceholderOpenAiKey();
 
         logger.info(`MultiLLM: Configuration updated (active model: ${this.modelName}, provider: ${this.preferredProvider || 'auto'})`);
+    }
+
+    private isLikelyPlaceholderOpenAiKey(key: string | undefined): boolean {
+        const normalized = String(key || '').trim().toLowerCase();
+        if (!normalized) return false;
+
+        const placeholderPatterns = [
+            'your_openai',
+            'openai_key_here',
+            'api_key_here',
+            'replace_me',
+            'placeholder',
+            'changeme',
+            'dummy',
+            'example'
+        ];
+
+        return placeholderPatterns.some(pattern => normalized.includes(pattern));
+    }
+
+    private maybePreferPiAiOAuthOverPlaceholderOpenAiKey(): void {
+        if (!this.usePiAI) return;
+        if (!this.openaiKey) return;
+        if (!this.isLikelyPlaceholderOpenAiKey(this.openaiKey)) return;
+        if (!isPiAiLinked('openai-codex')) return;
+
+        logger.warn('MultiLLM: Detected placeholder openaiApiKey while pi-ai openai-codex OAuth is linked. Ignoring placeholder key and using OAuth linkage.');
+        this.openaiKey = undefined;
     }
 
     // ── Fast model for internal reasoning (reviews, reflections, classification) ──
@@ -187,14 +217,26 @@ export class MultiLLM {
     public async callFast(prompt: string, systemMessage?: string): Promise<string> {
         if (this.fastModelName) {
             const provider = this.inferProvider(this.fastModelName);
-            if (this.hasKeyForProvider(provider)) {
-                return this.call(prompt, systemMessage, provider, this.fastModelName);
+            if (this.hasKeyForProvider(provider) || this.hasPiAiLinkedAuth(provider)) {
+                try {
+                    return await this.call(prompt, systemMessage, provider, this.fastModelName);
+                } catch (error) {
+                    logger.warn(`MultiLLM: Explicit fast model ${this.fastModelName} failed, falling back to selected model ${this.modelName} - ${(error as Error).message}`);
+                    const selectedProvider = this.preferredProvider || this.inferProvider(this.modelName);
+                    return this.call(prompt, systemMessage, selectedProvider, this.modelName);
+                }
             }
-            logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} key (not configured). Auto-selecting from primary provider.`);
+            logger.info(`MultiLLM: Fast model ${this.fastModelName} needs ${provider} credentials (not configured). Auto-selecting from primary provider.`);
         }
         const primaryProvider = this.preferredProvider || this.inferProvider(this.modelName);
         const fastModel = this.getFastModelForProvider(primaryProvider);
-        return this.call(prompt, systemMessage, primaryProvider, fastModel);
+        try {
+            return await this.call(prompt, systemMessage, primaryProvider, fastModel);
+        } catch (error) {
+            if (fastModel === this.modelName) throw error;
+            logger.warn(`MultiLLM: Fast model ${fastModel} failed, falling back to selected model ${this.modelName} - ${(error as Error).message}`);
+            return this.call(prompt, systemMessage, primaryProvider, this.modelName);
+        }
     }
 
     private hasKeyForProvider(provider: LLMProvider): boolean {
@@ -217,7 +259,26 @@ export class MultiLLM {
         }
     }
 
+    private hasPiAiLinkedAuth(provider: LLMProvider): boolean {
+        if (!this.usePiAI || provider === 'ollama') return false;
+
+        switch (provider) {
+            case 'openai':
+                return isPiAiLinked('openai-codex');
+            case 'google':
+                return isPiAiLinked('google-gemini-cli') || isPiAiLinked('google-antigravity');
+            case 'anthropic':
+                return isPiAiLinked('anthropic');
+            default:
+                return false;
+        }
+    }
+
     private getFastModelForProvider(provider: LLMProvider): string {
+        if (this.usePiAI && this.hasPiAiLinkedAuth(provider)) {
+            return this.modelName;
+        }
+
         switch (provider) {
             case 'openai': return 'gpt-4o-mini';
             case 'google': return 'gemini-flash-lite-latest';
@@ -230,12 +291,17 @@ export class MultiLLM {
     }
 
     public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        const primaryModel = modelOverride || this.modelName;
+        const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
+        let piAiError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
-                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(modelOverride, provider));
-            } catch (e) {}
+                return await piAiCall(prompt, systemMessage, this.getPiAIOptions(primaryModel, primaryProvider));
+            } catch (e) {
+                piAiError = e as Error;
+                logger.warn(`MultiLLM: pi-ai call failed for ${primaryProvider}/${primaryModel}, falling back to legacy path - ${piAiError.message}`);
+            }
         }
         
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
@@ -255,10 +321,12 @@ export class MultiLLM {
             }
         };
 
-        const primaryModel = modelOverride || this.modelName;
         return ErrorHandler.withFallback(
             async () => {
-                const primaryProviderResolved = provider || this.preferredProvider || this.inferProvider(primaryModel);
+                const primaryProviderResolved = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
+                if (piAiError && !this.hasKeyForProvider(primaryProviderResolved)) {
+                    throw new Error(`Primary provider (${primaryProviderResolved}) via pi-ai failed: ${piAiError.message}`);
+                }
                 if (!this.hasKeyForProvider(primaryProviderResolved)) {
                     throw new Error(`Primary provider (${primaryProviderResolved}) failed: API key not configured.`);
                 }
@@ -283,13 +351,16 @@ export class MultiLLM {
         provider?: LLMProvider,
         modelOverride?: string
     ): Promise<LLMToolResponse> {
-        const primaryProvider = provider || this.preferredProvider || this.inferProvider(modelOverride || this.modelName);
+        const primaryModel = modelOverride || this.modelName;
+        const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
+        let piAiToolError: Error | undefined;
 
         if (this.usePiAI && primaryProvider !== 'ollama') {
             try {
-                return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(modelOverride, provider));
+                return await piAiCallWithTools(prompt, systemMessage, tools, this.getPiAIOptions(primaryModel, primaryProvider));
             } catch (e) {
-                logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy — ${(e as Error).message}`);
+                piAiToolError = e as Error;
+                logger.warn(`MultiLLM: pi-ai callWithTools failed, falling back to legacy - ${piAiToolError.message}`);
             }
         }
         
@@ -326,6 +397,9 @@ export class MultiLLM {
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
         return ErrorHandler.withFallback(
             async () => {
+                if (piAiToolError && !this.hasKeyForProvider(primaryProvider)) {
+                    throw new Error(`Primary provider (${primaryProvider}) via pi-ai failed: ${piAiToolError.message}`);
+                }
                 if (!this.hasKeyForProvider(primaryProvider)) {
                     throw new Error(`Primary provider (${primaryProvider}) failed: API key not configured.`);
                 }
@@ -454,11 +528,17 @@ export class MultiLLM {
         const messages: LLMMessage[] = [];
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
         messages.push({ role: 'user', content: prompt });
+        // OpenAI enforces a 128-tool limit; NVIDIA has the same constraint via its OpenAI-compatible API.
+        const MAX_TOOLS = 128;
+        const cappedTools = tools.length > MAX_TOOLS ? tools.slice(0, MAX_TOOLS) : tools;
+        if (tools.length > MAX_TOOLS) {
+            logger.warn(`MultiLLM ${provider}: trimmed tools from ${tools.length} to ${MAX_TOOLS} (API limit)`);
+        }
         const body: any = {
             model: resolvedModel,
             messages,
             temperature: 0.7,
-            tools,
+            tools: cappedTools,
         };
         if (provider === 'nvidia') body.max_tokens = 16384;
 
@@ -735,6 +815,48 @@ export class MultiLLM {
     }
     private normalizeOllamaModel(modelName: string): string {
         return modelName.replace(/^ollama:/i, '').replace(/^local:/i, '');
+    }
+
+    private hasStrongProviderSignal(modelName: string): boolean {
+        const lower = (modelName || '').toLowerCase();
+        return lower.startsWith('ollama:') ||
+            lower.startsWith('local:') ||
+            lower.startsWith('ol:') ||
+            lower.includes('bedrock') ||
+            lower.startsWith('br:') ||
+            lower.includes('claude') ||
+            lower.startsWith('anthropic:') ||
+            lower.startsWith('ant:') ||
+            lower.startsWith('openrouter:') ||
+            lower.startsWith('openrouter/') ||
+            lower.startsWith('or:') ||
+            lower.startsWith('nvidia:') ||
+            lower.startsWith('nv:') ||
+            lower.startsWith('mistral:') ||
+            lower.startsWith('mi:') ||
+            lower.startsWith('groq:') ||
+            lower.startsWith('gr:') ||
+            lower.startsWith('deepseek:') ||
+            lower.startsWith('ds:') ||
+            lower.startsWith('xai:') ||
+            lower.startsWith('xi:') ||
+            lower.startsWith('perplexity:') ||
+            lower.startsWith('pp:') ||
+            lower.startsWith('cerebras:') ||
+            lower.startsWith('cb:') ||
+            lower.includes('gemini') ||
+            lower.includes('gpt-') ||
+            lower.includes('o1-');
+    }
+
+    private resolveProviderForModel(requestedProvider: LLMProvider | undefined, modelName: string): LLMProvider {
+        const inferred = this.inferProvider(modelName);
+        if (!requestedProvider) return inferred;
+        if (requestedProvider !== inferred && this.hasStrongProviderSignal(modelName)) {
+            logger.warn(`MultiLLM: Provider/model mismatch detected (${requestedProvider}/${modelName}); using inferred provider ${inferred} instead.`);
+            return inferred;
+        }
+        return requestedProvider;
     }
 
     private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
@@ -1093,7 +1215,41 @@ export class MultiLLM {
     }
 
     public async analyzeMedia(filePath: string, prompt: string): Promise<string> {
-        return this.inferProvider(this.modelName) === 'google' ? this.analyzeMediaGoogle(filePath, prompt) : this.analyzeMediaOpenAI(filePath, prompt);
+        const preferred = this.preferredProvider || this.inferProvider(this.modelName);
+
+        const tryProvider = async (provider: LLMProvider): Promise<string> => {
+            if (provider === 'google') {
+                if (!this.googleKey) throw new Error('Google API key not configured');
+                return this.analyzeMediaGoogle(filePath, prompt);
+            }
+            if (provider === 'openai') {
+                if (!this.openaiKey) throw new Error('OpenAI API key not configured');
+                return this.analyzeMediaOpenAI(filePath, prompt);
+            }
+            throw new Error(`Provider ${provider} does not have native media analysis in current adapter path`);
+        };
+
+        // 1) Try media analysis on the active provider when supported.
+        try {
+            return await tryProvider(preferred);
+        } catch (primaryErr) {
+            logger.warn(`MultiLLM: analyzeMedia primary route failed for ${preferred}: ${(primaryErr as Error).message}`);
+        }
+
+        // 2) Auto-fallback between Google/OpenAI if one is configured.
+        const fallbackOrder: LLMProvider[] = preferred === 'google' ? ['openai'] : ['google', 'openai'];
+        for (const p of fallbackOrder) {
+            try {
+                return await tryProvider(p);
+            } catch (fallbackErr) {
+                logger.warn(`MultiLLM: analyzeMedia fallback route failed for ${p}: ${(fallbackErr as Error).message}`);
+            }
+        }
+
+        // 3) Graceful degradation for OAuth/pi-ai or text-only providers.
+        // Return a deterministic message instead of throwing so channel listeners
+        // can continue normal message flow without noisy errors.
+        return 'Media analysis skipped: no media-capable provider is configured for the current model. Configure Google/OpenAI media credentials or switch to a media-capable route.';
     }
 
     public async analyzeMediaWithModel(filePath: string, prompt: string, modelName: string): Promise<string> {
@@ -1133,7 +1289,9 @@ export class MultiLLM {
     }
 
     private getPiAIOptions(modelOverride?: string, providerOverride?: LLMProvider): PiAIAdapterOptions {
-        return { provider: providerOverride ?? 'auto', model: modelOverride || this.modelName, apiKeys: { openai: this.openaiKey, google: this.googleKey, anthropic: this.anthropicKey, openrouter: this.openrouterKey, nvidia: this.nvidiaKey, bedrockAccessKeyId: this.bedrockAccessKeyId, bedrockSecretAccessKey: this.bedrockSecretAccessKey, bedrockRegion: this.bedrockRegion, bedrockSessionToken: this.bedrockSessionToken, groq: this.groqKey, mistral: this.mistralKey, cerebras: this.cerebrasKey, xai: this.xaiKey, huggingface: this.huggingfaceKey, kimi: this.kimiKey, minimax: this.minimaxKey, zai: this.zaiKey, perplexity: this.perplexityKey, deepseek: this.deepseekKey, opencode: this.opencodeKey, azureEndpoint: this.azureEndpoint, googleProjectId: this.googleProjectId, googleLocation: this.googleLocation } };
+        const model = modelOverride || this.modelName;
+        const provider = this.resolveProviderForModel(providerOverride ?? this.preferredProvider, model);
+        return { provider: provider ?? 'auto', model, apiKeys: { openai: this.openaiKey, google: this.googleKey, anthropic: this.anthropicKey, openrouter: this.openrouterKey, nvidia: this.nvidiaKey, bedrockAccessKeyId: this.bedrockAccessKeyId, bedrockSecretAccessKey: this.bedrockSecretAccessKey, bedrockRegion: this.bedrockRegion, bedrockSessionToken: this.bedrockSessionToken, groq: this.groqKey, mistral: this.mistralKey, cerebras: this.cerebrasKey, xai: this.xaiKey, huggingface: this.huggingfaceKey, kimi: this.kimiKey, minimax: this.minimaxKey, zai: this.zaiKey, perplexity: this.perplexityKey, deepseek: this.deepseekKey, opencode: this.opencodeKey, azureEndpoint: this.azureEndpoint, googleProjectId: this.googleProjectId, googleLocation: this.googleLocation } };
     }
 
     public async piAiLogin(providerKey: string): Promise<void> { await piAiLogin(providerKey); }
@@ -1149,6 +1307,9 @@ export class MultiLLM {
 
     public setModel(modelName: string): void {
         this.modelName = modelName;
+        if (this.hasStrongProviderSignal(modelName)) {
+            this.preferredProvider = this.resolveProviderForModel(this.preferredProvider, modelName);
+        }
         logger.info(`MultiLLM: Model changed to ${modelName}`);
     }
 

@@ -269,7 +269,8 @@ export class EmailChannel implements IChannel {
             return '';
         }
 
-        return fetchOutput.slice(start, start + byteCount).trim();
+        const rawBody = fetchOutput.slice(start, start + byteCount).trim();
+        return rawBody.replace(/\r?\n\)$/, '').trim();
     }
 
     private createSmtpTransporter(): nodemailer.Transporter {
@@ -607,9 +608,8 @@ Output ONLY valid JSON.`;
             }
             return false;
         } catch (error: any) {
-            logger.warn(`EmailChannel: AI Classification failed for "${email.subject}": ${error.message}. Defaulting to suppress reply for safety.`);
-            // Fail closed: if classifier fails in a high-traffic environment, suppress to avoid queue flooding
-            return 'AI Classification Error';
+            logger.warn(`EmailChannel: AI Classification failed for "${email.subject}": ${error.message}. Falling back to normal delivery rules.`);
+            return false;
         }
     }
 

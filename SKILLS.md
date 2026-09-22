@@ -37,6 +37,44 @@ This file lists the available skills for the agent.
 - **fetch_email(uid)**: [EMAIL TOOL] Fetch the full content of a specific email by its IMAP UID.
 - **index_emails_to_knowledge_base({ query?, sender?, subject?, daysAgo?, limit?, collection? })**: [EMAIL TOOL] Search and ingest emails into the RAG Knowledge Store for semantic search.
 - **generate_email_report({ topic, emails?, sender?, subject?, query?, daysAgo? })**: [EMAIL TOOL] Analyze multiple emails and generate a synthesized report/summary.
+- **google_identity_status()**: [EMAIL/AUTH TOOL] Check whether Google OAuth credentials and a Gmail-backed identity are configured and connected for browser auth workflows.
+- **google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)**: [EMAIL/AUTH TOOL] Configure Google OAuth credentials and connect the agent by exchanging an authorization code or redirect URL. If no code is provided, returns a consent URL.
+- **google_inbox_search(query, maxResults?)**: [EMAIL/AUTH TOOL] Search the connected Gmail inbox for login emails, magic links, verification messages, or other auth-related mail.
+- **google_latest_otp(from_contains?, subject_contains?)**: [EMAIL/AUTH TOOL] Extract the latest numeric OTP code from recent Gmail messages, optionally filtered by sender or subject.
+- **google_workspace_status()**: [GOOGLE WORKSPACE TOOL] Check whether the Google Workspace CLI (`gws`) is installed and whether its auth context is available.
+- **google_workspace_command(args:array, json?, account?)**: [GOOGLE WORKSPACE TOOL] Run a structured `gws` command without a shell. Use this for broad Workspace access across Gmail, Drive, Docs, Sheets, Calendar, and related services.
+- **github_cli_status()**: [GITHUB TOOL] Check whether the GitHub CLI (`gh`) is installed and whether its auth context is available.
+- **github_cli_command(args:array, json?, cwd?)**: [GITHUB TOOL] Run a structured `gh` command without a shell. Use this for releases, PRs, issues, workflow inspection, and other GitHub operations.
+- **github_branch_list(repo?, limit?, query?, cwd?)**: [GITHUB TOOL] List repository branches through `gh`, with optional repo override and name filtering.
+- **github_label_list(repo?, limit?, search?, cwd?)**: [GITHUB TOOL] List repository labels through `gh`.
+- **github_label_create(name, color, description?, force?, repo?, cwd?)**: [GITHUB TOOL] Create or update a repository label through `gh`.
+- **github_label_delete(name, repo?, cwd?)**: [GITHUB TOOL] Delete a repository label through `gh`.
+- **github_pr_list(state?, limit?, repo?, base?, head?, author?, assignee?, cwd?)**: [GITHUB TOOL] List pull requests through `gh` with optional repo, branch, author, assignee, and state filters.
+- **github_pr_checks(pull_request, repo?, watch?, cwd?)**: [GITHUB TOOL] Inspect GitHub status checks for a pull request through `gh`.
+- **github_pr_review(pull_request, event, body?, repo?, cwd?)**: [GITHUB TOOL] Submit a pull request review through `gh` as an approval, comment, or request for changes.
+- **github_pr_comment(pull_request, body, repo?, cwd?)**: [GITHUB TOOL] Post a plain comment on a pull request through `gh`.
+- **github_pr_merge(pull_request, strategy?, subject?, body?, auto?, admin?, delete_branch?, match_head_commit?, repo?, cwd?)**: [GITHUB TOOL] Merge a pull request through `gh` using merge, squash, or rebase, with optional auto-merge and branch cleanup flags.
+- **github_issue_create(title, body?, repo?, labels?, assignees?, cwd?)**: [GITHUB TOOL] Create a GitHub issue through `gh` with optional labels, assignees, and repo override.
+- **github_issue_comment(issue, body, repo?, cwd?)**: [GITHUB TOOL] Post a plain comment on a GitHub issue through `gh`.
+- **github_release_create(tag, title?, notes?, repo?, target?, draft?, prerelease?, generate_notes?, cwd?)**: [GITHUB TOOL] Create a GitHub release through `gh`, optionally generating notes or targeting a specific commit/branch.
+- **github_release_upload_asset(tag, files, repo?, clobber?, cwd?)**: [GITHUB TOOL] Upload one or more files to an existing GitHub release through `gh`.
+- **github_variable_list(repo?, limit?, cwd?)**: [GITHUB TOOL] List repository variables through `gh`.
+- **github_variable_set(name, value, repo?, visibility?, cwd?)**: [GITHUB TOOL] Create or update a repository variable through `gh`.
+- **github_variable_delete(name, repo?, cwd?)**: [GITHUB TOOL] Delete a repository variable through `gh`.
+- **github_workflow_runs(workflow?, branch?, event?, status?, limit?, repo?, user?, cwd?)**: [GITHUB TOOL] List GitHub Actions workflow runs through `gh` with optional workflow, branch, status, event, and repo filters.
+- **github_workflow_dispatch(workflow, ref?, fields?, repo?, cwd?)**: [GITHUB TOOL] Dispatch a GitHub Actions workflow through `gh`, optionally passing ref and input fields.
+- **github_workflow_rerun(run_id, failed?, repo?, cwd?)**: [GITHUB TOOL] Request a rerun of a GitHub Actions workflow run through `gh`, optionally rerunning only failed jobs.
+- **google_docs_create(title, content?, account?)**: [GOOGLE WORKSPACE TOOL] Create a Google Doc via `gws`, optionally writing initial content right after creation.
+- **google_docs_write(document_id, text, account?)**: [GOOGLE WORKSPACE TOOL] Append plain text to an existing Google Doc via `gws`.
+- **google_drive_list(query?, pageSize?, account?)**: [GOOGLE WORKSPACE TOOL] List Google Drive files with optional Drive query filtering.
+- **google_sheets_create(title, account?)**: [GOOGLE WORKSPACE TOOL] Create a Google Sheets spreadsheet via `gws`.
+- **google_sheets_read(spreadsheet_id, range, account?)**: [GOOGLE WORKSPACE TOOL] Read a range of cell values from a Google Sheet via `gws`.
+- **google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Append one or more rows to a Google Sheet via `gws`.
+- **google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Create a Google Calendar event via `gws`.
+- **google_gmail_triage(max?, query?, labels?, account?)**: [GOOGLE WORKSPACE TOOL] Show an unread Gmail summary via `gws`.
+- **google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Send a plain-text Gmail message via `gws`.
+- **google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Reply to a Gmail message via `gws`, preserving thread headers automatically.
+- **google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)**: [GOOGLE WORKSPACE TOOL] Reply-all to a Gmail thread via `gws`.
 
 ## System & Configuration
 - **run_command(command, cwd?)**: [SYSTEM/OS LEVEL] Execute shell commands on the host system (subject to allow/deny lists). Automatically extracts directory from "cd /path && command" or "cd /path ; command" patterns and uses as working directory.
@@ -73,10 +111,30 @@ This file lists the available skills for the agent.
 - **switch_browser_engine(engine, endpoint?)**: [BROWSER/WEB AUTOMATION] Switch between Puppeteer and Lightpanda browser engines.
 - **create_time_capsule(goal, duration_minutes)**: [ADMIN] Start a high-intensity, time-bounded task. Standard step limits and hard breaks are relaxed to allow the agent to go "all-in" on a complex goal within a specific time window. (Admin only).
 - **extract_article(url?)**: [HIGH-LEVEL PREFERRED] Extract clean article text from a URL or the current page.
-- **http_fetch(url, method?, headers?, body?, timeout?)**: [HIGH-LEVEL PREFERRED] Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for APIs and simple pages. USE THIS BEFORE RESORTING TO FULL BROWSER.
-- **youtube_trending(region?, category?)**: [HIGH-LEVEL PREFERRED] Fetch YouTube trending videos via API fallbacks.
 
-## Computer Use (Vision + System)
+### Live Browser Interaction (Chrome CDP)
+Use these tools when you specifically need to interact with the user's **live, active** local Chrome browser (e.g., to access logged-in accounts, read an actively viewed page). **Do not** use these for generic headless scraping; use standard `browser_*` tools instead.
+- **chrome_cdp_list()**: [LIVE BROWSER] List open tabs in the user's local Chrome.
+- **chrome_cdp_shot(target, outputPath?)**: [LIVE BROWSER] Capture a screenshot of a specific tab.
+- **chrome_cdp_snap(target)**: [LIVE BROWSER] Get an accessibility tree snapshot (compact structure) of a page.
+- **chrome_cdp_eval(target, expression)**: [LIVE BROWSER] Evaluate JavaScript in the specified tab.
+- **chrome_cdp_html(target, selector?)**: [LIVE BROWSER] Get HTML of the page or a specific element.
+- **chrome_cdp_nav(target, url)**: [LIVE BROWSER] Navigate the specified tab to a new URL.
+- **chrome_cdp_click(target, selector)**: [LIVE BROWSER] Click a visible element using a CSS selector.
+- **chrome_cdp_type(target, text)**: [LIVE BROWSER] Type text into the currently focused element.
+- **chrome_cdp_raw(target, method, params?)**: [LIVE BROWSER] Execute a raw Chrome DevTools Protocol command.
+- **chrome_cdp_help()**: [LIVE BROWSER] Get instructions on how to enable Remote Debugging in Chrome so OrcBot can interact with it.
+
+## API & Integration
+- **api_request({ url, method?, headers?, body?, params?, auth?, timeout? })**: [HIGH-LEVEL PREFERRED] Perform a structured REST API request. Supports automatic JSON handling, query parameters, and authentication (Bearer/Basic). Returns a structured object with status, headers, and data. Much more robust than http_fetch for complex API integrations.
+- **api_get({ url, params?, auth?, headers? })**: [API TOOL] Perform a GET request to an API endpoint with optional query parameters and auth.
+- **api_post({ url, body, auth?, headers? })**: [API TOOL] Perform a POST request to an API endpoint with a JSON body.
+- **api_put({ url, body, auth?, headers? })**: [API TOOL] Perform a PUT request to an API endpoint.
+- **api_delete({ url, params?, auth?, headers? })**: [API TOOL] Perform a DELETE request to an API endpoint.
+- **api_graphql({ url, query, variables?, auth?, headers? })**: [API TOOL] Perform a GraphQL query or mutation.
+- **http_fetch(url, method?, headers?, body?, timeout?)**: [HIGH-LEVEL] Lightweight HTTP request (no browser). Supports GET/POST/PUT/PATCH/DELETE. Returns status + body. Ideal for simple pages or when a structured API response is not needed.
+
+## System & Configuration
 - **computer_screenshot(context?)**: [VISION/COMPUTER CONTROL] Capture a screenshot (browser or system) with optional vision description.
 - **computer_click(x?, y?, description?, button?, context?)**: [VISION/COMPUTER CONTROL] Click by coordinates or vision-locate a described element.
 - **computer_vision_click(description, button?, context?)**: [VISION/COMPUTER CONTROL] Vision-guided click by description.
@@ -147,6 +205,17 @@ These skills allow the agent to dynamically adjust its own behavior based on wha
 - **get_tuning_state()**: [SELF-TUNING] View current tuning configuration and learned settings.
 - **get_tuning_history(limit?)**: [SELF-TUNING] See recent tuning changes and their outcomes.
 - **reset_tuning(category?)**: [SELF-TUNING] Reset tuning to defaults (browser, workflow, llm, or all).
+
+## Self-Training Sidecar
+These skills manage OrcBot's offline-safe self-training pipeline: capture accepted trajectories from real work, prepare datasets and manifests, evaluate candidate models, and promote them through admin-gated rollout.
+
+- **get_self_training_status()**: [SELF-TRAINING] Return self-training stats, artifact paths, candidate registry state, and the latest prepared/evaluated/promoted records.
+- **prepare_self_training_job()**: [SELF-TRAINING] Build an offline training manifest from accepted trajectories. Does not mutate the live model.
+- **run_self_training_eval(limit?, provider?, modelName?)**: [SELF-TRAINING][ADMIN] Evaluate accepted trajectories against the active or specified model and persist an evaluation report.
+- **build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)**: [SELF-TRAINING][ADMIN] Build the command, working directory, and session ID for launching an external training job without executing it.
+- **launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)**: [SELF-TRAINING][ADMIN] Launch a prepared offline training job in a background shell session, or preview it with `dryRun`.
+- **register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)**: [SELF-TRAINING][ADMIN] Register a trained candidate model, linking it to the latest evaluation and launch metadata when available.
+- **promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)**: [SELF-TRAINING][ADMIN] Promote a registered candidate into OrcBot's live `modelName` and `llmProvider` config after promotion gates pass. Use `dryRun` to preview the switch.
 
 ## Agent Skills (SKILL.md Ecosystem)
 Agent Skills follow the [agentskills.io](https://agentskills.io/) specification — portable, LLM-readable skill packages that can extend OrcBot in any direction.

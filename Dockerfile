@@ -85,12 +85,11 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install production dependencies only
-# Use --ignore-scripts to skip puppeteer browser install (we do it manually)
-RUN npm ci --omit=dev --ignore-scripts
+# Scripts are enabled; Puppeteer browser download is disabled via env vars, and Playwright is installed explicitly
+RUN npm ci --omit=dev
 
-# Install Playwright browsers (chromium is default, also install firefox for multi-browser support)
-RUN npx playwright install chromium --with-deps || true
-RUN npx playwright install-deps chromium || true
+# Install Playwright browsers (chromium, firefox, webkit) with full multi-browser support
+RUN npx playwright install chromium firefox webkit --with-deps || true
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist

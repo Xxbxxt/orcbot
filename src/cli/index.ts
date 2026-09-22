@@ -15,14 +15,15 @@ import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DaemonManager } from '../utils/daemon';
+import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import { TokenTracker } from '../core/TokenTracker';
 import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
-import { collectDoctorReport } from './Doctor';
+import { collectDoctorReport, collectLLMCompatibilityReport } from './Doctor';
 
 dotenv.config(); // Local .env
-dotenv.config({ path: path.join(os.homedir(), '.orcbot', '.env') }); // Global .env
+dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
 
 // ── ANSI color helpers (zero deps) ─────────────────────────────────────
 const c = {
@@ -432,8 +433,7 @@ program
     .command('init')
     .description('Initialize a new agent environment')
     .action(async () => {
-        const os = require('os');
-        const dataHome = path.join(os.homedir(), '.orcbot');
+        const dataHome = getOrcBotDataHome();
         const configPath = path.join(dataHome, 'orcbot.config.yaml');
 
         if (fs.existsSync(configPath)) {
@@ -603,7 +603,7 @@ program
     .description('Stop all running OrcBot instances (daemon, background, gateway)')
     .option('-f, --force', 'Force kill (SIGKILL) if graceful shutdown fails')
     .action(async (options) => {
-        const dataDir = path.join(os.homedir(), '.orcbot');
+        const dataDir = getOrcBotDataHome();
         let killed = 0;
         let failed = 0;
 
@@ -703,7 +703,7 @@ program
         const status = daemonManager.isRunning();
 
         // Check for ANY existing OrcBot instance via lock file
-        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        const lockPath = resolveDataHomePath('orcbot.lock');
         let existingInstance: { pid: number; startedAt: string; host: string } | null = null;
 
         if (fs.existsSync(lockPath)) {
@@ -748,7 +748,7 @@ program
             const nodePath = process.execPath;
             const scriptPath = process.argv[1];
 
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
             const logPath = path.join(dataDir, 'foreground.log');
             const out = fs.openSync(logPath, 'a');
@@ -1013,7 +1013,7 @@ program
     .description('View agent status, memory and action queue')
     .action(() => {
         // Check for running instance
-        const lockPath = path.join(os.homedir(), '.orcbot', 'orcbot.lock');
+        const lockPath = resolveDataHomePath('orcbot.lock');
         console.log('\n=== OrcBot Status ===\n');
 
         if (fs.existsSync(lockPath)) {
@@ -1059,9 +1059,15 @@ program
     .command('doctor')
     .description('Run a local health and deployment audit for OrcBot')
     .option('--deep', 'Include additional filesystem/state checks')
+    .option('--llm', 'Include LLM/provider compatibility checks')
+    .option('--live', 'Run live provider probes for configured/linked providers (uses API/OAuth calls)')
     .option('--json', 'Print the report as JSON')
-    .action((opts) => {
+    .action(async (opts) => {
         const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
+
+        if (opts.llm || opts.live) {
+            report.llmCompatibility = await collectLLMCompatibilityReport(agent.config, { live: !!opts.live });
+        }
 
         if (opts.json) {
             console.log(JSON.stringify(report, null, 2));
@@ -1072,9 +1078,45 @@ program
         console.log(`Checked: ${report.checkedAt}`);
         console.log(`Data home: ${report.facts.dataHome}`);
         console.log(`Gateway: ${report.facts.gatewayHost}:${report.facts.gatewayPort} ${report.facts.gatewayAuthEnabled ? '(auth enabled)' : '(no auth)'}`);
+        console.log(`MCP HTTP: ${report.facts.mcpHost}:${report.facts.mcpPort}${report.facts.mcpPath} ${report.facts.mcpAuthEnabled ? `(auth enabled via ${report.facts.mcpAuthSource})` : '(no auth)'}`);
         console.log(`Channels: ${report.facts.channelsConfigured.length > 0 ? report.facts.channelsConfigured.join(', ') : 'none'}`);
         console.log(`Providers: ${report.facts.providersConfigured.length > 0 ? report.facts.providersConfigured.join(', ') : 'none'}`);
         console.log('');
+
+        if (report.llmCompatibility) {
+            const llm = report.llmCompatibility;
+            const rows = [
+                ['Provider', 'Model', 'Auth', 'Schema', opts.live ? 'Live' : 'Ready'],
+                ...llm.providers.map(provider => [
+                    provider.provider,
+                    provider.model,
+                    provider.authMode,
+                    provider.toolSchemaCompatible ? green('ok') : brightRed('broken'),
+                    opts.live
+                        ? (provider.liveProbe?.success ? green('ok') : provider.liveProbe?.attempted ? brightRed('fail') : gray('skipped'))
+                        : (provider.ready ? green('ready') : brightRed('missing')),
+                ])
+            ];
+
+            box([
+                `${c.white}Active${c.reset}      ${brightCyan(llm.activeProvider)} ${dim(`(${llm.activeModel})`)}`,
+                `${c.white}pi-ai${c.reset}       ${llm.usePiAI ? brightGreen('enabled') : gray('disabled')}`,
+                `${c.white}Schema${c.reset}      ${llm.schemaContractOk ? brightGreen('valid') : brightRed('broken')}`,
+            ], { title: '🧠 LLM COMPATIBILITY', width: 72, color: llm.schemaContractOk ? c.green : c.red });
+            console.log('');
+            table(rows, { headerColor: brightWhite });
+            console.log('');
+
+            for (const provider of llm.providers) {
+                if (provider.notes.length > 0) {
+                    console.log(`${brightCyan(provider.provider)}: ${provider.notes.join('; ')}`);
+                }
+                if (provider.liveProbe?.error) {
+                    console.log(`  ${dim('Probe:')} ${provider.liveProbe.error}`);
+                }
+            }
+            console.log('');
+        }
 
         const summaryLines = [
             `${c.white}Critical${c.reset}  ${report.summary.critical > 0 ? brightRed(bold(String(report.summary.critical))) : green('0')}`,
@@ -1111,7 +1153,7 @@ securityCommand
     .option('--json', 'Print the report as JSON')
     .action((opts) => {
         const report = collectDoctorReport(agent.config, { deep: !!opts.deep });
-        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'channels');
+        const securityFindings = report.findings.filter(f => f.area === 'security' || f.area === 'gateway' || f.area === 'mcp' || f.area === 'channels');
         const filtered = {
             ...report,
             summary: {
@@ -1289,6 +1331,7 @@ program
     .option('-k, --api-key <string>', 'API key for authentication')
     .option('-s, --static <path>', 'Path to static files for dashboard')
     .option('--with-agent', 'Also start the agent loop')
+    .option('--with-mcp', 'Also start the MCP HTTP server on the configured MCP port')
     .option('-b, --background', 'Run gateway in background')
     .option('--background-child', 'Internal: run as background child', false)
     .action(async (options) => {
@@ -1298,7 +1341,7 @@ program
             const nodePath = process.execPath;
             const scriptPath = process.argv[1];
 
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
             const logPath = path.join(dataDir, 'gateway.log');
             const out = fs.openSync(logPath, 'a');
@@ -1310,6 +1353,7 @@ program
             if (options.apiKey) args.push('-k', options.apiKey);
             if (options.static) args.push('-s', options.static);
             if (options.withAgent) args.push('--with-agent');
+            if (options.withMcp) args.push('--with-mcp');
 
             const child = spawn(nodePath, args, {
                 detached: true,
@@ -1364,10 +1408,83 @@ program
             console.log('💡 Tip: Add --with-agent to also run the agent loop\n');
         }
 
+        if (options.withMcp) {
+            const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+            const resolved = resolveMcpHttpOptions(agent.config);
+            const mcp = new OrcBotMcpServer(agent, {
+                serverName: 'orcbot',
+                serverVersion: '1.0.7',
+                chatTimeoutMs: 90000,
+                chatIdleMs: 4000,
+                startAgentLoop: false // agent loop managed by gateway
+            });
+            await mcp.startHttp(resolved);
+            console.log(`🔌 MCP HTTP server running at http://${resolved.host}:${resolved.port}${resolved.path}`);
+            console.log(`   Health check: http://${resolved.host === '0.0.0.0' ? 'localhost' : resolved.host}:${resolved.port}/health`);
+            process.on('SIGINT', async () => { await mcp.close(); });
+        }
+
         // Keep process running
         process.on('SIGINT', () => {
             console.log('\nShutting down gateway...');
             gateway.stop();
+            process.exit(0);
+        });
+    });
+
+program
+    .command('mcp')
+    .description('Start OrcBot as an MCP server over stdio')
+    .option('--http', 'Serve OrcBot over stateless Streamable HTTP instead of stdio')
+    .option('--no-agent-loop', 'Do not start the OrcBot agent loop automatically')
+    .option('--chat-timeout-ms <number>', 'Maximum time to wait for an OrcBot reply', '90000')
+    .option('--chat-idle-ms <number>', 'Idle window used to collect the final OrcBot reply', '4000')
+    .option('-p, --port <number>', 'Port to listen on for MCP HTTP mode')
+    .option('-H, --host <string>', 'Host to bind for MCP HTTP mode')
+    .option('--path <string>', 'Path to serve MCP HTTP mode on')
+    .option('-k, --api-key <string>', 'API key required for MCP HTTP mode')
+    .option('--server-name <string>', 'Advertised MCP server name', 'orcbot')
+    .action(async (options) => {
+        if (!options.http) {
+            for (const transport of logger.transports) {
+                if ((transport as any).name === 'console') {
+                    (transport as any).silent = true;
+                }
+            }
+        }
+
+        const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+        const mcp = new OrcBotMcpServer(agent, {
+            serverName: options.serverName,
+            serverVersion: '1.0.7',
+            chatTimeoutMs: Number.parseInt(options.chatTimeoutMs, 10) || 90000,
+            chatIdleMs: Number.parseInt(options.chatIdleMs, 10) || 4000,
+            startAgentLoop: options.agentLoop !== false
+        });
+
+        if (options.http) {
+            const resolved = resolveMcpHttpOptions(agent.config, {
+                host: options.host,
+                port: options.port ? Number.parseInt(options.port, 10) : undefined,
+                path: options.path,
+                apiKey: options.apiKey
+            });
+
+            process.stderr.write(`Starting OrcBot MCP HTTP server at http://${resolved.host}:${resolved.port}${resolved.path}\n`);
+            process.stderr.write(`Agent loop: ${options.agentLoop !== false ? 'enabled' : 'disabled'}\n`);
+            process.stderr.write(`Auth: ${resolved.apiKey ? 'API key required' : 'open'}\n`);
+            await mcp.startHttp(resolved);
+        } else {
+            process.stderr.write('Starting OrcBot MCP server on stdio\n');
+            process.stderr.write(`Agent loop: ${options.agentLoop !== false ? 'enabled' : 'disabled'}\n`);
+            await mcp.startStdio();
+        }
+
+        process.on('SIGINT', async () => {
+            await mcp.close();
+            if (options.agentLoop !== false && agent.isRunning) {
+                await agent.stop();
+            }
             process.exit(0);
         });
     });
@@ -1409,7 +1526,7 @@ const lightpandaCommand = program
 lightpandaCommand
     .command('install')
     .description('Download and install Lightpanda browser')
-    .option('-d, --dir <path>', 'Installation directory', path.join(os.homedir(), '.orcbot', 'lightpanda'))
+    .option('-d, --dir <path>', 'Installation directory', resolveDataHomePath('lightpanda'))
     .action(async (options) => {
         const installDir = options.dir;
         const platform = process.platform;
@@ -1543,7 +1660,7 @@ lightpandaCommand
     .option('-t, --timeout <number>', 'Inactivity timeout in seconds (0 = no timeout)', '300')
     .option('-b, --background', 'Run in background')
     .action(async (options) => {
-        const lightpandaPath = agent.config.get('lightpandaPath') || path.join(os.homedir(), '.orcbot', 'lightpanda', 'lightpanda');
+        const lightpandaPath = agent.config.get('lightpandaPath') || resolveDataHomePath('lightpanda', 'lightpanda');
 
         if (!fs.existsSync(lightpandaPath)) {
             console.error('❌ Lightpanda not found. Run: orcbot lightpanda install');
@@ -1558,7 +1675,7 @@ lightpandaCommand
         console.log(`   Endpoint: ws://${options.host}:${options.port}\n`);
 
         if (options.background) {
-            const dataDir = path.join(os.homedir(), '.orcbot');
+            const dataDir = getOrcBotDataHome();
             const logPath = path.join(dataDir, 'lightpanda.log');
             const pidPath = path.join(dataDir, 'lightpanda.pid');
             const out = fs.openSync(logPath, 'a');
@@ -1601,7 +1718,7 @@ lightpandaCommand
     .command('stop')
     .description('Stop Lightpanda browser server')
     .action(() => {
-        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        const pidPath = resolveDataHomePath('lightpanda.pid');
 
         if (!fs.existsSync(pidPath)) {
             console.log('Lightpanda is not running (no PID file found)');
@@ -1627,7 +1744,7 @@ lightpandaCommand
     .command('status')
     .description('Check Lightpanda browser status')
     .action(() => {
-        const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+        const pidPath = resolveDataHomePath('lightpanda.pid');
         const lightpandaPath = agent.config.get('lightpandaPath');
         const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
         const engineSetting = agent.config.get('browserEngine') || 'puppeteer';
@@ -2333,7 +2450,612 @@ async function runWorldEventsMonitor(opts: {
         if (opts.once) break;
         await sleep(refreshMs);
     }
+
 }
+
+    type AITunerPreset = {
+        profileName: string;
+        primaryUseCase: string;
+        roleTitle: string;
+        audience: string;
+        tone: string[];
+        autonomyLevel: 'low' | 'balanced' | 'high';
+        riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+        responseStyle: 'concise' | 'balanced' | 'detailed';
+        preferredChannels: string[];
+        topTasks: string[];
+        hardConstraints: string;
+        domainKeywords: string[];
+        createSkillScaffolds: boolean;
+        skillScaffolds: string[];
+        llmAssisted?: boolean;
+        createdAt: string;
+    };
+
+    type TunerArtifacts = {
+        identity: string;
+        soul: string;
+        agents: string;
+        skills?: Record<string, string>;
+    };
+
+    function tunerProfilesDir(): string {
+        return path.join(agent.config.getDataHome(), 'tuner-profiles');
+    }
+
+    function tunerSlug(input: string): string {
+        return String(input || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+            .slice(0, 64) || 'profile';
+    }
+
+    function parseCommaList(input: string): string[] {
+        return String(input || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+    }
+
+    function buildIdentityFromPreset(p: AITunerPreset): string {
+        const styleLine = p.responseStyle === 'concise'
+            ? 'Prefer short, high-signal responses and minimal chatter.'
+            : p.responseStyle === 'detailed'
+                ? 'Prefer thorough, structured responses with rationale and tradeoffs.'
+                : 'Balance concision and detail based on user request complexity.';
+
+        return `# Agent Identity
+
+    **Name:** ${agent.config.get('agentName') || 'OrcBot'}
+    **Version:** 2.0
+    **Type:** ${p.roleTitle}
+    **Mission:** ${p.primaryUseCase}
+
+    ## Operating Context
+
+    - **Primary Audience:** ${p.audience}
+    - **Preferred Channels:** ${p.preferredChannels.join(', ') || 'none specified'}
+    - **Top Task Domains:** ${p.topTasks.join(', ') || 'none specified'}
+
+    ## Response Style
+
+    - ${styleLine}
+    - Keep outputs actionable and aligned to the use case.
+    - Ask clarifying questions only when required to avoid wrong execution.
+    `;
+    }
+
+    function buildSoulFromPreset(p: AITunerPreset): string {
+        const autonomyLine = p.autonomyLevel === 'low'
+            ? 'Low autonomy: ask before major actions, avoid implicit assumptions.'
+            : p.autonomyLevel === 'high'
+                ? 'High autonomy: execute end-to-end where safe, with clear progress updates.'
+                : 'Balanced autonomy: execute routine work directly, ask for high-impact decisions.';
+
+        const riskLine = p.riskTolerance === 'conservative'
+            ? 'Conservative risk: prefer safety checks, reversible steps, and explicit confirmations.'
+            : p.riskTolerance === 'aggressive'
+                ? 'Aggressive risk: prioritize speed and outcomes while respecting hard safety boundaries.'
+                : 'Moderate risk: balance speed and caution based on context and potential impact.';
+
+        const toneLine = p.tone.length > 0 ? p.tone.join(', ') : 'professional, direct';
+
+        return `# Agent Persona & Boundaries
+
+    ## Personality
+
+    - **Tone:** ${toneLine}
+    - **Use Case Focus:** ${p.primaryUseCase}
+    - **Audience Fit:** Optimize communication for ${p.audience}
+
+    ## Execution Principles
+
+    - ${autonomyLine}
+    - ${riskLine}
+    - Stay grounded in actual tool results and known system constraints.
+    - Do not claim completion when key outcomes are still pending.
+
+    ## Hard Constraints
+
+    ${p.hardConstraints || '- No additional constraints specified.'}
+
+    ## Domain Signals
+
+    - Prioritize requests related to: ${p.domainKeywords.join(', ') || 'general operations'}
+    - Prefer workflows and language optimized for this domain context.
+    `;
+    }
+
+    function buildAgentsFromPreset(p: AITunerPreset): string {
+        const taskBullets = p.topTasks.length > 0
+            ? p.topTasks.map(t => `- ${t}`).join('\n')
+            : '- No top-task priorities specified';
+
+        const keywordBullets = p.domainKeywords.length > 0
+            ? p.domainKeywords.map(k => `- ${k}`).join('\n')
+            : '- No domain keywords specified';
+
+        return `# Operating Instructions
+
+    ## Active Tuning Profile
+
+    - **Profile:** ${p.profileName}
+    - **Primary Mission:** ${p.primaryUseCase}
+    - **Role:** ${p.roleTitle}
+    - **Audience:** ${p.audience}
+    - **Autonomy:** ${p.autonomyLevel}
+    - **Risk Posture:** ${p.riskTolerance}
+
+    ## Task Priorities
+
+    ${taskBullets}
+
+    ## Domain Keywords
+
+    ${keywordBullets}
+
+    ## Behavioral Rules
+
+    1. Keep every response aligned to the primary mission.
+    2. Use tools when they improve reliability or speed; avoid unnecessary tool churn.
+    3. Report blockers clearly and offer the next best fallback.
+    4. Preserve user trust: no fabricated results, no false success messages.
+    5. Prefer reusable outputs (templates, scripts, checklists) for recurring workflows.
+    `;
+    }
+
+    function buildSkillScaffold(skillName: string, p: AITunerPreset): string {
+        const triggers = p.domainKeywords.slice(0, 8).map(k => `  - "${k}"`).join('\n');
+        const triggerBlock = triggers || '  - "' + p.primaryUseCase.replace(/"/g, '') + '"';
+
+        return `---
+    name: ${skillName}
+    description: Skill guidance for ${p.primaryUseCase}
+    license: Apache-2.0
+    allowedTools:
+      - web_search
+      - read_file
+      - write_file
+    orcbot:
+      autoActivate: true
+      triggerPatterns:
+    ${triggerBlock}
+    ---
+
+    # ${skillName}
+
+    ## Intent
+
+    This skill is specialized for: ${p.primaryUseCase}
+
+    ## Operating Guidance
+
+    1. Start by identifying user intent and expected deliverable format.
+    2. Use domain language suitable for ${p.audience}.
+    3. Produce actionable outputs with assumptions and constraints made explicit.
+    4. If required data is missing, ask only for the minimum needed to proceed.
+
+    ## Quality Bar
+
+    - Output should be practical, specific, and immediately usable.
+    - Prefer templates/checklists when the task is repetitive.
+    - Avoid generic boilerplate when domain specifics are available.
+    `;
+    }
+
+    function parseJsonObjectFromText(text: string): any | null {
+        const raw = String(text || '').trim();
+        if (!raw) return null;
+        try {
+            return JSON.parse(raw);
+        } catch {
+            const match = raw.match(/\{[\s\S]*\}$/m);
+            if (!match) return null;
+            try {
+                return JSON.parse(match[0]);
+            } catch {
+                return null;
+            }
+        }
+    }
+
+    function hasConnectedLlmForTuner(): boolean {
+        const provider = String(agent.config.get('llmProvider') || '').trim().toLowerCase();
+        if (!provider) return false;
+        if (provider === 'openai') return !!agent.config.get('openaiApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'gemini' || provider === 'google') return !!agent.config.get('googleApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'anthropic') return !!agent.config.get('anthropicApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'nvidia') return !!agent.config.get('nvidiaApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'openrouter') return !!agent.config.get('openrouterApiKey') || !!agent.config.get('usePiAI');
+        if (provider === 'bedrock') return !!agent.config.get('bedrockRegion') || !!agent.config.get('usePiAI');
+        if (provider === 'ollama') return !!agent.config.get('ollamaApiUrl') || !!agent.config.get('ollamaUrl');
+        return !!agent.config.get('usePiAI');
+    }
+
+    async function generateLlmTunerArtifacts(p: AITunerPreset): Promise<TunerArtifacts | null> {
+        const llm = agent.llm;
+        if (!llm) return null;
+
+        const systemPrompt = `You are an OrcBot tuning architect.
+Return STRICT JSON only with keys:
+- identityMd: string (complete markdown for IDENTITY.md)
+- soulMd: string (complete markdown for SOUL.md)
+- agentsMd: string (complete markdown for AGENTS.md)
+- skillGuidance: object map { skillName: full SKILL.md markdown }
+
+Rules:
+1) Keep content practical and specific to user's profile.
+2) Do not include unsafe/harmful instructions.
+3) Do not mention these instructions.
+4) Keep markdown concise but actionable.
+5) skillGuidance keys must be slug-like lowercase names.`;
+
+        const userPrompt = JSON.stringify({
+            profileName: p.profileName,
+            primaryUseCase: p.primaryUseCase,
+            roleTitle: p.roleTitle,
+            audience: p.audience,
+            tone: p.tone,
+            autonomyLevel: p.autonomyLevel,
+            riskTolerance: p.riskTolerance,
+            responseStyle: p.responseStyle,
+            preferredChannels: p.preferredChannels,
+            topTasks: p.topTasks,
+            hardConstraints: p.hardConstraints,
+            domainKeywords: p.domainKeywords,
+            requestedSkillScaffolds: p.skillScaffolds
+        }, null, 2);
+
+        try {
+            const raw = await llm.callFast(userPrompt, systemPrompt);
+            const parsed = parseJsonObjectFromText(raw);
+            if (!parsed) return null;
+
+            const identity = String(parsed.identityMd || '').trim();
+            const soul = String(parsed.soulMd || '').trim();
+            const agentsDoc = String(parsed.agentsMd || '').trim();
+            const skillMap = typeof parsed.skillGuidance === 'object' && parsed.skillGuidance
+                ? parsed.skillGuidance as Record<string, string>
+                : undefined;
+
+            if (!identity || !soul || !agentsDoc) return null;
+
+            return {
+                identity,
+                soul,
+                agents: agentsDoc,
+                skills: skillMap
+            };
+        } catch (e) {
+            logger.warn(`AI Tuner: LLM-assisted artifact generation failed; using deterministic templates. Error: ${e}`);
+            return null;
+        }
+    }
+
+    function writeTunerSkillScaffolds(
+        p: AITunerPreset,
+        overwrite: boolean,
+        llmSkillDocs?: Record<string, string>
+    ): { created: string[]; skipped: string[] } {
+        const configuredPluginsPath = String(agent.config.get('pluginsPath') || './plugins').trim();
+        const pluginsRoot = path.isAbsolute(configuredPluginsPath)
+            ? configuredPluginsPath
+            : path.resolve(configuredPluginsPath);
+        const skillsRoot = path.join(pluginsRoot, 'skills');
+        fs.mkdirSync(skillsRoot, { recursive: true });
+
+        const created: string[] = [];
+        const skipped: string[] = [];
+
+        for (const rawName of p.skillScaffolds) {
+            const name = tunerSlug(rawName);
+            const dir = path.join(skillsRoot, name);
+            const file = path.join(dir, 'SKILL.md');
+            if (fs.existsSync(file) && !overwrite) {
+                skipped.push(name);
+                continue;
+            }
+            fs.mkdirSync(dir, { recursive: true });
+            const llmDoc = llmSkillDocs && typeof llmSkillDocs[name] === 'string'
+                ? String(llmSkillDocs[name]).trim()
+                : '';
+            fs.writeFileSync(file, llmDoc || buildSkillScaffold(name, p));
+            created.push(name);
+        }
+
+        if (created.length > 0) {
+            agent.skills.discoverAgentSkills();
+        }
+
+        return { created, skipped };
+    }
+
+    function applyTunerPreset(
+        p: AITunerPreset,
+        opts?: { writeSkills?: boolean; overwriteSkills?: boolean; artifacts?: TunerArtifacts }
+    ): { fileResults: Array<{ file: string; ok: boolean }>; skillResults?: { created: string[]; skipped: string[] } } {
+        const fileResults: Array<{ file: string; ok: boolean }> = [];
+
+        const identityDoc = opts?.artifacts?.identity || buildIdentityFromPreset(p);
+        const soulDoc = opts?.artifacts?.soul || buildSoulFromPreset(p);
+        const agentsDoc = opts?.artifacts?.agents || buildAgentsFromPreset(p);
+
+        fileResults.push({ file: 'IDENTITY.md', ok: agent.bootstrap.updateFile('IDENTITY.md', identityDoc) });
+        fileResults.push({ file: 'SOUL.md', ok: agent.bootstrap.updateFile('SOUL.md', soulDoc) });
+        fileResults.push({ file: 'AGENTS.md', ok: agent.bootstrap.updateFile('AGENTS.md', agentsDoc) });
+
+        let skillResults: { created: string[]; skipped: string[] } | undefined;
+        if (opts?.writeSkills && p.createSkillScaffolds && p.skillScaffolds.length > 0) {
+            skillResults = writeTunerSkillScaffolds(p, !!opts.overwriteSkills, opts?.artifacts?.skills);
+        }
+
+        return { fileResults, skillResults };
+    }
+
+    function applyPresetToPeerInstances(p: AITunerPreset, artifacts?: TunerArtifacts): { updated: string[]; failed: string[] } {
+        const updated: string[] = [];
+        const failed: string[] = [];
+
+        const identityDoc = artifacts?.identity || buildIdentityFromPreset(p);
+        const soulDoc = artifacts?.soul || buildSoulFromPreset(p);
+        const agentsDoc = artifacts?.agents || buildAgentsFromPreset(p);
+
+        const peers = agent.orchestrator.listAgents().filter(a => a.id !== 'primary');
+        for (const peer of peers) {
+            try {
+                const peerData = agent.orchestrator.getAgent(peer.id);
+                if (!peerData?.memoryPath) {
+                    failed.push(peer.name || peer.id);
+                    continue;
+                }
+
+                const peerDir = path.dirname(peerData.memoryPath);
+                fs.mkdirSync(peerDir, { recursive: true });
+                fs.writeFileSync(path.join(peerDir, 'IDENTITY.md'), identityDoc);
+                fs.writeFileSync(path.join(peerDir, 'SOUL.md'), soulDoc);
+                fs.writeFileSync(path.join(peerDir, 'AGENTS.md'), agentsDoc);
+                updated.push(peer.name || peer.id);
+            } catch {
+                failed.push(peer.name || peer.id);
+            }
+        }
+
+        return { updated, failed };
+    }
+
+    async function showAiTunerMenu() {
+        console.clear();
+        banner();
+        sectionHeader('🎛️', 'AI Tuner');
+
+        const profilesDir = tunerProfilesDir();
+        if (!fs.existsSync(profilesDir)) fs.mkdirSync(profilesDir, { recursive: true });
+        const profiles = fs.readdirSync(profilesDir).filter(f => f.endsWith('.json'));
+
+        console.log('');
+        box([
+            `${dim('Goal')} Retune OrcBot for a specific person/use-case without manual SOUL.md edits.`,
+            `${dim('Profiles')} ${brightCyan(bold(String(profiles.length)))} saved preset(s)`,
+            `${dim('Writes')} IDENTITY.md, SOUL.md, AGENTS.md ${dim('+ optional SKILL.md scaffolds')}`,
+            `${dim('Smart Mode')} ${hasConnectedLlmForTuner() ? green('LLM available') : yellow('fallback mode only')}`
+        ], { title: 'AI TUNER STATUS', width: 72, color: c.cyan });
+        console.log('');
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: cyan('AI Tuner Options:'),
+                choices: [
+                    { name: `  🧭 ${bold('Run Guided Questionnaire')}`, value: 'guided' },
+                    { name: `  ♻️  ${bold('Apply Saved Profile')}`, value: 'apply_saved' },
+                    { name: `  📚 ${bold('List Saved Profiles')}`, value: 'list' },
+                    { name: dim('  ← Back'), value: 'back' }
+                ]
+            }
+        ]);
+
+        if (action === 'back') return showMainMenu();
+
+        if (action === 'list') {
+            console.log('');
+            if (profiles.length === 0) {
+                console.log(dim('No saved tuner profiles yet.'));
+            } else {
+                for (const file of profiles) {
+                    try {
+                        const full = path.join(profilesDir, file);
+                        const parsed = JSON.parse(fs.readFileSync(full, 'utf-8')) as AITunerPreset;
+                        console.log(`- ${bold(parsed.profileName)} ${dim(`(${file})`)}`);
+                        console.log(`  ${dim('Use case:')} ${parsed.primaryUseCase}`);
+                        console.log(`  ${dim('Role:')} ${parsed.roleTitle} ${dim('| Autonomy:')} ${parsed.autonomyLevel} ${dim('| Risk:')} ${parsed.riskTolerance}`);
+                    } catch {
+                        console.log(`- ${file} ${dim('(unreadable)')}`);
+                    }
+                }
+            }
+            await waitKeyPress();
+            return showAiTunerMenu();
+        }
+
+        if (action === 'apply_saved') {
+            if (profiles.length === 0) {
+                console.log('\nNo saved profiles found. Run Guided Questionnaire first.');
+                await waitKeyPress();
+                return showAiTunerMenu();
+            }
+
+            const { file } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'file',
+                    message: 'Select saved profile:',
+                    choices: profiles.map(f => ({ name: f, value: f }))
+                }
+            ]);
+
+            const preset = JSON.parse(fs.readFileSync(path.join(profilesDir, file), 'utf-8')) as AITunerPreset;
+            const { smartMode, writeSkills, overwriteSkills, applyToPeers } = await inquirer.prompt([
+                { type: 'confirm', name: 'smartMode', message: 'Use connected LLM for smart tuning?', default: true, when: () => hasConnectedLlmForTuner() },
+                { type: 'confirm', name: 'writeSkills', message: 'Apply associated skill scaffolds too?', default: true },
+                { type: 'confirm', name: 'overwriteSkills', message: 'Overwrite existing scaffolded skill files?', default: false, when: (a) => !!a.writeSkills },
+                { type: 'confirm', name: 'applyToPeers', message: 'Also sync this tuning to all spawned peer-agent instances?', default: true }
+            ]);
+
+            const artifacts = smartMode ? await generateLlmTunerArtifacts(preset) : null;
+            const result = applyTunerPreset(preset, { writeSkills, overwriteSkills, artifacts: artifacts || undefined });
+            const peerSync = applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
+            const okCount = result.fileResults.filter(r => r.ok).length;
+            console.log(`\n✅ Applied profile ${bold(preset.profileName)} (${okCount}/${result.fileResults.length} bootstrap files updated).`);
+            if (smartMode) {
+                console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
+            }
+            if (result.skillResults) {
+                console.log(`   Skills created: ${result.skillResults.created.length}, skipped: ${result.skillResults.skipped.length}`);
+            }
+            if (peerSync.updated.length > 0 || peerSync.failed.length > 0) {
+                console.log(`   Peer sync: ${peerSync.updated.length} updated, ${peerSync.failed.length} failed`);
+            }
+
+            await waitKeyPress();
+            return showAiTunerMenu();
+        }
+
+        const answers = await inquirer.prompt([
+            { type: 'input', name: 'profileName', message: 'Profile name:', default: `profile-${new Date().toISOString().slice(0, 10)}` },
+            { type: 'input', name: 'primaryUseCase', message: 'Primary use case (what should OrcBot optimize for?):', validate: (v: string) => v.trim().length > 0 || 'Required' },
+            { type: 'input', name: 'roleTitle', message: 'Role title for the tuned bot:', default: 'Specialized AI Operations Assistant' },
+            { type: 'input', name: 'audience', message: 'Primary audience/user type:', default: 'technical operators' },
+            {
+                type: 'checkbox',
+                name: 'tone',
+                message: 'Preferred tone:',
+                choices: [
+                    { name: 'direct', value: 'direct' },
+                    { name: 'friendly', value: 'friendly' },
+                    { name: 'formal', value: 'formal' },
+                    { name: 'technical', value: 'technical' },
+                    { name: 'coaching', value: 'coaching' },
+                    { name: 'concise', value: 'concise' }
+                ],
+                validate: (vals: string[]) => vals.length > 0 || 'Pick at least one tone'
+            },
+            {
+                type: 'list',
+                name: 'autonomyLevel',
+                message: 'Autonomy level:',
+                choices: [
+                    { name: 'Low (ask before major actions)', value: 'low' },
+                    { name: 'Balanced', value: 'balanced' },
+                    { name: 'High (execute end-to-end where safe)', value: 'high' }
+                ]
+            },
+            {
+                type: 'list',
+                name: 'riskTolerance',
+                message: 'Risk tolerance:',
+                choices: [
+                    { name: 'Conservative', value: 'conservative' },
+                    { name: 'Moderate', value: 'moderate' },
+                    { name: 'Aggressive', value: 'aggressive' }
+                ]
+            },
+            {
+                type: 'list',
+                name: 'responseStyle',
+                message: 'Response detail level:',
+                choices: [
+                    { name: 'Concise', value: 'concise' },
+                    { name: 'Balanced', value: 'balanced' },
+                    { name: 'Detailed', value: 'detailed' }
+                ]
+            },
+            {
+                type: 'checkbox',
+                name: 'preferredChannels',
+                message: 'Preferred channels:',
+                choices: [
+                    { name: 'Telegram', value: 'telegram' },
+                    { name: 'WhatsApp', value: 'whatsapp' },
+                    { name: 'Discord', value: 'discord' },
+                    { name: 'Slack', value: 'slack' },
+                    { name: 'Gateway Web', value: 'gateway-chat' },
+                    { name: 'Email', value: 'email' }
+                ]
+            },
+            { type: 'input', name: 'topTasksRaw', message: 'Top recurring tasks (comma-separated):' },
+            { type: 'input', name: 'domainKeywordsRaw', message: 'Domain keywords/triggers (comma-separated):' },
+            { type: 'input', name: 'hardConstraints', message: 'Hard constraints (single line, optional):' },
+            { type: 'confirm', name: 'createSkillScaffolds', message: 'Generate starter SKILL.md scaffolds for this profile?', default: true },
+            {
+                type: 'checkbox',
+                name: 'skillScaffolds',
+                message: 'Select skill scaffold packs:',
+                when: (a) => !!a.createSkillScaffolds,
+                choices: [
+                    { name: 'intake-triage', value: 'intake-triage' },
+                    { name: 'domain-research', value: 'domain-research' },
+                    { name: 'workflow-automation', value: 'workflow-automation' },
+                    { name: 'quality-review', value: 'quality-review' },
+                    { name: 'stakeholder-updates', value: 'stakeholder-updates' }
+                ]
+            },
+            { type: 'confirm', name: 'saveProfile', message: 'Save this tuning profile for reuse across instances?', default: true },
+            { type: 'confirm', name: 'overwriteSkills', message: 'Overwrite existing scaffolded skill files if present?', default: false, when: (a) => !!a.createSkillScaffolds },
+            { type: 'confirm', name: 'llmAssisted', message: 'Use connected LLM to smart-generate tuned files?', default: true, when: () => hasConnectedLlmForTuner() },
+            { type: 'confirm', name: 'applyToPeers', message: 'Also sync this tuning to all spawned peer-agent instances?', default: true }
+        ]);
+
+        const preset: AITunerPreset = {
+            profileName: String(answers.profileName || '').trim() || `profile-${new Date().toISOString().slice(0, 10)}`,
+            primaryUseCase: String(answers.primaryUseCase || '').trim(),
+            roleTitle: String(answers.roleTitle || '').trim() || 'Specialized AI Operations Assistant',
+            audience: String(answers.audience || '').trim() || 'technical operators',
+            tone: Array.isArray(answers.tone) ? answers.tone : [],
+            autonomyLevel: answers.autonomyLevel,
+            riskTolerance: answers.riskTolerance,
+            responseStyle: answers.responseStyle,
+            preferredChannels: Array.isArray(answers.preferredChannels) ? answers.preferredChannels : [],
+            topTasks: parseCommaList(answers.topTasksRaw),
+            hardConstraints: String(answers.hardConstraints || '').trim(),
+            domainKeywords: parseCommaList(answers.domainKeywordsRaw),
+            createSkillScaffolds: !!answers.createSkillScaffolds,
+            skillScaffolds: Array.isArray(answers.skillScaffolds) ? answers.skillScaffolds : [],
+            llmAssisted: !!answers.llmAssisted,
+            createdAt: new Date().toISOString()
+        };
+
+        if (answers.saveProfile) {
+            const file = `${tunerSlug(preset.profileName)}.json`;
+            fs.writeFileSync(path.join(profilesDir, file), JSON.stringify(preset, null, 2));
+        }
+
+        const artifacts = preset.llmAssisted ? await generateLlmTunerArtifacts(preset) : null;
+
+        const result = applyTunerPreset(preset, {
+            writeSkills: !!answers.createSkillScaffolds,
+            overwriteSkills: !!answers.overwriteSkills,
+            artifacts: artifacts || undefined
+        });
+        const peerSync = answers.applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
+
+        const okCount = result.fileResults.filter(r => r.ok).length;
+        console.log(`\n✅ AI tuning applied for ${bold(preset.profileName)}.`);
+        console.log(`   Bootstrap updates: ${okCount}/${result.fileResults.length}`);
+        if (preset.llmAssisted) {
+            console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
+        }
+        if (result.skillResults) {
+            console.log(`   Skill scaffolds created: ${result.skillResults.created.length}, skipped: ${result.skillResults.skipped.length}`);
+        }
+        if (peerSync.updated.length > 0 || peerSync.failed.length > 0) {
+            console.log(`   Peer sync: ${peerSync.updated.length} updated, ${peerSync.failed.length} failed`);
+        }
+
+        await waitKeyPress();
+        return showAiTunerMenu();
+    }
 
 async function showMainMenu() {
     console.clear();
@@ -2387,7 +3109,9 @@ async function showMainMenu() {
             { label: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
             { label: `── CONFIGURE ─────────────────────────────`, value: 'separator_config', disabled: true },
             { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
+            { label: `  ${c.brightCyan}🧪${c.reset}  Self-Training`, value: 'self_training' },
             { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
+            { label: `  ${c.brightMagenta}🎛️${c.reset}  AI Tuner ${c.gray}(persona + skills questionnaire)${c.reset}`, value: 'ai_tuner' },
             { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
             { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
             { label: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
@@ -2439,8 +3163,14 @@ async function showMainMenu() {
         case 'connections':
             await showConnectionsMenu();
             break;
+        case 'ai_tuner':
+            await showAiTunerMenu();
+            break;
         case 'models':
             await showModelsMenu();
+            break;
+        case 'self_training':
+            await showSelfTrainingMenu();
             break;
         case 'tooling':
             await showToolingMenu();
@@ -2534,7 +3264,7 @@ async function showBrowserMenu() {
     const currentEngine = agent.config.get('browserEngine') || 'puppeteer';
     const lightpandaPath = agent.config.get('lightpandaPath');
     const lightpandaEndpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
-    const pidPath = path.join(os.homedir(), '.orcbot', 'lightpanda.pid');
+    const pidPath = resolveDataHomePath('lightpanda.pid');
 
     // Check if Lightpanda is installed
     const isInstalled = lightpandaPath && fs.existsSync(lightpandaPath);
@@ -2662,7 +3392,7 @@ async function showBrowserMenu() {
         console.log('   orcbot lightpanda install\n');
     } else if (action === 'start') {
         const { spawn } = require('child_process');
-        const dataDir = path.join(os.homedir(), '.orcbot');
+        const dataDir = getOrcBotDataHome();
         const logPath = path.join(dataDir, 'lightpanda.log');
         const out = fs.openSync(logPath, 'a');
 
@@ -2707,6 +3437,18 @@ async function showToolingMenu() {
     const imageGenModel = agent.config.get('imageGenModel');
     const hasImageGen = !!(imageGenProvider || imageGenModel || agent.config.get('openaiApiKey') || agent.config.get('googleApiKey'));
     const imageGenLabel = imageGenModel ? `${imageGenModel}` : imageGenProvider ? `${imageGenProvider} (auto)` : hasImageGen ? 'Auto-detect' : 'Not configured';
+    const googleIdentityStatus = agent.googleIdentity.getStatus();
+    const hasGoogleIdentity = googleIdentityStatus.connected;
+    const googleWorkspaceStatus = await agent.googleWorkspaceCli.getStatus();
+    const hasGoogleWorkspace = googleWorkspaceStatus.installed;
+    const googleWorkspaceLabel = hasGoogleWorkspace
+        ? googleWorkspaceStatus.configuredAccount || googleWorkspaceStatus.binary || 'Installed'
+        : 'Not installed';
+    const githubCliStatus = await agent.githubCli.getStatus();
+    const hasGitHubCli = githubCliStatus.installed;
+    const githubCliLabel = hasGitHubCli
+        ? githubCliStatus.binary || 'Installed'
+        : 'Not installed';
 
     console.log('');
     const toolLines = [
@@ -2716,6 +3458,9 @@ async function showToolingMenu() {
         `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasCaptcha, '')} ${bold('2Captcha')}      ${hasCaptcha ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasImageGen, '')} ${bold('Image Gen')}    ${hasImageGen ? green(imageGenLabel) : gray('Not set')}`,
+        `${statusDot(hasGoogleIdentity, '')} ${bold('Google Identity')} ${hasGoogleIdentity ? green(googleIdentityStatus.email || 'Connected') : gray('Not connected')}`,
+        `${statusDot(hasGoogleWorkspace, '')} ${bold('Google Workspace')} ${hasGoogleWorkspace ? green(googleWorkspaceLabel) : gray(googleWorkspaceLabel)}`,
+        `${statusDot(hasGitHubCli, '')} ${bold('GitHub CLI')}   ${hasGitHubCli ? green(githubCliLabel) : gray(githubCliLabel)}`,
     ];
     box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
     console.log('');
@@ -2735,6 +3480,9 @@ async function showToolingMenu() {
                 new inquirer.Separator(gradient('  ─── Other ────────────────────────', [c.yellow, c.gray])),
                 { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
                 { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
+                { name: `  ${statusDot(hasGoogleIdentity, '')} 🔐 ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
+                { name: `  ${statusDot(hasGoogleWorkspace, '')} 🏢 ${bold('Google Workspace CLI')} ${dim(`(${googleWorkspaceLabel})`)}`, value: 'google_workspace' },
+                { name: `  ${statusDot(hasGitHubCli, '')} 🐙 ${bold('GitHub CLI')} ${dim(`(${githubCliLabel})`)}`, value: 'github_cli' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -2879,11 +3627,940 @@ async function showToolingMenu() {
             ]);
             agent.config.set('imageGenQuality', q);
         }
+    } else if (tool === 'google_identity') {
+        await showGoogleIdentityMenu();
+        return;
+    } else if (tool === 'google_workspace') {
+        await showGoogleWorkspaceCliMenu();
+        return;
+    } else if (tool === 'github_cli') {
+        await showGitHubCliMenu();
+        return;
     }
 
     console.log('Tooling configuration updated!');
     await waitKeyPress();
     return showToolingMenu();
+}
+
+async function showGoogleIdentityMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🔐', 'Google Identity (OAuth + Gmail)');
+
+    const status = agent.googleIdentity.getStatus();
+    const email = status.email || '(unknown)';
+
+    console.log('');
+    box([
+        `${dim('Configured')}   ${status.configured ? green('● yes') : gray('○ no')}`,
+        `${dim('Connected')}    ${status.connected ? green('● yes') : gray('○ no')}`,
+        `${dim('Email')}        ${status.connected ? cyan(email) : gray('(not connected)')}`,
+        `${dim('Client ID')}    ${status.hasClientId ? green('set') : gray('not set')}`,
+        `${dim('Client Secret')} ${status.hasClientSecret ? green('set') : gray('not set')}`,
+        `${dim('Refresh Token')} ${status.hasRefreshToken ? green('stored') : gray('missing')}`,
+        `${dim('Scope')}        ${status.scope ? status.scope.slice(0, 52) : gray('(none)')}`,
+    ], { title: 'GOOGLE IDENTITY STATUS', width: 64, color: status.connected ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Google Identity Options:'),
+            choices: [
+                { name: `  🧩 ${bold('Set OAuth Client Credentials')}`, value: 'set_credentials' },
+                { name: `  🔗 ${bold('Generate Authorization URL')}`, value: 'auth_url' },
+                { name: `  ✅ ${bold('Exchange Auth Code / Redirect URL')}`, value: 'exchange_code' },
+                { name: `  📬 ${bold('Test Gmail Search')}`, value: 'test_search' },
+                { name: `  🔢 ${bold('Test OTP Extraction')}`, value: 'test_otp' },
+                { name: `  🚪 ${bold('Disconnect (remove refresh token)')}`, value: 'disconnect' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    if (action === 'set_credentials') {
+        const currentClientId = String(agent.config.get('googleOAuthClientId') || '');
+        const currentRedirect = String(agent.config.get('googleOAuthRedirectUri') || 'http://localhost');
+
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'clientId',
+                message: `Google OAuth Client ID${currentClientId ? ' (leave blank to keep current)' : ''}:`
+            },
+            {
+                type: 'password',
+                name: 'clientSecret',
+                message: `Google OAuth Client Secret${status.hasClientSecret ? ' (leave blank to keep current)' : ''}:`
+            },
+            {
+                type: 'input',
+                name: 'redirectUri',
+                message: 'OAuth Redirect URI:',
+                default: currentRedirect || 'http://localhost'
+            },
+            {
+                type: 'input',
+                name: 'email',
+                message: 'Agent Google email (optional):',
+                default: status.email || ''
+            }
+        ]);
+
+        const clientId = String(ans.clientId || '').trim() || currentClientId;
+        const clientSecret = String(ans.clientSecret || '').trim() || String(agent.config.get('googleOAuthClientSecret') || '');
+        if (!clientId || !clientSecret) {
+            console.log('\n❌ Client ID and Client Secret are required.');
+            await waitKeyPress();
+            return showGoogleIdentityMenu();
+        }
+
+        agent.googleIdentity.setCredentials({ clientId, clientSecret, email: String(ans.email || '').trim() || undefined });
+        agent.config.set('googleOAuthRedirectUri' as any, String(ans.redirectUri || 'http://localhost').trim() || 'http://localhost');
+        console.log('\n✅ Google OAuth credentials saved.');
+    } else if (action === 'auth_url') {
+        try {
+            const url = agent.googleIdentity.getAuthorizationUrl();
+            console.log('\nOpen this URL in your browser and complete consent:');
+            console.log(cyan(url));
+            console.log(dim('\nThen choose "Exchange Auth Code / Redirect URL" and paste either the code or full redirect URL.'));
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'exchange_code') {
+        const { codeOrUrl } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'codeOrUrl',
+                message: 'Paste Google authorization code OR full redirect URL:'
+            }
+        ]);
+        try {
+            await agent.googleIdentity.exchangeAuthorizationCode(String(codeOrUrl || '').trim());
+            const nextStatus = agent.googleIdentity.getStatus();
+            console.log(`\n✅ Connected Google identity${nextStatus.email ? `: ${nextStatus.email}` : ''}`);
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'test_search') {
+        const { query } = await inquirer.prompt([
+            { type: 'input', name: 'query', message: 'Gmail query:', default: 'newer_than:7d (otp OR verification OR code)' }
+        ]);
+        try {
+            const msgs = await agent.googleIdentity.searchInbox(String(query || '').trim(), 5);
+            console.log(`\n✅ Found ${msgs.length} message(s).`);
+            msgs.slice(0, 5).forEach((m, idx) => {
+                console.log(`${idx + 1}. ${m.subject || '(no subject)'} ${dim(`| from: ${m.from || 'unknown'}`)}`);
+                if (m.snippet) console.log(`   ${dim(m.snippet.slice(0, 140))}`);
+            });
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'test_otp') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'fromContains', message: 'Optional sender contains:', default: '' },
+            { type: 'input', name: 'subjectContains', message: 'Optional subject contains:', default: '' }
+        ]);
+
+        try {
+            const res = await agent.googleIdentity.findLatestOtp({
+                fromContains: String(ans.fromContains || '').trim() || undefined,
+                subjectContains: String(ans.subjectContains || '').trim() || undefined
+            });
+            if (res.code) {
+                console.log(`\n✅ OTP found: ${bold(res.code)}`);
+                if (res.message?.subject) console.log(`   ${dim('From message:')} ${res.message.subject}`);
+            } else {
+                console.log('\n⚠️ No OTP code found in recent matching messages.');
+            }
+        } catch (e) {
+            console.log(`\n❌ ${e}`);
+        }
+    } else if (action === 'disconnect') {
+        const { ok } = await inquirer.prompt([
+            { type: 'confirm', name: 'ok', message: 'Remove stored Google refresh token?', default: false }
+        ]);
+        if (ok) {
+            agent.googleIdentity.disconnect();
+            console.log('\n✅ Google identity disconnected.');
+        }
+    }
+
+    await waitKeyPress();
+    return showGoogleIdentityMenu();
+}
+
+async function showGoogleWorkspaceCliMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🏢', 'Google Workspace CLI (gws)');
+
+    const status = await agent.googleWorkspaceCli.getStatus();
+    const configuredPath = String(agent.config.get('googleWorkspaceCliPath') || '').trim();
+    const configuredAccount = String(agent.config.get('googleWorkspaceCliAccount') || '').trim();
+
+    console.log('');
+    box([
+        `${dim('Installed')}      ${status.installed ? green('● yes') : gray('○ no')}`,
+        `${dim('Binary')}         ${status.binary ? cyan(status.binary) : gray(configuredPath || '(not found)')}`,
+        `${dim('Config Path')}    ${configuredPath ? cyan(configuredPath) : gray('(auto-detect)')}`,
+        `${dim('Account')}        ${configuredAccount ? cyan(configuredAccount) : gray('(default account)')}`,
+        `${dim('Auth')}           ${status.authError ? yellow('check needed') : status.authStatus ? green('looks ready') : gray('(unknown)')}`,
+    ], { title: 'GOOGLE WORKSPACE STATUS', width: 68, color: status.installed ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Google Workspace CLI Options:'),
+            choices: [
+                { name: `  📦 ${bold('Install / Update gws')}`, value: 'install' },
+                { name: `  ⚙️ ${bold('Set Binary Path / Default Account')}`, value: 'configure' },
+                { name: `  🔐 ${bold('Run gws auth setup')}`, value: 'auth_setup' },
+                { name: `  🔑 ${bold('Run gws auth login')}`, value: 'auth_login' },
+                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    const runInteractiveGws = (args: string[]) => {
+        const binary = agent.googleWorkspaceCli.findBinary() || configuredPath;
+        if (!binary) {
+            console.log('\n❌ gws is not installed or not configured yet.');
+            return;
+        }
+
+        const result = spawnSync(binary, args, { stdio: 'inherit' });
+        if (result.error) {
+            console.log(`\n❌ ${result.error.message}`);
+            return;
+        }
+        if (typeof result.status === 'number' && result.status !== 0) {
+            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+        }
+    };
+
+    if (action === 'install') {
+        const { ok } = await inquirer.prompt([
+            { type: 'confirm', name: 'ok', message: 'Install or update @googleworkspace/cli globally with npm?', default: true }
+        ]);
+        if (ok) {
+            const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+            const result = spawnSync(npmBinary, ['install', '-g', '@googleworkspace/cli'], { stdio: 'inherit' });
+            if (result.error) {
+                console.log(`\n❌ ${result.error.message}`);
+            } else if (typeof result.status === 'number' && result.status !== 0) {
+                console.log(`\n⚠️ npm exited with status ${result.status}.`);
+            } else {
+                console.log('\n✅ gws install/update completed.');
+            }
+        }
+    } else if (action === 'configure') {
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'binaryPath',
+                message: 'gws binary path or command (leave blank for auto-detect):',
+                default: configuredPath
+            },
+            {
+                type: 'input',
+                name: 'account',
+                message: 'Default Google Workspace account (leave blank to unset):',
+                default: configuredAccount
+            }
+        ]);
+
+        const binaryPath = String(ans.binaryPath || '').trim();
+        const account = String(ans.account || '').trim();
+        agent.config.set('googleWorkspaceCliPath' as any, binaryPath || undefined);
+        agent.config.set('googleWorkspaceCliAccount' as any, account || undefined);
+        agent.googleWorkspaceCli.invalidateBinaryCache();
+        console.log('\n✅ Google Workspace CLI configuration updated.');
+    } else if (action === 'auth_setup') {
+        runInteractiveGws(['auth', 'setup']);
+    } else if (action === 'auth_login') {
+        runInteractiveGws(['auth', 'login']);
+    } else if (action === 'auth_status') {
+        const latestStatus = await agent.googleWorkspaceCli.getStatus();
+        console.log('');
+        console.log(dim('Installed:'), latestStatus.installed ? green('yes') : red('no'));
+        if (latestStatus.binary) console.log(dim('Binary:'), latestStatus.binary);
+        if (latestStatus.configuredAccount) console.log(dim('Account:'), latestStatus.configuredAccount);
+        if (latestStatus.authError) {
+            console.log(dim('Auth error:'), yellow(latestStatus.authError));
+        }
+        if (latestStatus.authStatus !== undefined) {
+            console.log(dim('Auth status:'));
+            console.log(typeof latestStatus.authStatus === 'string'
+                ? latestStatus.authStatus
+                : JSON.stringify(latestStatus.authStatus, null, 2));
+        }
+    } else if (action === 'help') {
+        console.log('');
+        console.log(bold('Recommended setup:'));
+        console.log(`  ${cyan('1.')} npm install -g @googleworkspace/cli`);
+        console.log(`  ${cyan('2.')} gws auth setup`);
+        console.log(`  ${cyan('3.')} gws auth login`);
+        console.log('');
+        console.log(bold('Built-in OrcBot skills:'));
+        console.log('  google_workspace_status, google_workspace_command');
+        console.log('  google_docs_create, google_docs_write, google_drive_list');
+        console.log('  google_sheets_create, google_sheets_read, google_sheets_append');
+        console.log('  google_calendar_create_event');
+        console.log('  google_gmail_triage, google_gmail_send, google_gmail_reply, google_gmail_reply_all');
+    }
+
+    await waitKeyPress();
+    return showGoogleWorkspaceCliMenu();
+}
+
+async function showGitHubCliMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🐙', 'GitHub CLI (gh)');
+
+    const status = await agent.githubCli.getStatus();
+    const configuredPath = String(agent.config.get('githubCliPath') || '').trim();
+    const defaultCwd = process.cwd();
+    const binarySource = configuredPath ? 'config override' : 'PATH auto-detect';
+
+    console.log('');
+    box([
+        `${dim('Installed')}      ${status.installed ? green('● yes') : gray('○ no')}`,
+        `${dim('Binary')}         ${status.binary ? cyan(status.binary) : gray(configuredPath || '(not found)')}`,
+        `${dim('Binary Source')}  ${status.binary ? green(binarySource) : gray(binarySource)}`,
+        `${dim('Config Path')}    ${configuredPath ? cyan(configuredPath) : gray('(none, using auto-detect)')}`,
+        `${dim('Auth')}           ${status.authError ? yellow('check needed') : status.authStatus ? green('looks ready') : gray('(unknown)')}`,
+        `${dim('Workspace')}      ${cyan(defaultCwd)}`,
+    ], { title: 'GITHUB CLI STATUS', width: 68, color: status.installed ? c.green : c.yellow });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('GitHub CLI Options:'),
+            choices: [
+                { name: `  ⚙️ ${bold('Set Binary Path Override')}`, value: 'configure' },
+                { name: `  🧭 ${bold('Use Auto-Detect From PATH')}`, value: 'auto_detect' },
+                { name: `  🔑 ${bold('Run gh auth login')}`, value: 'auth_login' },
+                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `  🌿 ${bold('List Pull Requests')}`, value: 'pr_list' },
+                { name: `  🌱 ${bold('List Branches')}`, value: 'branch_list' },
+                { name: `  🏷️ ${bold('List Labels')}`, value: 'label_list' },
+                { name: `  ➕ ${bold('Create Label')}`, value: 'label_create' },
+                { name: `  🗑️ ${bold('Delete Label')}`, value: 'label_delete' },
+                { name: `  ✅ ${bold('Show PR Checks')}`, value: 'pr_checks' },
+                { name: `  📝 ${bold('Review Pull Request')}`, value: 'pr_review' },
+                { name: `  💬 ${bold('Comment On Pull Request')}`, value: 'pr_comment' },
+                { name: `  🔀 ${bold('Merge Pull Request')}`, value: 'pr_merge' },
+                { name: `  🏷️ ${bold('List Releases')}`, value: 'release_list' },
+                { name: `  📦 ${bold('Upload Release Asset')}`, value: 'release_upload_asset' },
+                { name: `  📋 ${bold('List Variables')}`, value: 'variable_list' },
+                { name: `  ✏️ ${bold('Set Variable')}`, value: 'variable_set' },
+                { name: `  ❌ ${bold('Delete Variable')}`, value: 'variable_delete' },
+                { name: `  🧪 ${bold('List Workflow Runs')}`, value: 'workflow_runs' },
+                { name: `  ▶️ ${bold('Dispatch Workflow')}`, value: 'workflow_dispatch' },
+                { name: `  🔁 ${bold('Rerun Workflow Run')}`, value: 'workflow_rerun' },
+                { name: `  🐞 ${bold('Create Issue')}`, value: 'issue_create' },
+                { name: `  💭 ${bold('Comment On Issue')}`, value: 'issue_comment' },
+                { name: `  🚀 ${bold('Create Release')}`, value: 'release_create' },
+                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showToolingMenu();
+
+    const runInteractiveGh = (args: string[], cwd?: string) => {
+        const binary = agent.githubCli.findBinary() || configuredPath;
+        if (!binary) {
+            console.log('\n❌ GitHub CLI is not installed or not configured yet.');
+            return;
+        }
+
+        const result = spawnSync(binary, args, { stdio: 'inherit', cwd: cwd || defaultCwd });
+        if (result.error) {
+            console.log(`\n❌ ${result.error.message}`);
+            return;
+        }
+        if (typeof result.status === 'number' && result.status !== 0) {
+            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+        }
+    };
+
+    if (action === 'configure') {
+        const ans = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'binaryPath',
+                message: 'gh binary path override or command (leave blank to keep current override):',
+                default: configuredPath
+            }
+        ]);
+
+        const binaryPath = String(ans.binaryPath || '').trim();
+        agent.config.set('githubCliPath' as any, binaryPath || undefined);
+        agent.githubCli.invalidateBinaryCache();
+        console.log(`\n✅ GitHub CLI override ${binaryPath ? 'updated' : 'cleared; auto-detect will be used'}.`);
+    } else if (action === 'auto_detect') {
+        agent.config.set('githubCliPath' as any, undefined);
+        agent.githubCli.invalidateBinaryCache();
+        const refreshed = await agent.githubCli.getStatus();
+        console.log(`\n✅ Auto-detect enabled.${refreshed.binary ? ` Found: ${refreshed.binary}` : ' gh was not found on PATH.'}`);
+    } else if (action === 'auth_login') {
+        runInteractiveGh(['auth', 'login']);
+    } else if (action === 'auth_status') {
+        const latestStatus = await agent.githubCli.getStatus();
+        console.log('');
+        console.log(dim('Installed:'), latestStatus.installed ? green('yes') : red('no'));
+        if (latestStatus.binary) console.log(dim('Binary:'), latestStatus.binary);
+        if (latestStatus.authError) {
+            console.log(dim('Auth error:'), yellow(String(latestStatus.authError)));
+        } else if (latestStatus.authStatus) {
+            console.log(dim('Auth status:'));
+            console.log(typeof latestStatus.authStatus === 'string'
+                ? latestStatus.authStatus
+                : JSON.stringify(latestStatus.authStatus, null, 2));
+        } else {
+            console.log(dim('Auth status:'), gray('No auth information returned.'));
+        }
+    } else if (action === 'pr_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'list', name: 'state', message: 'PR state:', choices: ['open', 'closed', 'merged', 'all'], default: 'open' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 }
+        ]);
+
+        const result = await agent.githubCli.listPullRequests({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            state: String(ans.state || 'open'),
+            limit: Number(ans.limit) || 10,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const pullRequests = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${pullRequests.length} pull request(s).`);
+            for (const pr of pullRequests) {
+                console.log(`${pr.number}. ${pr.title} ${dim(`| ${pr.state}${pr.isDraft ? ', draft' : ''}`)}`);
+                console.log(`   ${dim(`${pr.headRefName} → ${pr.baseRefName}`)}`);
+                if (pr.url) console.log(`   ${cyan(pr.url)}`);
+            }
+        }
+    } else if (action === 'branch_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'query', message: 'Branch name contains (optional):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listBranches({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            query: String(ans.query || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const branches = Array.isArray(result.data?.branches) ? result.data.branches : [];
+            const defaultBranch = result.data?.defaultBranch;
+            console.log(`\n✅ Found ${branches.length} branch(es).`);
+            if (defaultBranch) console.log(`${dim('Default branch:')} ${cyan(defaultBranch)}`);
+            for (const branch of branches) {
+                const isDefault = defaultBranch && branch?.name === defaultBranch;
+                console.log(`${branch.name}${isDefault ? ` ${dim('(default)')}` : ''}`);
+            }
+        }
+    } else if (action === 'label_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'search', message: 'Label name contains (optional):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listLabels({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            search: String(ans.search || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const labels = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${labels.length} label(s).`);
+            for (const label of labels) {
+                console.log(`${label.name} ${dim(`#${label.color || 'unknown'}`)}`);
+                if (label.description) console.log(`   ${dim(label.description)}`);
+            }
+        }
+    } else if (action === 'label_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Label name:' },
+            { type: 'input', name: 'color', message: 'Hex color without # (example: ff0000):' },
+            { type: 'input', name: 'description', message: 'Description (optional):', default: '' },
+            { type: 'confirm', name: 'force', message: 'Update if label already exists?', default: true },
+        ]);
+
+        const result = await agent.githubCli.createLabel({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+            color: String(ans.color || '').trim(),
+            description: String(ans.description || '').trim() || undefined,
+            force: !!ans.force,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Label command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'label_delete') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Label name to delete:' },
+        ]);
+
+        const result = await agent.githubCli.deleteLabel({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Label delete command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_checks') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+        ]);
+
+        const result = await agent.githubCli.getPullRequestChecks({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const checks = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${checks.length} check(s).`);
+            for (const check of checks) {
+                console.log(`${check.name} ${dim(`| ${check.state}${check.bucket ? `, ${check.bucket}` : ''}`)}`);
+                if (check.description) console.log(`   ${dim(check.description)}`);
+                if (check.link) console.log(`   ${cyan(check.link)}`);
+            }
+        }
+    } else if (action === 'pr_review') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'list', name: 'event', message: 'Review action:', choices: ['APPROVE', 'COMMENT', 'REQUEST_CHANGES'], default: 'APPROVE' },
+            { type: 'editor', name: 'body', message: 'Review body (optional):' },
+        ]);
+
+        const result = await agent.githubCli.reviewPullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            event: String(ans.event || 'APPROVE') as 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES',
+            body: String(ans.body || '').trim() || undefined,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request review submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_comment') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'editor', name: 'body', message: 'Comment body:' },
+        ]);
+
+        const result = await agent.githubCli.commentOnPullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            body: String(ans.body || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request comment submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'pr_merge') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'pullRequest', message: 'Pull request number or branch:' },
+            { type: 'list', name: 'strategy', message: 'Merge strategy:', choices: ['merge', 'squash', 'rebase'], default: 'merge' },
+            { type: 'input', name: 'subject', message: 'Commit subject (optional):', default: '' },
+            { type: 'editor', name: 'body', message: 'Commit body / merge body (optional):' },
+            { type: 'confirm', name: 'auto', message: 'Enable auto-merge?', default: false },
+            { type: 'confirm', name: 'admin', message: 'Use admin override?', default: false },
+            { type: 'confirm', name: 'deleteBranch', message: 'Delete branch after merge?', default: true },
+            { type: 'input', name: 'matchHeadCommit', message: 'Match head commit SHA (optional):', default: '' },
+        ]);
+
+        const result = await agent.githubCli.mergePullRequest({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            pullRequest: String(ans.pullRequest || '').trim(),
+            strategy: String(ans.strategy || 'merge') as 'merge' | 'squash' | 'rebase',
+            subject: String(ans.subject || '').trim() || undefined,
+            body: String(ans.body || '').trim() || undefined,
+            auto: !!ans.auto,
+            admin: !!ans.admin,
+            deleteBranch: !!ans.deleteBranch,
+            matchHeadCommit: String(ans.matchHeadCommit || '').trim() || undefined,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Pull request merge command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'release_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 }
+        ]);
+
+        const result = await agent.githubCli.listReleases({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            limit: Number(ans.limit) || 10,
+        });
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const releases = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${releases.length} release(s).`);
+            for (const release of releases) {
+                const title = release.name || release.tagName;
+                const status = release.isDraft ? 'draft' : release.isPrerelease ? 'prerelease' : 'published';
+                const flags = release.isLatest ? ', latest' : release.isImmutable ? ', immutable' : '';
+                console.log(`${title} ${dim(`| ${status}${flags}`)}`);
+                if (release.tagName) console.log(`   ${dim(`tag: ${release.tagName}`)}`);
+                if (release.publishedAt || release.createdAt) console.log(`   ${dim(`time: ${release.publishedAt || release.createdAt}`)}`);
+            }
+        }
+    } else if (action === 'release_upload_asset') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'tag', message: 'Release tag:' },
+            { type: 'input', name: 'files', message: 'Files to upload (comma-separated paths):' },
+            { type: 'confirm', name: 'clobber', message: 'Overwrite asset if it already exists?', default: false },
+        ]);
+
+        const result = await agent.githubCli.uploadReleaseAsset({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            tag: String(ans.tag || '').trim(),
+            files: String(ans.files || '').split(',').map((item) => item.trim()).filter(Boolean),
+            clobber: !!ans.clobber,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Release asset upload requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'variable_list') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 20 }
+        ]);
+
+        const result = await agent.githubCli.listVariables({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            limit: Number(ans.limit) || 20,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const variables = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${variables.length} variable(s).`);
+            for (const variable of variables) {
+                console.log(`${variable.name} ${dim(`| ${variable.visibility || 'repo'}`)}`);
+                if (variable.value) console.log(`   ${dim(variable.value)}`);
+            }
+        }
+    } else if (action === 'variable_set') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Variable name:' },
+            { type: 'editor', name: 'value', message: 'Variable value:' },
+            { type: 'list', name: 'visibility', message: 'Visibility (optional):', choices: ['', 'all', 'private', 'selected'], default: '' },
+        ]);
+
+        const result = await agent.githubCli.setVariable({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+            value: String(ans.value || '').trim(),
+            visibility: ((): 'all' | 'private' | 'selected' | undefined => {
+                const value = String(ans.visibility || '').trim();
+                return value === 'all' || value === 'private' || value === 'selected'
+                    ? value
+                    : undefined;
+            })(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Variable set command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'variable_delete') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'name', message: 'Variable name to delete:' },
+        ]);
+
+        const result = await agent.githubCli.deleteVariable({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            name: String(ans.name || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Variable delete command submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'workflow_runs') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'workflow', message: 'Workflow name/file (optional):', default: '' },
+            { type: 'input', name: 'branch', message: 'Branch (optional):', default: '' },
+            { type: 'list', name: 'status', message: 'Status filter:', choices: ['', 'queued', 'completed', 'in_progress', 'requested', 'waiting', 'pending', 'action_required', 'cancelled', 'failure', 'neutral', 'skipped', 'stale', 'startup_failure', 'success', 'timed_out'], default: '' },
+            { type: 'number', name: 'limit', message: 'Limit:', default: 10 },
+        ]);
+
+        const result = await agent.githubCli.listWorkflowRuns({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            workflow: String(ans.workflow || '').trim() || undefined,
+            branch: String(ans.branch || '').trim() || undefined,
+            status: String(ans.status || '').trim() || undefined,
+            limit: Number(ans.limit) || 10,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            const runs = Array.isArray(result.data) ? result.data : [];
+            console.log(`\n✅ Found ${runs.length} workflow run(s).`);
+            for (const run of runs) {
+                const name = run.workflowName || run.name || 'Workflow';
+                console.log(`${run.databaseId}. ${name} ${dim(`| ${run.status}${run.conclusion ? `, ${run.conclusion}` : ''}`)}`);
+                console.log(`   ${dim(`${run.headBranch || 'unknown branch'} • ${run.displayTitle || 'no title'}`)}`);
+                if (run.url) console.log(`   ${cyan(run.url)}`);
+            }
+        }
+    } else if (action === 'workflow_dispatch') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'workflow', message: 'Workflow name or file:' },
+            { type: 'input', name: 'ref', message: 'Git ref (optional):', default: '' },
+            { type: 'editor', name: 'fields', message: 'Workflow fields as JSON object (optional):' },
+        ]);
+
+        let fields: Record<string, string | number | boolean> | undefined;
+        const rawFields = String(ans.fields || '').trim();
+        if (rawFields) {
+            try {
+                const parsed = JSON.parse(rawFields);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    fields = parsed as Record<string, string | number | boolean>;
+                } else {
+                    console.log('\n❌ Fields JSON must be an object.');
+                    await waitKeyPress();
+                    return showGitHubCliMenu();
+                }
+            } catch (e: any) {
+                console.log(`\n❌ Invalid fields JSON: ${e.message}`);
+                await waitKeyPress();
+                return showGitHubCliMenu();
+            }
+        }
+
+        const result = await agent.githubCli.dispatchWorkflow({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            workflow: String(ans.workflow || '').trim(),
+            ref: String(ans.ref || '').trim() || undefined,
+            fields,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Workflow dispatch requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'workflow_rerun') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'runId', message: 'Workflow run ID:' },
+            { type: 'confirm', name: 'failed', message: 'Rerun failed jobs only?', default: false },
+        ]);
+
+        const result = await agent.githubCli.rerunWorkflowRun({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            runId: String(ans.runId || '').trim(),
+            failed: !!ans.failed,
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ Workflow rerun requested.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'issue_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'title', message: 'Issue title:' },
+            { type: 'editor', name: 'body', message: 'Issue body:' },
+            { type: 'input', name: 'labels', message: 'Labels (comma-separated, optional):', default: '' },
+            { type: 'input', name: 'assignees', message: 'Assignees (comma-separated, optional):', default: '' },
+        ]);
+
+        const result = await agent.githubCli.createIssue({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            title: String(ans.title || '').trim(),
+            body: String(ans.body || ''),
+            labels: String(ans.labels || '').split(',').map((value) => value.trim()).filter(Boolean),
+            assignees: String(ans.assignees || '').split(',').map((value) => value.trim()).filter(Boolean),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub issue created.');
+            if (result.data?.url) console.log(cyan(result.data.url));
+        }
+    } else if (action === 'issue_comment') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'issue', message: 'Issue number:' },
+            { type: 'editor', name: 'body', message: 'Comment body:' },
+        ]);
+
+        const result = await agent.githubCli.commentOnIssue({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            issue: String(ans.issue || '').trim(),
+            body: String(ans.body || '').trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub issue comment submitted.');
+            if (result.stdout) console.log(result.stdout);
+        }
+    } else if (action === 'release_create') {
+        const ans = await inquirer.prompt([
+            { type: 'input', name: 'cwd', message: 'Working directory:', default: defaultCwd },
+            { type: 'input', name: 'repo', message: 'Optional repo override (owner/name):', default: '' },
+            { type: 'input', name: 'tag', message: 'Release tag (example: v1.0.8):' },
+            { type: 'input', name: 'title', message: 'Release title (optional):', default: '' },
+            { type: 'editor', name: 'notes', message: 'Release notes (leave blank to use generated notes):' },
+            { type: 'input', name: 'target', message: 'Target branch/commit (optional):', default: '' },
+            { type: 'confirm', name: 'draft', message: 'Create as draft?', default: false },
+            { type: 'confirm', name: 'prerelease', message: 'Mark as prerelease?', default: false },
+        ]);
+
+        const notes = String(ans.notes || '');
+        const result = await agent.githubCli.createRelease({
+            cwd: String(ans.cwd || '').trim() || defaultCwd,
+            repo: String(ans.repo || '').trim() || undefined,
+            tag: String(ans.tag || '').trim(),
+            title: String(ans.title || '').trim() || undefined,
+            notes: notes.trim() || undefined,
+            target: String(ans.target || '').trim() || undefined,
+            draft: !!ans.draft,
+            prerelease: !!ans.prerelease,
+            generateNotes: !notes.trim(),
+        });
+
+        if (!result.success) {
+            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+        } else {
+            console.log('\n✅ GitHub release created.');
+            if (result.data?.url) console.log(cyan(result.data.url));
+        }
+    } else if (action === 'help') {
+        console.log('');
+        console.log(`${bold('Install:')} https://cli.github.com/`);
+        console.log(`${bold('Auto-detect:')} if ${cyan('gh')} is already on your PATH, OrcBot will use it automatically.`);
+        console.log(`${bold('Binary path override:')} only set this when you want OrcBot to use a specific gh executable.`);
+        console.log(`${bold('Auth:')} run ${cyan('gh auth login')} and choose the account you want OrcBot to use.`);
+        console.log(`${bold('Repo context:')} by default, commands run in the current workspace. Use repo override when targeting another repository.`);
+        console.log(`${bold('Agent skills:')} github_branch_list, github_label_list, github_label_create, github_label_delete, github_pr_list, github_pr_checks, github_pr_review, github_pr_comment, github_pr_merge, github_issue_create, github_issue_comment, github_release_create, github_release_upload_asset, github_variable_list, github_variable_set, github_variable_delete, github_workflow_runs, github_workflow_dispatch, github_workflow_rerun, plus github_cli_command for raw structured access.`);
+    }
+
+    await waitKeyPress();
+    return showGitHubCliMenu();
 }
 
 async function showGatewayMenu() {
@@ -2892,6 +4569,10 @@ async function showGatewayMenu() {
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
+    const currentMcpPort = agent.config.get('mcpPort') || 3190;
+    const currentMcpHost = agent.config.get('mcpHost') || '0.0.0.0';
+    const currentMcpPath = agent.config.get('mcpPath') || '/mcp';
+    const mcpApiKey = agent.config.get('mcpApiKey') || apiKey;
     const autonomyAllowed = isAutonomyEnabledForChannel('gateway-chat');
 
     sectionHeader('🌐', 'Web Gateway');
@@ -2905,6 +4586,14 @@ async function showGatewayMenu() {
         `${dim('Autonomy')}   ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
     box(gatewayLines, { title: '📡 GATEWAY CONFIG', width: 52, color: c.cyan });
+    const mcpLines = [
+        `${dim('Host')}       ${bold(String(currentMcpHost))}`,
+        `${dim('Port')}       ${brightCyan(bold(String(currentMcpPort)))}`,
+        `${dim('Path')}       ${cyan(String(currentMcpPath))}`,
+        `${dim('Endpoint')}   ${cyan(`http://${currentMcpHost}:${currentMcpPort}${currentMcpPath}`)}`,
+        `${dim('Auth')}       ${mcpApiKey ? green('● API Key set') : yellow('○ No authentication')}`,
+    ];
+    box(mcpLines, { title: '🔌 MCP HTTP CONFIG', width: 52, color: c.brightMagenta });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -2915,12 +4604,20 @@ async function showGatewayMenu() {
             choices: [
                 { name: `  🚀 ${bold('Start Gateway Server')}`, value: 'start' },
                 { name: `  🚀 ${bold('Start Gateway + Agent')}`, value: 'start_with_agent' },
+                { name: `  🚀 ${bold('Start Gateway + Agent + MCP HTTP')}`, value: 'start_with_agent_mcp' },
+                { name: `  🔌 ${bold('Start MCP HTTP Only')}`, value: 'start_mcp_http' },
+                { name: `  🧾 ${bold('Show MCP Client Config (Local/Tailnet)')}`, value: 'mcp_info' },
                 new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.cyan, c.gray])),
                 { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
                 { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
                 { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                { name: `  📌 Set MCP Port ${dim(`(current: ${currentMcpPort})`)}`, value: 'mcp_port' },
+                { name: `  🏠 Set MCP Host ${dim(`(current: ${currentMcpHost})`)}`, value: 'mcp_host' },
+                { name: `  🛣️  Set MCP Path ${dim(`(current: ${currentMcpPath})`)}`, value: 'mcp_path' },
+                { name: `  🔑 ${mcpApiKey ? 'Update' : 'Set'} MCP API Key`, value: 'mcp_apikey' },
                 { name: `  🤖 ${autonomyAllowed ? 'Disable' : 'Enable'} Autonomous Messaging`, value: 'toggle_autonomy' },
                 { name: `  🔐 ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
+                { name: `  🌍 ${bold('Public Tunnel Setup (Cloudflare/Ngrok)')}`, value: 'public_tunnel' },
                 new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -2934,7 +4631,7 @@ async function showGatewayMenu() {
         return showGatewayMenu();
     }
 
-    if (action === 'start' || action === 'start_with_agent') {
+    if (action === 'start' || action === 'start_with_agent' || action === 'start_with_agent_mcp') {
         // Ask for optional static dashboard directory before starting the gateway
         const defaultStatic = agent.config.get('gatewayStaticDir') || path.join(process.cwd(), 'apps', 'dashboard');
         const { staticDirInput } = await inquirer.prompt([
@@ -2986,13 +4683,81 @@ async function showGatewayMenu() {
         if (staticDir) console.log(`   Static files served from: ${staticDir}`);
         console.log('\n   Press Ctrl+C to stop\n');
 
-        if (action === 'start_with_agent') {
+        if (action === 'start_with_agent' || action === 'start_with_agent_mcp') {
             console.log('🤖 Also starting agent loop...\n');
             agent.start().catch(err => logger.error(`Agent error: ${err}`));
         }
 
+        if (action === 'start_with_agent_mcp') {
+            const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+            const resolved = resolveMcpHttpOptions(agent.config);
+            const mcp = new OrcBotMcpServer(agent, {
+                serverName: 'orcbot',
+                serverVersion: '1.0.7',
+                chatTimeoutMs: 90000,
+                chatIdleMs: 4000,
+                startAgentLoop: false
+            });
+            await mcp.startHttp(resolved);
+            const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
+            console.log(`🔌 MCP HTTP server running at http://${connectHost}:${resolved.port}${resolved.path}`);
+            console.log(`   Health check: http://${connectHost}:${resolved.port}/health`);
+            process.on('SIGINT', async () => { await mcp.close(); });
+        }
+
         // Keep running - don't return to menu
         await new Promise(() => { }); // Wait forever until Ctrl+C
+    } else if (action === 'start_mcp_http') {
+        const { OrcBotMcpServer, resolveMcpHttpOptions } = require('../mcp/OrcBotMcpServer');
+        const resolved = resolveMcpHttpOptions(agent.config);
+        const mcp = new OrcBotMcpServer(agent, {
+            serverName: 'orcbot',
+            serverVersion: '1.0.7',
+            chatTimeoutMs: 90000,
+            chatIdleMs: 4000,
+            startAgentLoop: true
+        });
+        await mcp.startHttp(resolved);
+        const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
+        console.log('\n🔌 MCP HTTP server is ready!');
+        console.log(`   Endpoint: http://${connectHost}:${resolved.port}${resolved.path}`);
+        console.log(`   Health:   http://${connectHost}:${resolved.port}/health`);
+        console.log('   Press Ctrl+C to stop\n');
+        await new Promise(() => { });
+    } else if (action === 'mcp_info') {
+        const tsInfo = getTailscaleInfo();
+        const connectHost = currentMcpHost === '0.0.0.0' ? 'localhost' : currentMcpHost;
+        const localUrl = `http://${connectHost}:${currentMcpPort}${currentMcpPath}`;
+        const remoteHost = tsInfo.dnsName || tsInfo.ipv4 || '';
+        const remoteUrl = remoteHost ? `http://${remoteHost}:${currentMcpPort}${currentMcpPath}` : '(tailscale endpoint unavailable)';
+        const localConfig = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: localUrl, headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: localUrl } } }, null, 2);
+        const remoteConfig = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: remoteUrl, headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: remoteUrl } } }, null, 2);
+
+        console.log('');
+        box([
+            `${dim('Local MCP URL')}   ${cyan(localUrl)}`,
+            `${dim('Tailnet MCP URL')} ${remoteHost ? cyan(remoteUrl) : yellow('not available (run tailscale up)')}`,
+            `${dim('Backend State')}   ${tsInfo.backendState ? (tsInfo.connected ? green(tsInfo.backendState) : yellow(tsInfo.backendState)) : gray('unknown')}`,
+            `${dim('Tailnet DNS')}     ${tsInfo.dnsName ? brightCyan(tsInfo.dnsName) : gray('n/a')}`,
+            `${dim('Tailnet IPv4')}    ${tsInfo.ipv4 ? brightCyan(tsInfo.ipv4) : gray('n/a')}`,
+            `${dim('Tailnet State')}   ${tsInfo.connected ? green('connected') : yellow('not connected')}`,
+            `${dim('Auth')}            ${mcpApiKey ? green('API key required') : yellow('no auth')}`,
+        ], { title: '🔌 MCP CLIENT CONNECTION INFO', width: 76, color: c.brightMagenta });
+        if (tsInfo.health) {
+            console.log(yellow(`Health: ${tsInfo.health}`));
+            console.log('');
+        }
+        console.log('');
+        console.log(bold('Local client JSON:'));
+        console.log(localConfig);
+        console.log('');
+        console.log(bold('Tailnet client JSON:'));
+        console.log(remoteConfig);
+        console.log('');
     } else if (action === 'port') {
         const { val } = await inquirer.prompt([
             { type: 'number', name: 'val', message: 'Enter gateway port:', default: currentPort }
@@ -3009,74 +4774,60 @@ async function showGatewayMenu() {
         ]);
         agent.config.set('gatewayApiKey', val || undefined);
         console.log(val ? 'API key set!' : 'Authentication disabled.');
+    } else if (action === 'mcp_port') {
+        const { val } = await inquirer.prompt([
+            { type: 'number', name: 'val', message: 'Enter MCP port:', default: currentMcpPort }
+        ]);
+        if (val) agent.config.set('mcpPort', val);
+    } else if (action === 'mcp_host') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP host (0.0.0.0 for all interfaces):', default: currentMcpHost }
+        ]);
+        if (val) agent.config.set('mcpHost', val);
+    } else if (action === 'mcp_path') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP path:', default: currentMcpPath }
+        ]);
+        if (val) {
+            const normalizedPath = String(val).trim().startsWith('/') ? String(val).trim() : `/${String(val).trim()}`;
+            agent.config.set('mcpPath', normalizedPath || '/mcp');
+        }
+    } else if (action === 'mcp_apikey') {
+        const { val } = await inquirer.prompt([
+            { type: 'input', name: 'val', message: 'Enter MCP API key (leave empty to disable):' }
+        ]);
+        agent.config.set('mcpApiKey', val || undefined);
+        console.log(val ? 'MCP API key set!' : 'MCP authentication disabled.');
     } else if (action === 'tailscale') {
         console.log('');
-        const { execSync } = require('child_process');
-        let tailscaleInstalled = false;
-        let statusLine = yellow('not installed');
-        let tailscaleIp = dim('n/a');
-
-        // Robust detection: try which/where, then version, then status/ip
-        try {
-            const platform = process.platform;
-            try {
-                if (platform === 'win32') execSync('where tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
-                else execSync('which tailscale', { stdio: ['ignore', 'pipe', 'pipe'] });
-            } catch {
-                // which/where may fail even if tailscale CLI available (path issues);
-                // continue to try version/status commands.
-            }
-
-            // Try version first (non-interactive)
-            try {
-                const ver = String(execSync('tailscale version', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n')[0].trim();
-                tailscaleInstalled = true;
-                statusLine = green(`installed (${ver})`);
-            } catch {
-                // Try a status probe
-                try {
-                    const st = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
-                    if (st && st.trim()) {
-                        tailscaleInstalled = true;
-                        statusLine = green('installed (status)');
-                    }
-                } catch {
-                    tailscaleInstalled = false;
-                }
-            }
-
-            // Try to get IPv4 address
-            if (tailscaleInstalled) {
-                try {
-                    const ipOut = String(execSync('tailscale ip -4', { stdio: ['ignore', 'pipe', 'pipe'] })).split('\n').find((l: string) => l.trim()) || '';
-                    if (ipOut.trim()) tailscaleIp = brightCyan(ipOut.trim());
-                } catch {
-                    // as fallback, try parsing status --json for self IP
-                    try {
-                        const statusJson = String(execSync('tailscale status --json', { stdio: ['ignore', 'pipe', 'pipe'] }));
-                        const parsed = JSON.parse(statusJson || '{}');
-                        if (parsed && parsed.Self && parsed.Self.TailSegments) {
-                            // Not all versions include TailSegments; try Addresses
-                        }
-                        if (parsed && parsed.Self && parsed.Self.Addresses && Array.isArray(parsed.Self.Addresses)) {
-                            const v4 = parsed.Self.Addresses.find((a: string) => a.includes('.') );
-                            if (v4) tailscaleIp = brightCyan(String(v4).split('/')[0]);
-                        }
-                    } catch {}
-                }
-            }
-        } catch (e) {
-            // fallthrough, keep as not installed
-            tailscaleInstalled = tailscaleInstalled || false;
-        }
+        const tsInfo = getTailscaleInfo();
+        const tailscaleInstalled = tsInfo.cliAvailable;
+        const statusLine = !tailscaleInstalled
+            ? yellow('not installed / cli not found')
+            : tsInfo.connected
+                ? green(`connected${tsInfo.version ? ` (${tsInfo.version})` : ''}`)
+                : yellow(`installed but not connected${tsInfo.version ? ` (${tsInfo.version})` : ''}`);
+        const tailscaleIp = tsInfo.ipv4 ? brightCyan(tsInfo.ipv4) : dim('n/a');
+        const tailscaleDns = tsInfo.dnsName ? brightCyan(tsInfo.dnsName) : dim('n/a');
 
         const tailscaleLines = [
             `${dim('Tailscale')}   ${statusLine}`,
+            `${dim('Backend')}     ${tsInfo.backendState ? (tsInfo.connected ? green(tsInfo.backendState) : yellow(tsInfo.backendState)) : dim('unknown')}`,
             `${dim('Tailnet IP')}  ${tailscaleIp}`,
+            `${dim('Tailnet DNS')} ${tailscaleDns}`,
             `${dim('Gateway')}     ${bold(String(currentHost))}:${brightCyan(bold(String(currentPort)))}`,
             `${dim('Auth Key')}    ${apiKey ? green('set') : yellow('not set (recommended)')}`,
+            `${dim('CLI Path')}    ${tsInfo.command ? dim(tsInfo.command) : dim('n/a')}`,
         ];
         box(tailscaleLines, { title: '🔐 PRIVATE REMOTE ACCESS', width: 60, color: c.brightCyan });
+        if (tsInfo.health) {
+            console.log(yellow(`Health: ${tsInfo.health}`));
+            console.log('');
+        }
+        if (tsInfo.error) {
+            console.log(yellow(`Note: ${tsInfo.error}`));
+            console.log('');
+        }
 
         console.log('');
         console.log(bold('Recommended setup (official pattern):'));
@@ -3086,7 +4837,7 @@ async function showGatewayMenu() {
         console.log(`  4) ${dim('Use ACLs')} allow only your ops group to reach port ${currentPort}.`);
         console.log('');
         console.log(dim('Quick commands:'));
-        console.log(`  ${cyan('tailscale status')}`);
+        console.log(`  ${cyan('tailscale status --json')}`);
         console.log(`  ${cyan('tailscale ip -4')}`);
         console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
         console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
@@ -3150,7 +4901,7 @@ async function showGatewayMenu() {
             // Quick commands already displayed above — repeat with emphasis
             console.log('');
             console.log(cyan('Quick commands:'));
-            console.log(`  ${cyan('tailscale status')}`);
+            console.log(`  ${cyan('tailscale status --json')}`);
             console.log(`  ${cyan('tailscale ip -4')}`);
             console.log(`  ${cyan('orcbot gateway --with-agent -p ' + currentPort)}`);
             console.log(`  ${dim('Then browse:')} ${cyan('http://<tailnet-ip>:' + currentPort)}`);
@@ -3159,10 +4910,221 @@ async function showGatewayMenu() {
         if (!tailscaleInstalled && tsAction !== 'install') {
             console.log(yellow('Tip: Install tailscale first, then rerun this check to confirm status/IP.'));
         }
+    } else if (action === 'public_tunnel') {
+        console.log('');
+        const tunnelInfo = getPublicTunnelInfo();
+        const localConnectHost = currentMcpHost === '0.0.0.0' ? 'localhost' : currentMcpHost;
+        const localMcpUrl = `http://${localConnectHost}:${currentMcpPort}${currentMcpPath}`;
+
+        const tunnelLines = [
+            `${dim('MCP Local')}     ${cyan(localMcpUrl)}`,
+            `${dim('cloudflared')}   ${tunnelInfo.cloudflared.available ? green(`installed${tunnelInfo.cloudflared.version ? ` (${tunnelInfo.cloudflared.version})` : ''}`) : yellow('not found')}`,
+            `${dim('ngrok')}        ${tunnelInfo.ngrok.available ? green(`installed${tunnelInfo.ngrok.version ? ` (${tunnelInfo.ngrok.version})` : ''}`) : yellow('not found')}`,
+            `${dim('Auth')}         ${mcpApiKey ? green('MCP API key set') : yellow('no mcpApiKey set (strongly recommended)')}`,
+        ];
+        box(tunnelLines, { title: '🌍 PUBLIC MCP TUNNEL', width: 80, color: c.brightYellow });
+
+        console.log('');
+        console.log(bold('Public MCP notes:'));
+        console.log(`  • Use ${bold('HTTPS')} tunnel URLs only.`);
+        console.log(`  • Browser GET on ${cyan('/mcp')} returns 405 by design; use MCP client POSTs.`);
+        console.log(`  • Keep ${cyan('mcpApiKey')} enabled when exposing publicly.`);
+        console.log('');
+
+        const publicConfigTemplate = mcpApiKey
+            ? JSON.stringify({ mcpServers: { orcbot: { url: 'https://<public-tunnel-url>/mcp', headers: { 'X-Api-Key': '<your-mcpApiKey>' } } } }, null, 2)
+            : JSON.stringify({ mcpServers: { orcbot: { url: 'https://<public-tunnel-url>/mcp' } } }, null, 2);
+        console.log(bold('Public client JSON template:'));
+        console.log(publicConfigTemplate);
+        console.log('');
+
+        const tunnelChoices: any[] = [];
+        if (tunnelInfo.cloudflared.available) tunnelChoices.push({ name: `  ☁️  ${bold('Start Cloudflare Quick Tunnel now')}`, value: 'run_cloudflared' });
+        if (tunnelInfo.ngrok.available) tunnelChoices.push({ name: `  🕳️  ${bold('Start ngrok tunnel now')}`, value: 'run_ngrok' });
+        tunnelChoices.push({ name: `  📋 ${bold('Show quick commands')}`, value: 'quick' });
+        tunnelChoices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])));
+        tunnelChoices.push({ name: dim('  ← Back'), value: 'back' });
+
+        const { tunnelAction } = await inquirer.prompt([
+            { type: 'list', name: 'tunnelAction', message: cyan('Public tunnel actions:'), choices: tunnelChoices }
+        ]);
+
+        if (tunnelAction === 'run_cloudflared') {
+            const cmd = tunnelInfo.cloudflared.command || 'cloudflared';
+            console.log(`\nStarting Cloudflare quick tunnel to ${localMcpUrl} ...\n`);
+            console.log(dim('Press Ctrl+C to stop the tunnel.'));
+            const result = spawnSync(cmd, ['tunnel', '--url', `http://${localConnectHost}:${currentMcpPort}`], { stdio: 'inherit', shell: true });
+            if (result.error) console.error(red(`Failed to start cloudflared: ${String(result.error.message || result.error)}`));
+        } else if (tunnelAction === 'run_ngrok') {
+            const cmd = tunnelInfo.ngrok.command || 'ngrok';
+            console.log(`\nStarting ngrok tunnel to http://${localConnectHost}:${currentMcpPort} ...\n`);
+            console.log(dim('Press Ctrl+C to stop the tunnel.'));
+            const result = spawnSync(cmd, ['http', String(currentMcpPort)], { stdio: 'inherit', shell: true });
+            if (result.error) console.error(red(`Failed to start ngrok: ${String(result.error.message || result.error)}`));
+        } else if (tunnelAction === 'quick') {
+            console.log('');
+            console.log(cyan('Quick commands:'));
+            console.log(`  ${cyan(`cloudflared tunnel --url http://${localConnectHost}:${currentMcpPort}`)}`);
+            console.log(`  ${cyan(`ngrok http ${currentMcpPort}`)}`);
+            console.log(`  ${dim('Then use in client JSON:')} ${cyan('https://<public-tunnel-url>/mcp')}`);
+            console.log('');
+        }
     }
 
     await waitKeyPress();
     return showGatewayMenu();
+}
+
+type TailscaleInfo = {
+    cliAvailable: boolean;
+    connected: boolean;
+    backendState?: string;
+    health?: string;
+    ipv4?: string;
+    dnsName?: string;
+    version?: string;
+    command?: string;
+    error?: string;
+};
+
+type CliToolInfo = {
+    available: boolean;
+    command?: string;
+    version?: string;
+    error?: string;
+};
+
+type PublicTunnelInfo = {
+    cloudflared: CliToolInfo;
+    ngrok: CliToolInfo;
+};
+
+function runCli(cmd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
+    const result = spawnSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return {
+        ok: result.status === 0,
+        stdout: String(result.stdout || '').trim(),
+        stderr: String(result.stderr || '').trim(),
+    };
+}
+
+function probeCliTool(candidates: string[], versionArgs: string[] = ['--version']): CliToolInfo {
+    for (const cmd of candidates) {
+        const probe = runCli(cmd, versionArgs);
+        if (probe.ok || probe.stdout || !/not recognized|ENOENT|not found|cannot find/i.test(probe.stderr || '')) {
+            return {
+                available: true,
+                command: cmd,
+                version: (probe.stdout || probe.stderr || '').split(/\r?\n/)[0]?.trim() || undefined,
+            };
+        }
+    }
+    return { available: false, error: 'command not found' };
+}
+
+function getPublicTunnelInfo(): PublicTunnelInfo {
+    const cloudflaredCandidates = process.platform === 'win32'
+        ? ['cloudflared.exe', 'cloudflared', 'C:\\Program Files\\Cloudflare\\Cloudflare Tunnel\\cloudflared.exe']
+        : ['cloudflared'];
+    const ngrokCandidates = process.platform === 'win32'
+        ? ['ngrok.exe', 'ngrok']
+        : ['ngrok'];
+
+    return {
+        cloudflared: probeCliTool(cloudflaredCandidates),
+        ngrok: probeCliTool(ngrokCandidates, ['version'])
+    };
+}
+
+function getTailscaleCommandCandidates(): string[] {
+    if (process.platform === 'win32') {
+        return [
+            'tailscale.exe',
+            'tailscale',
+            'C:\\Program Files\\Tailscale\\tailscale.exe',
+            'C:\\Program Files (x86)\\Tailscale\\tailscale.exe'
+        ];
+    }
+    return ['tailscale'];
+}
+
+function parseFirstIPv4(text: string): string | undefined {
+    const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    for (const line of lines) {
+        const candidate = line.split('/')[0].trim();
+        if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(candidate)) return candidate;
+    }
+    return undefined;
+}
+
+function getTailscaleInfo(): TailscaleInfo {
+    const candidates = getTailscaleCommandCandidates();
+    let selected: string | undefined;
+    let version: string | undefined;
+
+    for (const cmd of candidates) {
+        const probe = runCli(cmd, ['version']);
+        if (probe.ok || probe.stdout || !/not recognized|ENOENT|not found/i.test(probe.stderr || '')) {
+            selected = cmd;
+            version = (probe.stdout || '').split(/\r?\n/)[0]?.trim() || undefined;
+            break;
+        }
+    }
+
+    if (!selected) {
+        return {
+            cliAvailable: false,
+            connected: false,
+            error: 'tailscale CLI was not found on PATH or standard install locations.'
+        };
+    }
+
+    const statusRun = runCli(selected, ['status', '--json']);
+    let connected = false;
+    let backendState: string | undefined;
+    let health: string | undefined;
+    let ipv4: string | undefined;
+    let dnsName: string | undefined;
+
+    if (statusRun.ok && statusRun.stdout) {
+        try {
+            const parsed = JSON.parse(statusRun.stdout);
+            const backend = String(parsed?.BackendState || '').toLowerCase();
+            connected = backend === 'running';
+            backendState = String(parsed?.BackendState || '').trim() || undefined;
+            if (Array.isArray(parsed?.Health) && parsed.Health.length > 0) {
+                health = String(parsed.Health[0] || '').trim() || undefined;
+            }
+
+            const self = parsed?.Self || {};
+            dnsName = String(self?.DNSName || self?.HostName || '').trim() || undefined;
+
+            const fromAddresses = Array.isArray(self?.Addresses) ? self.Addresses : [];
+            const fromTailscaleIps = Array.isArray(self?.TailscaleIPs) ? self.TailscaleIPs : [];
+            ipv4 = parseFirstIPv4([...fromAddresses, ...fromTailscaleIps].join('\n'));
+        } catch {
+            // ignore JSON parse errors and continue fallbacks
+        }
+    }
+
+    if (!ipv4) {
+        const ipRun = runCli(selected, ['ip', '-4']);
+        if (ipRun.ok) {
+            ipv4 = parseFirstIPv4(ipRun.stdout);
+        }
+    }
+
+    return {
+        cliAvailable: true,
+        connected,
+        backendState,
+        health,
+        ipv4,
+        dnsName,
+        version,
+        command: selected,
+        error: statusRun.ok ? undefined : (statusRun.stderr || undefined)
+    };
 }
 
 async function showModelsMenu() {
@@ -3212,8 +5174,7 @@ async function showModelsMenu() {
             name: 'provider',
             message: cyan('Select provider to configure:'),
             choices: [
-                { name: `  ⭐ ${bold('Set Primary Provider')} ${dim(`(current: ${currentProvider})`)}`, value: 'set_primary' },
-                { name: `  🔄 ${bold('pi-ai Model Browser')} ${dim(`(${piAiEnabled ? 'active · 15+ providers' : 'disabled'})`)}`, value: 'pi_ai' },
+                { name: `  ⭐ ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
                 new inquirer.Separator(gradient('  ─── Per-Provider Config ──────────', [c.green, c.gray])),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
                 { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
@@ -3230,9 +5191,7 @@ async function showModelsMenu() {
 
     if (provider === 'back') return showMainMenu();
 
-    if (provider === 'set_primary') {
-        await showSetPrimaryProvider();
-    } else if (provider === 'pi_ai') {
+    if (provider === 'pi_ai') {
         await showPiAIConfig();
     } else if (provider === 'openai') {
         await showOpenAIConfig();
@@ -3424,10 +5383,216 @@ async function showOllamaMenu() {
     }
 }
 
+async function showSelfTrainingMenu() {
+    console.clear();
+    banner();
+    sectionHeader('🧪', 'Self-Training Sidecar');
+
+    const status = agent.getSelfTrainingStatus();
+    const lastEval = status.lastEvaluationReport;
+    const lastJob = status.lastPreparedJob;
+    const lastPromotion = status.lastPromotionRecord;
+
+    console.log('');
+    box([
+        `${c.white}Enabled${c.reset}      ${status.enabled ? green('Yes') : red('No')}`,
+        `${c.white}Train on Idle${c.reset} ${status.trainOnIdle ? green('Yes') : gray('No')}`,
+        `${c.white}Accepted${c.reset}     ${brightCyan(String(status.stats.accepted))} ${dim('/ ' + status.stats.total + ' captured')}`,
+        `${c.white}Candidates${c.reset}   ${brightCyan(String(status.candidates.length))}`,
+        `${c.white}Min Quality${c.reset}  ${bold(String(status.minQualityScore))}`,
+        `${c.white}Promote Gate${c.reset} ${bold(String(status.promotionMinAverageScore))} ${status.requireEvalForPromotion ? dim('(eval required)') : dim('(manual)')}`,
+        `${c.gray}${'─'.repeat(52)}${c.reset}`,
+        `${c.white}Last Job${c.reset}     ${lastJob ? green(lastJob.id) : gray('none')}`,
+        `${c.white}Last Eval${c.reset}    ${lastEval ? green(`${lastEval.averageScore} avg / ${lastEval.passRate} pass`) : gray('none')}`,
+        `${c.white}Last Promote${c.reset} ${lastPromotion ? green(lastPromotion.modelName) : gray('none')}`,
+    ], { title: '🧪 SELF-TRAINING STATUS', width: 58, color: c.brightCyan });
+    console.log('');
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: cyan('Self-Training options:'),
+            choices: [
+                { name: `  📊 ${bold('View Detailed Status')}`, value: 'status' },
+                { name: `  🧱 ${bold('Prepare Training Job')}`, value: 'prepare' },
+                { name: `  📈 ${bold('Run Evaluation')}`, value: 'eval' },
+                { name: `  📦 ${bold('Build Launch Plan')}`, value: 'plan' },
+                { name: `  🚀 ${bold('Launch Training Job')}`, value: 'launch', disabled: !status.lastPreparedJob },
+                new inquirer.Separator(gradient('  ─── Candidate Lifecycle ───────────', [c.brightCyan, c.gray])),
+                { name: `  🏷️  ${bold('Register Candidate Model')}`, value: 'register' },
+                { name: `  ⭐ ${bold('Promote Candidate Model')}`, value: 'promote', disabled: status.candidates.length === 0 },
+                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.brightCyan, c.gray])),
+                { name: `  ⚙️  ${bold('Configure Self-Training')}`, value: 'config' },
+                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.brightCyan, c.gray])),
+                { name: dim('  ← Back'), value: 'back' }
+            ]
+        }
+    ]);
+
+    if (action === 'back') return showMainMenu();
+
+    if (action === 'status') {
+        console.log('');
+        console.log(JSON.stringify(status, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'prepare') {
+        console.log('');
+        console.log(JSON.stringify(agent.prepareSelfTrainingJob(), null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'eval') {
+        const { limit, provider, modelName } = await inquirer.prompt([
+            { type: 'input', name: 'limit', message: 'Sample size (leave blank for configured default):', default: '' },
+            { type: 'input', name: 'provider', message: 'Provider override (leave blank for default):', default: '' },
+            { type: 'input', name: 'modelName', message: 'Model override (leave blank for active model):', default: '' },
+        ]);
+        const report = await agent.runSelfTrainingEvaluation({
+            limit: limit ? Number(limit) : undefined,
+            provider: provider || undefined,
+            modelName: modelName || undefined,
+        } as any);
+        console.log('');
+        console.log(JSON.stringify(report, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'plan') {
+        const defaults = agent.getSelfTrainingStatus();
+        const { commandTemplate, cwd, sessionId } = await inquirer.prompt([
+            { type: 'input', name: 'commandTemplate', message: 'Command template override (blank = configured default):', default: '' },
+            { type: 'input', name: 'cwd', message: 'Working directory override (blank = default):', default: '' },
+            { type: 'input', name: 'sessionId', message: 'Session ID override (blank = auto):', default: '' },
+        ]);
+        const plan = agent.buildSelfTrainingLaunchPlan({
+            commandTemplate: commandTemplate || undefined,
+            cwd: cwd || undefined,
+            sessionId: sessionId || undefined,
+        });
+        console.log('');
+        console.log(JSON.stringify({ ...plan, paths: defaults.paths }, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'launch') {
+        const { commandTemplate, cwd, sessionId, dryRun } = await inquirer.prompt([
+            { type: 'input', name: 'commandTemplate', message: 'Command template override (blank = configured default):', default: '' },
+            { type: 'input', name: 'cwd', message: 'Working directory override (blank = default):', default: '' },
+            { type: 'input', name: 'sessionId', message: 'Session ID override (blank = auto):', default: '' },
+            { type: 'confirm', name: 'dryRun', message: 'Dry run only?', default: true },
+        ]);
+        const result = await agent.launchSelfTrainingJob({
+            commandTemplate: commandTemplate || undefined,
+            cwd: cwd || undefined,
+            sessionId: sessionId || undefined,
+            dryRun,
+        });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'register') {
+        const { modelName, provider, candidateId, jobId, notes } = await inquirer.prompt([
+            { type: 'input', name: 'modelName', message: 'Candidate model name:', validate: (value: string) => value.trim().length > 0 || 'Model name is required.' },
+            { type: 'input', name: 'provider', message: 'Provider (blank = auto/none):', default: '' },
+            { type: 'input', name: 'candidateId', message: 'Candidate ID override (blank = auto):', default: '' },
+            { type: 'input', name: 'jobId', message: 'Source job ID (blank = latest prepared job):', default: '' },
+            { type: 'input', name: 'notes', message: 'Notes (semicolon-separated):', default: '' },
+        ]);
+        const result = agent.registerSelfTrainingCandidate({
+            modelName: modelName.trim(),
+            provider: provider || undefined,
+            candidateId: candidateId || undefined,
+            jobId: jobId || undefined,
+            notes: notes ? String(notes).split(';').map((part: string) => part.trim()).filter(Boolean) : [],
+        });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'promote') {
+        const refreshed = agent.getSelfTrainingStatus();
+        const { candidateId, dryRun } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'candidateId',
+                message: 'Select candidate to promote:',
+                choices: refreshed.candidates.map(candidate => ({
+                    name: `${candidate.modelName} ${dim(`(${candidate.provider || 'auto'})`)} ${candidate.evaluationAverageScore !== undefined ? green(`score ${candidate.evaluationAverageScore}`) : yellow('no eval')}`,
+                    value: candidate.id,
+                }))
+            },
+            { type: 'confirm', name: 'dryRun', message: 'Dry run first?', default: true },
+        ]);
+        const result = agent.promoteSelfTrainingCandidate({ candidateId, dryRun });
+        console.log('');
+        console.log(JSON.stringify(result, null, 2));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    if (action === 'config') {
+        const cfg = agent.getSelfTrainingStatus();
+        const { setting } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'setting',
+                message: 'Select self-training setting:',
+                choices: [
+                    { name: `Enabled (${String(cfg.enabled)})`, value: 'selfTrainingEnabled' },
+                    { name: `Train on Idle (${String(cfg.trainOnIdle)})`, value: 'selfTrainingTrainOnIdle' },
+                    { name: `Min Quality Score (${cfg.minQualityScore})`, value: 'selfTrainingMinQualityScore' },
+                    { name: `Min Accepted Examples (${cfg.minAcceptedExamples})`, value: 'selfTrainingMinAcceptedExamples' },
+                    { name: `Eval Pass Threshold (${cfg.lastEvaluationReport?.passThreshold ?? agent.config.get('selfTrainingEvalPassThreshold')})`, value: 'selfTrainingEvalPassThreshold' },
+                    { name: `Promotion Min Average Score (${cfg.promotionMinAverageScore})`, value: 'selfTrainingPromotionMinAverageScore' },
+                    { name: `Require Eval For Promotion (${String(cfg.requireEvalForPromotion)})`, value: 'selfTrainingRequireEvalForPromotion' },
+                    { name: `Launch Command (${agent.config.get('selfTrainingLaunchCommand') || 'not set'})`, value: 'selfTrainingLaunchCommand' },
+                    { name: `Launch Cwd (${agent.config.get('selfTrainingLaunchCwd') || 'not set'})`, value: 'selfTrainingLaunchCwd' },
+                    { name: 'Back', value: 'back' },
+                ]
+            }
+        ]);
+
+        if (setting === 'back') {
+            return showSelfTrainingMenu();
+        }
+
+        const currentValue = agent.config.get(setting);
+        if (typeof currentValue === 'boolean') {
+            const { value } = await inquirer.prompt([{ type: 'confirm', name: 'value', message: `Set ${setting}:`, default: currentValue }]);
+            agent.config.set(setting, value);
+        } else {
+            const { value } = await inquirer.prompt([{ type: 'input', name: 'value', message: `Set ${setting}:`, default: currentValue ?? '' }]);
+            if (setting === 'selfTrainingLaunchCommand' || setting === 'selfTrainingLaunchCwd') {
+                agent.config.set(setting, value || undefined);
+            } else {
+                agent.config.set(setting, value === '' ? undefined : Number.isFinite(Number(value)) && value.trim() !== '' ? Number(value) : value);
+            }
+        }
+
+        console.log(green('\nSelf-training setting updated.'));
+        await waitKeyPress();
+        return showSelfTrainingMenu();
+    }
+
+    return showSelfTrainingMenu();
+}
+
 async function showPiAIConfig() {
     console.clear();
     banner();
-    sectionHeader('🔄', 'pi-ai Model Browser');
+    sectionHeader('⭐', 'Model & Provider Setup');
 
     const catalogue = await agent.llm.getPiAICatalogue();
 
@@ -3480,9 +5645,11 @@ async function showPiAIConfig() {
     ], { title: '🔄 pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
     console.log('');
 
+    const currentProvider = agent.config.get('llmProvider');
     const topChoices: any[] = [
         { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
         { name: `  📦 ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
+        { name: `  🔀 ${bold('Auto-detect provider')} ${dim(`(infer from model name)${!currentProvider ? ' ✓ active' : ''}`)}`, value: 'auto_provider' },
         new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
         ...Object.entries(catalogue).map(([key, cat]: [string, any]) => {
             const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
@@ -3516,6 +5683,13 @@ async function showPiAIConfig() {
         return showPiAIConfig();
     }
 
+    if (choice === 'auto_provider') {
+        agent.config.set('llmProvider', undefined);
+        console.log(green('Provider set to AUTO — will be inferred from model name.'));
+        await waitKeyPress();
+        return showPiAIConfig();
+    }
+
     if ((choice as string).startsWith('cat:')) {
         const catKey = (choice as string).slice(4);
         const cat = catalogue[catKey];
@@ -3526,9 +5700,12 @@ async function showPiAIConfig() {
             value: m.id,
         }));
         modelChoices.push({ name: dim('  ✏️  Enter custom model ID...'), value: '__custom__' } as any);
-        if (!hasKey) {
-            modelChoices.push({ name: yellow(`  🔑 Set ${cat.label} API key first`), value: '__setkey__' } as any);
-        }
+        modelChoices.push({
+            name: hasKey
+                ? yellow(`  🔑 Change / re-authenticate ${cat.label} key`)
+                : yellow(`  🔑 Set ${cat.label} API key first`),
+            value: '__setkey__',
+        } as any);
         modelChoices.push({ name: dim('  ← Back'), value: '__back__' } as any);
 
         const { selectedModel } = await inquirer.prompt([{
@@ -4249,15 +6426,27 @@ async function showConnectionsMenu() {
 async function showTelegramConfig() {
     const currentToken = agent.config.get('telegramToken') || 'Not Set';
     const autoReply = agent.config.get('telegramAutoReplyEnabled');
+    const channelsEnabled = agent.config.get('telegramChannelsEnabled');
     const autonomyAllowed = isAutonomyEnabledForChannel('telegram');
+    const groupsEnabled = agent.config.get('telegramGroupsEnabled');
+    const groupPolicy = String(agent.config.get('telegramGroupPolicy') || 'mention_only');
+    const allowedGroups = (agent.config.get('telegramAllowedGroups') || []) as string[];
+    const blockedGroups = (agent.config.get('telegramBlockedGroups') || []) as string[];
     console.clear();
     banner();
     sectionHeader('✈️', 'Telegram Settings');
     console.log('');
+    const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'reply_only' ? yellow('REPLY TO BOT ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
     const tgLines = [
-        `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
-        `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
-        `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        `${dim('Token')}          ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 12) + '…')}`,
+        `${dim('Auto-Reply')}     ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Channel Posts')}  ${channelsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Autonomy')}       ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        ``,
+        `${dim('Group Support')}  ${groupsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Group Policy')}   ${groupsEnabled ? groupPolicyLabel : gray('n/a')}`,
+        `${dim('Allowed Groups')} ${cyan(String(allowedGroups.length))}`,
+        `${dim('Blocked Groups')} ${cyan(String(blockedGroups.length))}`,
     ];
     box(tgLines, { title: '✈️  TELEGRAM', width: 46, color: c.cyan });
     console.log('');
@@ -4270,7 +6459,10 @@ async function showTelegramConfig() {
             choices: [
                 { name: 'Set Token', value: 'set' },
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
+                { name: channelsEnabled ? 'Disable Channel Post Processing' : 'Enable Channel Post Processing', value: 'toggle_channels' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
+                { name: groupsEnabled ? 'Disable Group Chat Support' : 'Enable Group Chat Support', value: 'toggle_groups' },
+                { name: 'Manage Group Policy', value: 'manage_group_policy' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -4289,8 +6481,84 @@ async function showTelegramConfig() {
     } else if (action === 'toggle_auto') {
         agent.config.set('telegramAutoReplyEnabled', !autoReply);
         return showTelegramConfig();
+    } else if (action === 'toggle_channels') {
+        agent.config.set('telegramChannelsEnabled', !channelsEnabled);
+        return showTelegramConfig();
     } else if (action === 'toggle_autonomy') {
         toggleAutonomyChannel('telegram');
+        return showTelegramConfig();
+    } else if (action === 'toggle_groups') {
+        agent.config.set('telegramGroupsEnabled', !groupsEnabled);
+        return showTelegramConfig();
+    } else if (action === 'manage_group_policy') {
+        const { groupPolicyAction } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'groupPolicyAction',
+                message: 'Telegram Group Policy:',
+                choices: [
+                    { name: 'Mode: All group messages', value: 'mode_all' },
+                    { name: 'Mode: Only when @mentioned', value: 'mode_mention_only' },
+                    { name: 'Mode: Only replies to the bot', value: 'mode_reply_only' },
+                    { name: 'Mode: Allowlisted groups only', value: 'mode_allowlist' },
+                    new inquirer.Separator('── Allowed Groups ──'),
+                    { name: `Add group to allowlist (${allowedGroups.length})`, value: 'group_allow_add' },
+                    { name: `Remove group from allowlist (${allowedGroups.length})`, value: 'group_allow_remove' },
+                    { name: 'Clear group allowlist', value: 'group_allow_clear' },
+                    new inquirer.Separator('── Blocked Groups ──'),
+                    { name: `Add group to blocklist (${blockedGroups.length})`, value: 'group_block_add' },
+                    { name: `Remove group from blocklist (${blockedGroups.length})`, value: 'group_block_remove' },
+                    { name: 'Clear group blocklist', value: 'group_block_clear' },
+                    { name: 'Back', value: 'back' }
+                ]
+            }
+        ]);
+
+        if (groupPolicyAction === 'mode_all') {
+            agent.config.set('telegramGroupPolicy', 'all');
+            console.log(green('Group policy set to: all messages'));
+        } else if (groupPolicyAction === 'mode_mention_only') {
+            agent.config.set('telegramGroupPolicy', 'mention_only');
+            console.log(green('Group policy set to: mention only'));
+        } else if (groupPolicyAction === 'mode_reply_only') {
+            agent.config.set('telegramGroupPolicy', 'reply_only');
+            console.log(green('Group policy set to: reply to bot only'));
+        } else if (groupPolicyAction === 'mode_allowlist') {
+            agent.config.set('telegramGroupPolicy', 'allowlist');
+            console.log(green('Group policy set to: allowlist'));
+        } else if (groupPolicyAction === 'group_allow_add') {
+            const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter Telegram group chat ID (negative number, e.g. -100123456):' }]);
+            const norm = String(gid || '').trim();
+            if (norm) {
+                agent.config.set('telegramAllowedGroups', Array.from(new Set([...allowedGroups, norm])));
+                console.log(green(`Added group to allowlist: ${norm}`));
+            }
+        } else if (groupPolicyAction === 'group_allow_remove') {
+            if (allowedGroups.length > 0) {
+                const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from allowlist:', choices: allowedGroups }]);
+                agent.config.set('telegramAllowedGroups', allowedGroups.filter(g => g !== gid));
+            }
+        } else if (groupPolicyAction === 'group_allow_clear') {
+            agent.config.set('telegramAllowedGroups', []);
+            console.log(yellow('Group allowlist cleared'));
+        } else if (groupPolicyAction === 'group_block_add') {
+            const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter Telegram group chat ID to block:' }]);
+            const norm = String(gid || '').trim();
+            if (norm) {
+                agent.config.set('telegramBlockedGroups', Array.from(new Set([...blockedGroups, norm])));
+                console.log(yellow(`Added group to blocklist: ${norm}`));
+            }
+        } else if (groupPolicyAction === 'group_block_remove') {
+            if (blockedGroups.length > 0) {
+                const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from blocklist:', choices: blockedGroups }]);
+                agent.config.set('telegramBlockedGroups', blockedGroups.filter(g => g !== gid));
+            }
+        } else if (groupPolicyAction === 'group_block_clear') {
+            agent.config.set('telegramBlockedGroups', []);
+            console.log(yellow('Group blocklist cleared'));
+        }
+
+        await waitKeyPress();
         return showTelegramConfig();
     }
 }
@@ -4299,8 +6567,16 @@ async function showWhatsAppConfig() {
     const enabled = agent.config.get('whatsappEnabled');
     const autoReply = agent.config.get('whatsappAutoReplyEnabled');
     const statusReply = agent.config.get('whatsappStatusReplyEnabled');
+    const statusMediaMode = String(agent.config.get('whatsappStatusMediaMode') || 'off');
     const autoReact = agent.config.get('whatsappAutoReactEnabled');
     const contextProfiling = agent.config.get('whatsappContextProfilingEnabled');
+    const contactAccessMode = String(agent.config.get('whatsappContactAccessMode') || 'all');
+    const allowedContacts = (agent.config.get('whatsappAllowedContacts') || []) as string[];
+    const blockedContacts = (agent.config.get('whatsappBlockedContacts') || []) as string[];
+    const groupsEnabled = agent.config.get('whatsappGroupsEnabled');
+    const groupPolicy = String(agent.config.get('whatsappGroupPolicy') || 'mention_only');
+    const allowedGroups = (agent.config.get('whatsappAllowedGroups') || []) as string[];
+    const blockedGroups = (agent.config.get('whatsappBlockedGroups') || []) as string[];
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
     const autonomyAllowed = isAutonomyEnabledForChannel('whatsapp');
 
@@ -4309,13 +6585,24 @@ async function showWhatsAppConfig() {
     sectionHeader('💬', 'WhatsApp Settings');
     console.log('');
     const onOff = (v: any) => v ? green(bold('● ON')) : gray('○ OFF');
+    const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'owner_only' ? yellow('OWNER ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
+    const statusMediaLabel = statusMediaMode === 'download_and_analyze' ? green('DOWNLOAD + ANALYZE') : statusMediaMode === 'download_only' ? yellow('DOWNLOAD ONLY') : gray('OFF');
     const waLines = [
         `${dim('Status')}            ${enabled ? green(bold('ENABLED')) : red(bold('DISABLED'))}`,
         `${dim('Linked Account')}    ${ownerJid === 'Not Linked' ? gray(ownerJid) : cyan(ownerJid)}`,
         `${dim('Autonomy')}          ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
+        `${dim('Contact Policy')}    ${contactAccessMode === 'allowlist' ? yellow('ALLOWLIST ONLY') : contactAccessMode === 'blocklist' ? yellow('BLOCKLIST') : green('ALL CONTACTS')}`,
+        `${dim('Allowed Contacts')}  ${cyan(String(allowedContacts.length))}`,
+        `${dim('Blocked Contacts')}  ${cyan(String(blockedContacts.length))}`,
+        ``,
+        `${dim('Group Support')}     ${groupsEnabled ? green(bold('● ON')) : gray('○ OFF')}`,
+        `${dim('Group Policy')}      ${groupsEnabled ? groupPolicyLabel : gray('n/a')}`,
+        `${dim('Allowed Groups')}    ${cyan(String(allowedGroups.length))}`,
+        `${dim('Blocked Groups')}    ${cyan(String(blockedGroups.length))}`,
         ``,
         `${dim('Auto-Reply (1‑on‑1)')}  ${onOff(autoReply)}`,
         `${dim('Status Interactions')}  ${onOff(statusReply)}`,
+        `${dim('Status Media Mode')}    ${statusReply ? statusMediaLabel : gray('n/a (status off)')}`,
         `${dim('Auto-React (Emojis)')}  ${onOff(autoReact)}`,
         `${dim('Context Profiling')}    ${onOff(contextProfiling)}`,
     ];
@@ -4332,8 +6619,12 @@ async function showWhatsAppConfig() {
                 { name: autoReply ? 'Disable Auto-Reply' : 'Enable Auto-Reply', value: 'toggle_auto' },
                 { name: autonomyAllowed ? 'Disable Autonomous Messaging' : 'Enable Autonomous Messaging', value: 'toggle_autonomy' },
                 { name: statusReply ? 'Disable Status Interactions' : 'Enable Status Interactions', value: 'toggle_status' },
+                { name: 'Manage Status Media Processing', value: 'manage_status_media' },
                 { name: autoReact ? 'Disable Auto-React' : 'Enable Auto-React', value: 'toggle_react' },
                 { name: contextProfiling ? 'Disable Context Profiling' : 'Enable Context Profiling', value: 'toggle_profile' },
+                { name: 'Manage Contact Filter Policy', value: 'manage_contact_policy' },
+                { name: groupsEnabled ? 'Disable Group Chat Support' : 'Enable Group Chat Support', value: 'toggle_groups' },
+                { name: 'Manage Group Policy', value: 'manage_group_policy' },
                 { name: 'Run Context Profiling (Batch)', value: 'trigger_profiling' },
                 { name: 'Link Account / Show QR', value: 'link' },
                 { name: 'Back', value: 'back' }
@@ -4356,12 +6647,202 @@ async function showWhatsAppConfig() {
         case 'toggle_status':
             agent.config.set('whatsappStatusReplyEnabled', !statusReply);
             break;
+        case 'manage_status_media': {
+            const { mode } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'mode',
+                    message: 'Status Media Processing Mode:',
+                    choices: [
+                        { name: 'Off (ignore status media)', value: 'off' },
+                        { name: 'Download only (no AI analysis)', value: 'download_only' },
+                        { name: 'Download + analyze (audio/image/video/doc)', value: 'download_and_analyze' }
+                    ],
+                    default: statusMediaMode
+                }
+            ]);
+            agent.config.set('whatsappStatusMediaMode', mode);
+            break;
+        }
         case 'toggle_react':
             agent.config.set('whatsappAutoReactEnabled', !autoReact);
             break;
         case 'toggle_profile':
             agent.config.set('whatsappContextProfilingEnabled', !contextProfiling);
             break;
+        case 'manage_contact_policy': {
+            const normalizeJid = (input: string): string => {
+                let id = String(input || '').trim();
+                if (!id) return '';
+                if (!id.includes('@')) id = `${id}@s.whatsapp.net`;
+                return id;
+            };
+
+            const knownContacts = agent.whatsapp?.getRecentContacts() || [];
+            const pickContactFromKnown = async (message: string): Promise<string | null> => {
+                if (knownContacts.length === 0) return null;
+                const { pick } = await inquirer.prompt([
+                    {
+                        type: 'list',
+                        name: 'pick',
+                        message,
+                        choices: [
+                            ...knownContacts.slice(0, 150).map(c => ({ name: `${c.name} (${c.jid})`, value: c.jid })),
+                            { name: 'Enter JID manually', value: '__manual__' },
+                            { name: 'Cancel', value: '__cancel__' }
+                        ]
+                    }
+                ]);
+                if (pick === '__cancel__') return null;
+                if (pick !== '__manual__') return pick;
+                const { manual } = await inquirer.prompt([{ type: 'input', name: 'manual', message: 'Enter WhatsApp JID or phone number:' }]);
+                return normalizeJid(manual);
+            };
+
+            const promptManual = async (message: string): Promise<string | null> => {
+                const { jid } = await inquirer.prompt([{ type: 'input', name: 'jid', message }]);
+                const normalized = normalizeJid(jid);
+                return normalized || null;
+            };
+
+            const { policyAction } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'policyAction',
+                    message: 'Contact Filter Policy:',
+                    choices: [
+                        { name: 'Mode: Allow all contacts', value: 'mode_all' },
+                        { name: 'Mode: Reply only to allowlist', value: 'mode_allowlist' },
+                        { name: 'Mode: Block listed contacts', value: 'mode_blocklist' },
+                        new inquirer.Separator('── Allowlist ──'),
+                        { name: `Add to allowlist (${allowedContacts.length})`, value: 'allow_add' },
+                        { name: `Remove from allowlist (${allowedContacts.length})`, value: 'allow_remove' },
+                        { name: 'Clear allowlist', value: 'allow_clear' },
+                        new inquirer.Separator('── Blocklist ──'),
+                        { name: `Add to blocklist (${blockedContacts.length})`, value: 'block_add' },
+                        { name: `Remove from blocklist (${blockedContacts.length})`, value: 'block_remove' },
+                        { name: 'Clear blocklist', value: 'block_clear' },
+                        { name: 'Back', value: 'back' }
+                    ]
+                }
+            ]);
+
+            if (policyAction === 'mode_all') {
+                agent.config.set('whatsappContactAccessMode', 'all');
+            } else if (policyAction === 'mode_allowlist') {
+                agent.config.set('whatsappContactAccessMode', 'allowlist');
+            } else if (policyAction === 'mode_blocklist') {
+                agent.config.set('whatsappContactAccessMode', 'blocklist');
+            } else if (policyAction === 'allow_add') {
+                const picked = (await pickContactFromKnown('Pick contact to allow')) || (await promptManual('Enter contact to allow:'));
+                if (picked) {
+                    const next = Array.from(new Set([...(allowedContacts || []), picked]));
+                    agent.config.set('whatsappAllowedContacts', next);
+                    console.log(green(`Added to allowlist: ${picked}`));
+                }
+            } else if (policyAction === 'allow_remove') {
+                if (allowedContacts.length > 0) {
+                    const { jid } = await inquirer.prompt([{ type: 'list', name: 'jid', message: 'Select allowlist contact to remove:', choices: allowedContacts }]);
+                    agent.config.set('whatsappAllowedContacts', allowedContacts.filter(j => j !== jid));
+                }
+            } else if (policyAction === 'allow_clear') {
+                agent.config.set('whatsappAllowedContacts', []);
+            } else if (policyAction === 'block_add') {
+                const picked = (await pickContactFromKnown('Pick contact to block')) || (await promptManual('Enter contact to block:'));
+                if (picked) {
+                    const next = Array.from(new Set([...(blockedContacts || []), picked]));
+                    agent.config.set('whatsappBlockedContacts', next);
+                    console.log(yellow(`Added to blocklist: ${picked}`));
+                }
+            } else if (policyAction === 'block_remove') {
+                if (blockedContacts.length > 0) {
+                    const { jid } = await inquirer.prompt([{ type: 'list', name: 'jid', message: 'Select blocklist contact to remove:', choices: blockedContacts }]);
+                    agent.config.set('whatsappBlockedContacts', blockedContacts.filter(j => j !== jid));
+                }
+            } else if (policyAction === 'block_clear') {
+                agent.config.set('whatsappBlockedContacts', []);
+            }
+            break;
+        }
+        case 'toggle_groups':
+            agent.config.set('whatsappGroupsEnabled', !groupsEnabled);
+            break;
+        case 'manage_group_policy': {
+            const normalizeGroupJid = (input: string): string => {
+                let id = String(input || '').trim();
+                if (!id) return '';
+                if (!id.includes('@')) id = `${id}@g.us`;
+                return id;
+            };
+
+            const { groupPolicyAction } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'groupPolicyAction',
+                    message: 'Group Policy:',
+                    choices: [
+                        { name: 'Mode: All group messages', value: 'mode_all' },
+                        { name: 'Mode: Only when @mentioned', value: 'mode_mention_only' },
+                        { name: 'Mode: Only messages from owner', value: 'mode_owner_only' },
+                        { name: 'Mode: Allowlisted groups only', value: 'mode_allowlist' },
+                        new inquirer.Separator('── Allowed Groups ──'),
+                        { name: `Add group to allowlist (${allowedGroups.length})`, value: 'group_allow_add' },
+                        { name: `Remove group from allowlist (${allowedGroups.length})`, value: 'group_allow_remove' },
+                        { name: 'Clear group allowlist', value: 'group_allow_clear' },
+                        new inquirer.Separator('── Blocked Groups ──'),
+                        { name: `Add group to blocklist (${blockedGroups.length})`, value: 'group_block_add' },
+                        { name: `Remove group from blocklist (${blockedGroups.length})`, value: 'group_block_remove' },
+                        { name: 'Clear group blocklist', value: 'group_block_clear' },
+                        { name: 'Back', value: 'back' }
+                    ]
+                }
+            ]);
+
+            if (groupPolicyAction === 'mode_all') {
+                agent.config.set('whatsappGroupPolicy', 'all');
+                console.log(green('Group policy set to: all messages'));
+            } else if (groupPolicyAction === 'mode_mention_only') {
+                agent.config.set('whatsappGroupPolicy', 'mention_only');
+                console.log(green('Group policy set to: mention only'));
+            } else if (groupPolicyAction === 'mode_owner_only') {
+                agent.config.set('whatsappGroupPolicy', 'owner_only');
+                console.log(green('Group policy set to: owner only'));
+            } else if (groupPolicyAction === 'mode_allowlist') {
+                agent.config.set('whatsappGroupPolicy', 'allowlist');
+                console.log(green('Group policy set to: allowlist'));
+            } else if (groupPolicyAction === 'group_allow_add') {
+                const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter group JID or ID (e.g. 12345678@g.us):' }]);
+                const norm = normalizeGroupJid(gid);
+                if (norm) {
+                    agent.config.set('whatsappAllowedGroups', Array.from(new Set([...allowedGroups, norm])));
+                    console.log(green(`Added group to allowlist: ${norm}`));
+                }
+            } else if (groupPolicyAction === 'group_allow_remove') {
+                if (allowedGroups.length > 0) {
+                    const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from allowlist:', choices: allowedGroups }]);
+                    agent.config.set('whatsappAllowedGroups', allowedGroups.filter(g => g !== gid));
+                }
+            } else if (groupPolicyAction === 'group_allow_clear') {
+                agent.config.set('whatsappAllowedGroups', []);
+                console.log(yellow('Group allowlist cleared'));
+            } else if (groupPolicyAction === 'group_block_add') {
+                const { gid } = await inquirer.prompt([{ type: 'input', name: 'gid', message: 'Enter group JID or ID to block:' }]);
+                const norm = normalizeGroupJid(gid);
+                if (norm) {
+                    agent.config.set('whatsappBlockedGroups', Array.from(new Set([...blockedGroups, norm])));
+                    console.log(yellow(`Added group to blocklist: ${norm}`));
+                }
+            } else if (groupPolicyAction === 'group_block_remove') {
+                if (blockedGroups.length > 0) {
+                    const { gid } = await inquirer.prompt([{ type: 'list', name: 'gid', message: 'Select group to remove from blocklist:', choices: blockedGroups }]);
+                    agent.config.set('whatsappBlockedGroups', blockedGroups.filter(g => g !== gid));
+                }
+            } else if (groupPolicyAction === 'group_block_clear') {
+                agent.config.set('whatsappBlockedGroups', []);
+                console.log(yellow('Group blocklist cleared'));
+            }
+            break;
+        }
         case 'trigger_profiling': {
             if (!agent.whatsapp) {
                 console.log(red('\nWhatsApp is not connected.'));
@@ -6224,9 +8705,12 @@ async function showConfigMenu() {
     const keys = [
         'agentName', 'llmProvider', 'modelName', 'projectRoot', 'openaiApiKey', 'anthropicApiKey',
         'openrouterApiKey', 'openrouterBaseUrl', 'openrouterReferer', 'openrouterAppName',
-        'googleApiKey', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
+        'googleApiKey', 'googleOAuthClientId', 'googleOAuthClientSecret', 'googleOAuthRedirectUri', 'googleWorkspaceCliPath', 'googleWorkspaceCliAccount', 'nvidiaApiKey', 'serperApiKey', 'braveSearchApiKey', 'searxngUrl',
         'searchProviderOrder', 'captchaApiKey', 'autonomyInterval', 'telegramToken',
-        'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled',
+        'whatsappEnabled', 'slackBotToken', 'slackAutoReplyEnabled', 'whatsappAutoReplyEnabled', 'whatsappStatusMediaMode',
+        'whatsappContactAccessMode', 'whatsappAllowedContacts', 'whatsappBlockedContacts',
+        'whatsappGroupsEnabled', 'whatsappGroupPolicy', 'whatsappAllowedGroups', 'whatsappBlockedGroups',
+        'telegramChannelsEnabled', 'telegramGroupsEnabled', 'telegramGroupPolicy', 'telegramAllowedGroups', 'telegramBlockedGroups',
         'progressFeedbackEnabled', 'progressFeedbackStepInterval', 'progressFeedbackForceInitial',
         'progressFeedbackTypingOnly', 'enforceExplicitFileRequestForSendFile', 'onboardingQuestionnaireEnabled',
         'reconnectBriefingEnabled', 'reconnectBriefingThresholdDays', 'reconnectBriefingMaxCompletions',
@@ -6285,10 +8769,10 @@ async function showConfigMenu() {
         { type: 'input', name: 'value', message: `Enter new value for ${key}:` },
     ]);
 
-    if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList' || key === 'guidanceAckPatterns' || key === 'guidanceLowValuePatterns' || key === 'guidanceClarificationKeywords' || key === 'guidanceQuestionStopWords' || key === 'orcbotControlCliAllowList' || key === 'orcbotControlCliDenyList') {
+    if (key === 'searchProviderOrder' || key === 'commandAllowList' || key === 'commandDenyList' || key === 'pluginAllowList' || key === 'pluginDenyList' || key === 'guidanceAckPatterns' || key === 'guidanceLowValuePatterns' || key === 'guidanceClarificationKeywords' || key === 'guidanceQuestionStopWords' || key === 'orcbotControlCliAllowList' || key === 'orcbotControlCliDenyList' || key === 'whatsappAllowedContacts' || key === 'whatsappBlockedContacts' || key === 'whatsappAllowedGroups' || key === 'whatsappBlockedGroups' || key === 'telegramAllowedGroups' || key === 'telegramBlockedGroups') {
         const parsed = (value || '').split(',').map((s: string) => s.trim()).filter(Boolean);
         agent.config.set(key as any, parsed);
-    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'progressFeedbackTypingOnly' || key === 'enforceExplicitFileRequestForSendFile' || key === 'onboardingQuestionnaireEnabled' || key === 'reconnectBriefingEnabled' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
+    } else if (key === 'safeMode' || key === 'sudoMode' || key === 'progressFeedbackEnabled' || key === 'progressFeedbackForceInitial' || key === 'progressFeedbackTypingOnly' || key === 'enforceExplicitFileRequestForSendFile' || key === 'onboardingQuestionnaireEnabled' || key === 'reconnectBriefingEnabled' || key === 'whatsappEnabled' || key === 'slackAutoReplyEnabled' || key === 'whatsappAutoReplyEnabled' || key === 'telegramChannelsEnabled' || key === 'robustReasoningMode' || key === 'reasoningExposeChecklist' || key === 'orcbotControlEnabled') {
         const normalized = String(value).trim().toLowerCase();
         agent.config.set(key as any, normalized === 'true' || normalized === '1' || normalized === 'yes');
     } else if (key === 'guidanceRepeatQuestionThreshold') {
@@ -6523,6 +9007,7 @@ async function showSkillsMenu() {
     choices.push({ name: `  ✨ ${bold('Create New Skill')}`, value: 'create' });
     choices.push({ name: `  🔨 ${bold('Build Skill from Spec URL')} ${dim('(Legacy)')}`, value: 'build' });
     choices.push({ name: `  ✅ ${bold('Validate Skill')}`, value: 'validate' });
+    choices.push({ name: `  🔄 ${bold('Resync Skills Registry Files')}`, value: 'resync_registry' });
     choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
     choices.push({ name: dim('  ← Back'), value: 'back' });
 
@@ -6715,6 +9200,23 @@ async function showSkillsMenu() {
                 console.log(`❌ ${result.errors.length} issue(s):`);
                 result.errors.forEach(e => console.log(`  - ${e}`));
             }
+        }
+        await waitKeyPress();
+        return showSkillsMenu();
+    }
+
+    if (selection === 'resync_registry') {
+        try {
+            const result = agent.syncSkillsRegistryNow();
+            console.log('\n✅ Skills registry files resynced.');
+            if (result.sourcePath) {
+                console.log(`   Source: ${result.sourcePath}`);
+            }
+            for (const target of result.targets) {
+                console.log(`   Target: ${target}`);
+            }
+        } catch (e: any) {
+            console.log(`\n❌ Failed to resync skills registries: ${e?.message || e}`);
         }
         await waitKeyPress();
         return showSkillsMenu();

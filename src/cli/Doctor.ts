@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
+import { MultiLLM, type LLMProvider, type LLMToolDefinition } from '../core/MultiLLM';
+import { __test__ as piAiAdapterTestHooks, isPiAiLinked } from '../core/PiAIAdapter';
 
 export type DoctorSeverity = 'info' | 'warn' | 'critical';
 
@@ -10,7 +12,7 @@ export interface DoctorFinding {
     title: string;
     message: string;
     recommendation?: string;
-    area: 'gateway' | 'security' | 'channels' | 'providers' | 'storage' | 'runtime';
+    area: 'gateway' | 'mcp' | 'security' | 'channels' | 'providers' | 'storage' | 'runtime';
 }
 
 export interface DoctorReport {
@@ -27,6 +29,11 @@ export interface DoctorReport {
         gatewayHost: string;
         gatewayPort: number;
         gatewayAuthEnabled: boolean;
+        mcpHost: string;
+        mcpPort: number;
+        mcpPath: string;
+        mcpAuthEnabled: boolean;
+        mcpAuthSource: 'mcpApiKey' | 'gatewayApiKey' | 'none';
         channelsConfigured: string[];
         providersConfigured: string[];
         runtime: {
@@ -37,7 +44,62 @@ export interface DoctorReport {
         };
     };
     findings: DoctorFinding[];
+    llmCompatibility?: DoctorLLMCompatibilityReport;
 }
+
+export interface DoctorProviderCompatibility {
+    provider: string;
+    model: string;
+    ready: boolean;
+    authMode: 'api-key' | 'oauth' | 'aws' | 'local' | 'none';
+    usePiAI: boolean;
+    toolSchemaCompatible: boolean;
+    notes: string[];
+    liveProbe?: {
+        attempted: boolean;
+        success: boolean;
+        error?: string;
+        responsePreview?: string;
+    };
+}
+
+export interface DoctorLLMCompatibilityReport {
+    activeProvider: string;
+    activeModel: string;
+    usePiAI: boolean;
+    schemaContractOk: boolean;
+    providers: DoctorProviderCompatibility[];
+}
+
+const COMPLEX_COMPATIBILITY_TOOL: LLMToolDefinition = {
+    type: 'function',
+    function: {
+        name: 'compatibility_buttons_probe',
+        description: 'Compatibility probe for nested button schemas',
+        parameters: {
+            type: 'object',
+            properties: {
+                text: { type: 'string', description: 'Message text' },
+                buttons: {
+                    type: 'array',
+                    description: 'Button rows',
+                    items: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                text: { type: 'string', description: 'Button label' },
+                                callback_data: { type: 'string', description: 'Button payload' }
+                            },
+                            required: ['text', 'callback_data']
+                        }
+                    }
+                }
+            },
+            required: ['text', 'buttons']
+        } as any
+    }
+};
 
 function isLoopbackHost(host: string): boolean {
     const normalized = String(host || '').trim().toLowerCase();
@@ -123,6 +185,16 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
     const gatewayPort = Number(config.get('gatewayPort') || 3100);
     const gatewayApiKey = String(config.get('gatewayApiKey') || '');
     const gatewayCorsOrigins = Array.isArray(config.get('gatewayCorsOrigins')) ? (config.get('gatewayCorsOrigins') as string[]) : ['*'];
+    const mcpHost = String(config.get('mcpHost') || '0.0.0.0');
+    const mcpPort = Number(config.get('mcpPort') || 3190);
+    const mcpPath = String(config.get('mcpPath') || '/mcp');
+    const mcpApiKey = String(config.get('mcpApiKey') || '');
+    const effectiveMcpApiKey = mcpApiKey || gatewayApiKey;
+    const mcpAuthSource: 'mcpApiKey' | 'gatewayApiKey' | 'none' = mcpApiKey
+        ? 'mcpApiKey'
+        : gatewayApiKey
+            ? 'gatewayApiKey'
+            : 'none';
     const configuredChannels = getConfiguredChannels(config);
     const configuredProviders = getConfiguredProviders(config);
     const modelName = String(config.get('modelName') || '');
@@ -239,6 +311,39 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             message: 'gatewayCorsOrigins includes "*" while the gateway is configured for non-loopback access.',
             recommendation: 'Restrict gatewayCorsOrigins to explicit trusted origins for remote dashboard/API use.',
             area: 'gateway'
+        });
+    }
+
+    if (!effectiveMcpApiKey && !isLoopbackHost(mcpHost)) {
+        addFinding(findings, {
+            id: 'mcp.bind_no_auth',
+            severity: 'critical',
+            title: 'MCP HTTP endpoint is exposed without auth',
+            message: `MCP HTTP is configured for ${mcpHost}:${mcpPort}${mcpPath} with no mcpApiKey or gatewayApiKey available for auth fallback.`,
+            recommendation: 'Set mcpApiKey before binding MCP HTTP to non-loopback interfaces.',
+            area: 'mcp'
+        });
+    }
+
+    if (effectiveMcpApiKey && effectiveMcpApiKey.length < 16) {
+        addFinding(findings, {
+            id: 'mcp.auth_weak_token',
+            severity: 'warn',
+            title: 'MCP API key looks short',
+            message: `${mcpAuthSource} is configured for MCP auth but appears shorter than 16 characters.`,
+            recommendation: 'Rotate to a long random token before exposing MCP HTTP remotely.',
+            area: 'mcp'
+        });
+    }
+
+    if (!effectiveMcpApiKey && isLoopbackHost(mcpHost)) {
+        addFinding(findings, {
+            id: 'mcp.loopback_no_auth',
+            severity: 'info',
+            title: 'MCP HTTP is local-only without auth',
+            message: 'Loopback-only MCP HTTP without auth can be acceptable for single-machine development.',
+            recommendation: 'Add mcpApiKey before reverse proxying, tunneling, or binding MCP HTTP to a non-loopback interface.',
+            area: 'mcp'
         });
     }
 
@@ -380,6 +485,11 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             gatewayHost,
             gatewayPort,
             gatewayAuthEnabled: !!gatewayApiKey,
+            mcpHost,
+            mcpPort,
+            mcpPath,
+            mcpAuthEnabled: !!effectiveMcpApiKey,
+            mcpAuthSource,
             channelsConfigured: configuredChannels,
             providersConfigured: configuredProviders,
             runtime: {
@@ -390,5 +500,182 @@ export function collectDoctorReport(config: ConfigManager, options?: { deep?: bo
             }
         },
         findings
+    };
+}
+
+function getUsePiAI(config: ConfigManager): boolean {
+    return config.get('usePiAI') === true;
+}
+
+function hasConfiguredProviderOrOAuth(config: ConfigManager, provider: string): { ready: boolean; authMode: DoctorProviderCompatibility['authMode']; notes: string[] } {
+    const usePiAI = getUsePiAI(config);
+    const notes: string[] = [];
+
+    switch (provider) {
+        case 'openai': {
+            if (config.get('openaiApiKey')) return { ready: true, authMode: 'api-key', notes };
+            if (usePiAI && isPiAiLinked('openai-codex')) {
+                notes.push('Using pi-ai OAuth via openai-codex');
+                return { ready: true, authMode: 'oauth', notes };
+            }
+            return { ready: false, authMode: 'none', notes };
+        }
+        case 'google': {
+            if (config.get('googleApiKey')) return { ready: true, authMode: 'api-key', notes };
+            if (usePiAI && (isPiAiLinked('google-gemini-cli') || isPiAiLinked('google-antigravity'))) {
+                notes.push('Using pi-ai OAuth via Google login');
+                return { ready: true, authMode: 'oauth', notes };
+            }
+            return { ready: false, authMode: 'none', notes };
+        }
+        case 'anthropic': {
+            if (config.get('anthropicApiKey')) return { ready: true, authMode: 'api-key', notes };
+            if (usePiAI && isPiAiLinked('anthropic')) {
+                notes.push('Using pi-ai OAuth via anthropic login');
+                return { ready: true, authMode: 'oauth', notes };
+            }
+            return { ready: false, authMode: 'none', notes };
+        }
+        case 'openrouter':
+            return config.get('openrouterApiKey')
+                ? { ready: true, authMode: 'api-key', notes }
+                : { ready: false, authMode: 'none', notes };
+        case 'nvidia':
+            return config.get('nvidiaApiKey')
+                ? { ready: true, authMode: 'api-key', notes }
+                : { ready: false, authMode: 'none', notes };
+        case 'bedrock':
+            return (config.get('bedrockRegion') && config.get('bedrockAccessKeyId') && config.get('bedrockSecretAccessKey'))
+                ? { ready: true, authMode: 'aws', notes }
+                : { ready: false, authMode: 'none', notes };
+        case 'ollama':
+            return config.get('ollamaEnabled') === true
+                ? { ready: true, authMode: 'local', notes }
+                : { ready: false, authMode: 'none', notes };
+        default:
+            return { ready: false, authMode: 'none', notes };
+    }
+}
+
+function buildLlm(config: ConfigManager): MultiLLM {
+    return new MultiLLM({
+        apiKey: config.get('openaiApiKey'),
+        googleApiKey: config.get('googleApiKey'),
+        nvidiaApiKey: config.get('nvidiaApiKey'),
+        anthropicApiKey: config.get('anthropicApiKey'),
+        openrouterApiKey: config.get('openrouterApiKey'),
+        openrouterBaseUrl: config.get('openrouterBaseUrl'),
+        openrouterReferer: config.get('openrouterReferer'),
+        openrouterAppName: config.get('openrouterAppName'),
+        bedrockRegion: config.get('bedrockRegion'),
+        bedrockAccessKeyId: config.get('bedrockAccessKeyId'),
+        bedrockSecretAccessKey: config.get('bedrockSecretAccessKey'),
+        bedrockSessionToken: config.get('bedrockSessionToken'),
+        modelName: config.get('modelName'),
+        llmProvider: config.get('llmProvider'),
+        usePiAI: getUsePiAI(config),
+        groqApiKey: config.get('groqApiKey'),
+        mistralApiKey: config.get('mistralApiKey'),
+        cerebrasApiKey: config.get('cerebrasApiKey'),
+        xaiApiKey: config.get('xaiApiKey'),
+        perplexityApiKey: config.get('perplexityApiKey'),
+        deepseekApiKey: config.get('deepseekApiKey'),
+        ollamaApiUrl: config.get('ollamaApiUrl'),
+        fallbackModelNames: config.get('fallbackModelNames'),
+    });
+}
+
+function getProbeModelForProvider(config: ConfigManager, provider: string, activeProvider: string, activeModel: string): string {
+    if (provider === activeProvider && activeModel) return activeModel;
+
+    const providerModelNames = (config.get('providerModelNames') || {}) as Record<string, string>;
+    if (providerModelNames[provider]) return providerModelNames[provider];
+
+    switch (provider) {
+        case 'openai': return getUsePiAI(config) && isPiAiLinked('openai-codex') ? 'gpt-5.1' : 'gpt-4o-mini';
+        case 'google': return 'gemini-flash-lite-latest';
+        case 'anthropic': return 'claude-3-5-haiku-latest';
+        case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+        case 'nvidia': return 'nvidia:moonshotai/kimi-k2.5';
+        case 'bedrock': return activeModel || 'bedrock:anthropic.claude-3-5-sonnet';
+        case 'ollama': return 'ollama:llama3';
+        default: return activeModel || 'gpt-4o-mini';
+    }
+}
+
+function checkSchemaContract(): boolean {
+    const [converted] = piAiAdapterTestHooks.topiTools([COMPLEX_COMPATIBILITY_TOOL]);
+    return converted?.parameters?.properties?.buttons?.items?.items?.properties?.callback_data?.type === 'string';
+}
+
+async function runLiveProbe(llm: MultiLLM, provider: string, model: string): Promise<DoctorProviderCompatibility['liveProbe']> {
+    try {
+        const response = await llm.call(
+            'Reply with exactly OK.',
+            'You are a compatibility probe. Reply with exactly OK and nothing else.',
+            provider as LLMProvider,
+            model,
+        );
+        const trimmed = String(response || '').trim();
+        return {
+            attempted: true,
+            success: trimmed.toUpperCase() === 'OK',
+            responsePreview: trimmed.slice(0, 80),
+            error: trimmed.toUpperCase() === 'OK' ? undefined : `Unexpected response: ${trimmed.slice(0, 80)}`,
+        };
+    } catch (error) {
+        return {
+            attempted: true,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+        };
+    }
+}
+
+export async function collectLLMCompatibilityReport(config: ConfigManager, options?: { live?: boolean }): Promise<DoctorLLMCompatibilityReport> {
+    const llm = buildLlm(config);
+    const activeModel = String(config.get('modelName') || '');
+    const activeProvider = String(config.get('llmProvider') || llm.inferProvider(activeModel || 'gpt-4o'));
+    const usePiAI = getUsePiAI(config);
+    const schemaContractOk = checkSchemaContract();
+
+    const providerCandidates = ['openai', 'google', 'anthropic', 'openrouter', 'nvidia', 'bedrock', 'ollama'];
+    const providersToCheck = providerCandidates.filter(provider => {
+        if (provider === activeProvider) return true;
+        const status = hasConfiguredProviderOrOAuth(config, provider);
+        return status.ready;
+    });
+
+    const providers: DoctorProviderCompatibility[] = [];
+    for (const provider of providersToCheck) {
+        const auth = hasConfiguredProviderOrOAuth(config, provider);
+        const model = getProbeModelForProvider(config, provider, activeProvider, activeModel);
+        const providerReport: DoctorProviderCompatibility = {
+            provider,
+            model,
+            ready: auth.ready,
+            authMode: auth.authMode,
+            usePiAI,
+            toolSchemaCompatible: schemaContractOk,
+            notes: [...auth.notes],
+        };
+
+        if (provider === activeProvider) {
+            providerReport.notes.push('Selected active provider');
+        }
+
+        if (options?.live && auth.ready) {
+            providerReport.liveProbe = await runLiveProbe(llm, provider, model);
+        }
+
+        providers.push(providerReport);
+    }
+
+    return {
+        activeProvider,
+        activeModel,
+        usePiAI,
+        schemaContractOk,
+        providers,
     };
 }

@@ -9,3 +9,5 @@ orcbot.config.yaml
 .orcbot
 orcbot.config.yaml
 .venv
+.npmrc
+.claude

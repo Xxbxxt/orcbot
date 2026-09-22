@@ -796,6 +796,23 @@ export class SkillsManager {
         const parts: string[] = ['<activated_skills>'];
         for (const skill of activated) {
             parts.push(`<skill name="${skill.meta.name}">`);
+            
+            // Inject required configuration if available
+            const requiredConfig = skill.meta.orcbot?.requiredConfig;
+            if (requiredConfig && requiredConfig.length > 0 && this.context?.config) {
+                parts.push('CONFIGURATION (from your config manager):');
+                for (const key of requiredConfig) {
+                    const value = this.context.config.get(key);
+                    if (value !== undefined) {
+                        parts.push(`- ${key}: "${value}"`);
+                    } else {
+                        parts.push(`- ${key}: [NOT CONFIGURED - you may need to ask the user or use manage_config to set this]`);
+                    }
+                }
+                parts.push(''); // Spacing
+            }
+            
+            parts.push('INSTRUCTIONS:');
             parts.push(skill.instructions);
             parts.push('</skill>');
         }
@@ -1562,16 +1579,22 @@ main().catch(console.error);
         const skills = excludeSkills 
             ? this.getAllSkills().filter(s => !excludeSkills.has(s.name))
             : this.getAllSkills();
-        const skillsList = skills.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+        const skillsList = skills.map(s => {
+            const batchTag = s.isParallelSafe ? ' [batch-safe]' : '';
+            return `- ${s.name}: ${s.description} (Usage: ${s.usage})${batchTag}`;
+        }).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
 
     /**
-     * Get a compact skills list with just names and brief descriptions (for token saving)
+     * Get a compact skills list with names, usage, and brief descriptions (for token saving while maintaining context).
      */
     public getCompactSkillsPrompt(): string {
-        const skillsList = this.getAllSkills().map(s => `${s.name}(${s.usage.replace(/^[^(]*\(/, '').replace(/\)$/, '')})`).join(', ');
-        return `Tools: ${skillsList}`;
+        const skillsList = this.getAllSkills().map(s => {
+            const usage = s.usage.replace(/^[^(]*\(/, '').replace(/\)$/, '');
+            return `- ${s.name}(${usage}): ${s.description}`;
+        }).join('\n');
+        return `Available Skills (Compact):\n${skillsList}`;
     }
 
     /**
@@ -1596,7 +1619,10 @@ main().catch(console.error);
             return keywords.some(k => text.includes(k));
         });
         
-        const skillsList = relevant.map(s => `- ${s.name}: ${s.description} (Usage: ${s.usage})`).join('\n');
+        const skillsList = relevant.map(s => {
+            const batchTag = s.isParallelSafe ? ' [batch-safe]' : '';
+            return `- ${s.name}: ${s.description} (Usage: ${s.usage})${batchTag}`;
+        }).join('\n');
         return `Available Skills:\n${skillsList}`;
     }
 

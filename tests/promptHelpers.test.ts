@@ -223,6 +223,13 @@ describe('ToolingHelper - Enhanced', () => {
         expect(prompt).toContain('Dependency management');
         expect(prompt).toContain('package manager');
     });
+
+    it('should include filesystem grounding guidance', () => {
+        const prompt = helper.getPrompt(makeContext());
+        expect(prompt).toContain('FILESYSTEM GROUNDING RULE');
+        expect(prompt).toContain('Do NOT invent absolute paths or drive letters');
+        expect(prompt).toContain('list_directory()` with no path first');
+    });
 });
 
 describe('BrowserHelper - Enhanced', () => {
@@ -230,22 +237,24 @@ describe('BrowserHelper - Enhanced', () => {
 
     it('should include browser error recovery section', () => {
         const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
-        expect(prompt).toContain('Browser Error Recovery');
+        expect(prompt).toContain('browser_run_script');
+        expect(prompt).toContain('recovery logic');
     });
 
     it('should include context preservation during browsing section', () => {
         const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
-        expect(prompt).toContain('Context Preservation During Browsing');
-        expect(prompt).toContain('mental map');
+        expect(prompt).toContain('navigate to the same URL twice in a row');
+        expect(prompt).toContain('already on the page');
     });
 
     it('should use tighter silence limit of 2 steps', () => {
         const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
-        expect(prompt).toContain('NEVER go more than 2 browser steps');
+        expect(prompt).toContain('Send a status update every 2 steps');
     });
 
     it('should include long browsing session guidance', () => {
         const prompt = helper.getPrompt(makeContext({ taskDescription: 'browse the web' }));
-        expect(prompt).toContain('Long browsing sessions');
+        expect(prompt).toContain('READ FIRST (CRITICAL)');
+        expect(prompt).toContain('browser_extract_content()');
     });
 });

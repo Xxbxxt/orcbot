@@ -44,6 +44,27 @@ export class ConfigPolicy {
             reason: 'Non-sensitive endpoint configuration',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
+        ['googleWorkspaceCliPath', {
+            key: 'googleWorkspaceCliPath',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Path to the Google Workspace CLI binary',
+            reason: 'Non-sensitive local tool path configuration',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['githubCliPath', {
+            key: 'githubCliPath',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Path to the GitHub CLI binary',
+            reason: 'Non-sensitive local tool path configuration',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['googleWorkspaceCliAccount', {
+            key: 'googleWorkspaceCliAccount',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Default Google Workspace CLI account selector',
+            reason: 'Non-sensitive account routing for multi-account CLI use',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
         ['memoryContextLimit', {
             key: 'memoryContextLimit',
             level: ConfigChangeLevel.SAFE,
@@ -200,6 +221,19 @@ export class ConfigPolicy {
             reason: 'API keys are sensitive and should be approved',
             validation: (value: any) => typeof value === 'string' && value.length > 0
         }],
+        ['googleOAuthClientId', {
+            key: 'googleOAuthClientId',
+            level: ConfigChangeLevel.APPROVAL,
+            description: 'Google OAuth client ID',
+            reason: 'OAuth credentials are sensitive and should be approved',
+            validation: (value: any) => typeof value === 'string' && value.length > 0
+        }],
+        ['googleOAuthClientSecret', {
+            key: 'googleOAuthClientSecret',
+            level: ConfigChangeLevel.LOCKED,
+            description: 'Google OAuth client secret',
+            reason: 'Critical authentication credential',
+        }],
         ['nvidiaApiKey', {
             key: 'nvidiaApiKey',
             level: ConfigChangeLevel.APPROVAL,
@@ -248,6 +282,20 @@ export class ConfigPolicy {
             description: 'Autonomous operation interval in minutes',
             reason: 'Autonomy settings affect system behavior significantly',
             validation: (value: any) => typeof value === 'number' && value >= 1
+        }],
+        ['lightweightHeartbeatEnabled', {
+            key: 'lightweightHeartbeatEnabled',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Enable lightweight maintenance heartbeats',
+            reason: 'Non-sensitive local maintenance tuning',
+            validation: (value: any) => typeof value === 'boolean'
+        }],
+        ['lightweightHeartbeatIntervalMinutes', {
+            key: 'lightweightHeartbeatIntervalMinutes',
+            level: ConfigChangeLevel.SAFE,
+            description: 'Minutes between lightweight maintenance heartbeats',
+            reason: 'Non-sensitive pacing control for low-cost background upkeep',
+            validation: (value: any) => typeof value === 'number' && value >= 1 && value <= 240
         }],
         ['workerPoolAllowAutonomyDuringUserWork', {
             key: 'workerPoolAllowAutonomyDuringUserWork',

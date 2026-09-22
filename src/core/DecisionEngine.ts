@@ -18,6 +18,7 @@ import { KnowledgeStore } from '../memory/KnowledgeStore';
 import { BookLogManager } from '../memory/BookLogManager';
 import { ToolsManager } from './ToolsManager';
 import { Environment } from './utils/Environment';
+import { SystemProfiler } from './SystemProfiler';
 import type { ValidationResult } from './ResponseValidator';
 
 export class DecisionEngine {
@@ -32,6 +33,7 @@ export class DecisionEngine {
     private knowledgeStore?: KnowledgeStore;
     private bookLog?: BookLogManager;
     private tools?: ToolsManager;
+    private systemProfiler?: SystemProfiler;
     private repoContext: string;
 
     // ── Per-action prompt cache ──
@@ -77,6 +79,13 @@ export class DecisionEngine {
      */
     setBookLog(log: BookLogManager): void {
         this.bookLog = log;
+    }
+
+    /**
+     * Set the SystemProfiler for system knowledge injection into prompts.
+     */
+    setSystemProfiler(profiler: SystemProfiler): void {
+        this.systemProfiler = profiler;
     }
 
     /**
@@ -598,7 +607,8 @@ ${this.repoContext}`,
             recentMemories: recentContext,
             allowedTools: allowedToolNames,
             taskDescription,
-            fileIntent: inferredFileIntent
+            fileIntent: inferredFileIntent,
+            substantiveDeliveriesSent: metadata.substantiveDeliveriesSent || 0
         });
 
         return { piped, validation, parsed };
@@ -819,28 +829,33 @@ ${lastTurnInvolvedMessage
         const journalLimit  = Number(this.config?.get('journalContextLimit')  ?? 1500);
         const learningLimit = Number(this.config?.get('learningContextLimit') ?? 1500);
         
-        // TOKEN OPTIMIZATION: Omit journal/learning tail if we are deep into an action.
-        // It was likely already included in Step 1 and is now in the model's KV cache
-        // or short-term memory. Including it every step wastes tokens.
-        const omitRedundantContext = (metadata.currentStep || 1) > 2;
-        
+        // TOKEN OPTIMIZATION: Full journal/learning on steps 1-2; compact excerpt on steps 3+.
+        // LLM API calls are stateless — the model has NO memory of prior steps unless it's in the prompt.
+        // Dropping knowledge entirely causes the agent to "forget" learned facts mid-task.
+        const currentStep = metadata.currentStep || 1;
+        const isDeepStep = currentStep > 2;
+        // On deep steps, keep a small excerpt (most-recent 400 chars) so critical facts survive
+        const deepStepLimit = 400;
+
         let journalContent = '';
         let learningContent = '';
         let worldContent = '';
-        if (!isHeartbeat && !omitRedundantContext) {
+        if (!isHeartbeat) {
             try {
                 if (fs.existsSync(this.journalPath)) {
                     const full = fs.readFileSync(this.journalPath, 'utf-8');
-                    journalContent = full.length > journalLimit ? full.slice(-journalLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : journalLimit;
+                    journalContent = full.length > limit ? full.slice(-limit) : full;
                 }
                 if (fs.existsSync(this.learningPath)) {
                     const full = fs.readFileSync(this.learningPath, 'utf-8');
-                    learningContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : learningLimit;
+                    learningContent = full.length > limit ? full.slice(-limit) : full;
                 }
                 if (fs.existsSync(this.worldPath)) {
                     const full = fs.readFileSync(this.worldPath, 'utf-8');
-                    // Use learningLimit for worldContent as well, or a custom config
-                    worldContent = full.length > learningLimit ? full.slice(-learningLimit) : full;
+                    const limit = isDeepStep ? deepStepLimit : learningLimit;
+                    worldContent = full.length > limit ? full.slice(-limit) : full;
                 }
             } catch (e) { }
         }
@@ -1155,15 +1170,19 @@ ${lastTurnInvolvedMessage
 
                 stepHistoryString = `${firstStr}\n  --- [expanded continuity context: ${expandedLines.length}/${middle.length} middle steps shown] ---\n${expandedLines.join('\n')}${omittedCount > 0 ? `\n  ... [${omittedCount} older middle steps omitted to stay within context budget]` : ''}\n  --- [recent steps below] ---\n${lastStr}`;
             } else {
-                // Compress middle: group by tool, count successes/failures
+                // Compress middle: group by tool, count successes/failures, preserve error reason
                 const middleSummary: string[] = [];
                 let currentTool = '';
                 let toolCount = 0;
                 let toolSuccesses = 0;
                 let toolFailures = 0;
+                let lastErrorSnippet = '';  // Preserve the most recent failure reason
                 const flushGroup = () => {
                     if (currentTool && toolCount > 0) {
-                        middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)`);
+                        const errorHint = (toolFailures > 0 && lastErrorSnippet)
+                            ? ` — last failure: "${lastErrorSnippet}"`
+                            : '';
+                        middleSummary.push(`  ... ${currentTool} x${toolCount} (${toolSuccesses} ok, ${toolFailures} err)${errorHint}`);
                     }
                 };
                 for (const m of middle) {
@@ -1177,10 +1196,16 @@ ${lastTurnInvolvedMessage
                         toolCount = 0;
                         toolSuccesses = 0;
                         toolFailures = 0;
+                        lastErrorSnippet = '';
                     }
                     toolCount++;
                     if (content.includes('succeeded') || content.includes('returned')) toolSuccesses++;
-                    if (content.includes('FAILED') || content.includes('ERROR')) toolFailures++;
+                    if (content.includes('FAILED') || content.includes('ERROR')) {
+                        toolFailures++;
+                        // Extract a short error reason so the agent knows WHY it failed
+                        const errMatch = content.match(/(?:FAILED|ERROR|error)[:\s]+([^\n]{8,100})/i);
+                        if (errMatch) lastErrorSnippet = errMatch[1].trim().slice(0, 90);
+                    }
                 }
                 flushGroup();
 
@@ -1417,7 +1442,14 @@ Respond conversationally. If the user asks you to do something that requires ele
         // PromptRouter + helper assembly + bootstrap loading.
         let coreInstructions: string;
         if (this._cachedCoreActionId === actionId && !isFirstStep && this._cachedCoreInstructions) {
+            // Step 1 cached instructions only include the keyword-relevant subset of skills.
+            // On step 2+, append a compact reference to ALL available tools so the agent can
+            // pivot to any skill without being blind to tools outside the step-1 narrow list.
             coreInstructions = this._cachedCoreInstructions;
+            const compactAll = this.skills.getCompactSkillsPrompt();
+            if (compactAll && !coreInstructions.includes('All Available Skills (full reference)')) {
+                coreInstructions += `\n\nAll Available Skills (full reference — use any of these even if not in the detailed list above):\n${compactAll}`;
+            }
         } else {
             coreInstructions = await this.buildHelperPrompt(
                 availableSkills,
@@ -1451,16 +1483,21 @@ Respond conversationally. If the user asks you to do something that requires ele
             ? trimmedUserContext.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).slice(0, 4).join(' | ').slice(0, 200)
             : '';
 
+        // System profile — agent's knowledge about what system it's running on
+        const systemProfileSummary = this.systemProfiler && !isHeartbeat ? this.systemProfiler.getSummary() : '';
+
         // Full prompt for all steps - don't risk losing context
         const systemPrompt = `
 ${runtimeLine}
 ${quickUserProfile ? `USER: ${quickUserProfile}` : ''}
+${systemProfileSummary ? `\n${systemProfileSummary}` : ''}
 
 ${coreInstructions}
 
 ${historyNotes}
 
 EXECUTION STATE:
+- MISSION ANCHOR (Original Task): "${taskDescription}"
 - Action ID: ${actionId}
 - messagesSent: ${metadata.messagesSent || 0}
 - Sequence Step: ${metadata.currentStep || '1'} of ${metadata.maxSteps || 'N/A'}
@@ -1471,6 +1508,12 @@ ${this.buildTimeSignalsNudge(metadata)}
 
 EXECUTION PLAN:
 ${metadata.executionPlan || 'Proceed with standard reasoning.'}
+
+EXECUTION DISCIPLINE:
+- Treat the execution plan as your default checklist for this step.
+- Do not ignore the plan unless current evidence, tool failures, or new user input force a better path.
+- If you deviate from the plan, explain why in reasoning and choose tools that still advance the task.
+- Do NOT send a status-only "working on it" style message unless real work has already started or you are reporting a concrete blocker/recovery.
 
 ${metadata.sessionContinuityHint ? `SESSION CONTINUITY (carry this forward):
 ${metadata.sessionContinuityHint}` : ''}
@@ -1599,20 +1642,44 @@ ${safeOtherContext ? `RECENT BACKGROUND CONTEXT (reference only — may describe
         // LOOP PROTECTION: Check if the agent is stuck in a repetitive cycle
         const actionState = this.executionStateManager.getState(actionId);
         if (actionState.isRepeatingResponse(4)) {
-            logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Forcing termination to prevent redundant messaging.`);
+            logger.warn(`DecisionEngine: Loop detected for action ${actionId}. Checking delivery state before terminating.`);
             
             // Mark that a loop was detected so the auditor can bypass the "unsent results" check
             metadata.loopDetected = true;
 
-            // Force goals_met to true so the pipeline doesn't keep retrying
+            const noMessagesSent = (metadata.messagesSent || 0) === 0;
+            const noSubstantiveDelivery = (metadata.substantiveDeliveriesSent || 0) === 0;
+
             if (piped) {
-                piped.verification = { 
-                    goals_met: true,
-                    analysis: 'Terminated due to repetitive response detection (loop prevention).'
-                };
-                // If the model is repeating the same message, just stop after the current one
-                piped.tools = []; 
-                return piped;
+                if (isUserFacing && noMessagesSent) {
+                    // Agent is looping BUT has never sent anything to the user.
+                    // Don't kill silently — force one delivery of whatever it has.
+                    logger.warn(`DecisionEngine: Loop detected but no messages sent. Injecting delivery directive instead of hard-terminating.`);
+                    piped.verification = { 
+                        goals_met: false,
+                        analysis: 'Loop detected (4x repeated response). No message sent to user yet — agent must deliver available results before terminating.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                } else if (isUserFacing && noSubstantiveDelivery) {
+                    // Messages were sent but none were substantive (just status updates).
+                    // Give one more chance to deliver real content.
+                    logger.warn(`DecisionEngine: Loop detected but only status messages sent. Allowing one more attempt.`);
+                    piped.verification = { 
+                        goals_met: false,
+                        analysis: 'Loop detected (4x repeated response). Only status messages sent — agent must deliver a substantive answer or explain what went wrong.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                } else {
+                    // Substantive delivery was already made — safe to terminate.
+                    piped.verification = { 
+                        goals_met: true,
+                        analysis: 'Terminated due to repetitive response detection (loop prevention). Substantive delivery already made.'
+                    };
+                    piped.tools = []; 
+                    return piped;
+                }
             }
         }
 
@@ -1681,7 +1748,8 @@ QUESTION: Was the original task completed? If not, what tools should be called n
                 recentMemories: recentContext,
                 allowedTools: allowedToolNames,
                 taskDescription,
-                fileIntent: reviewFileIntent
+                fileIntent: reviewFileIntent,
+                substantiveDeliveriesSent: metadata.substantiveDeliveriesSent || 0
             });
 
             if (reviewed?.verification?.goals_met === false || (reviewed.tools && reviewed.tools.length > 0)) {

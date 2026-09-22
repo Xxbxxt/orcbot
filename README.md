@@ -13,7 +13,7 @@
 
 **Autonomous. Strategic. Multi-Modal. Self-Healing.**
 
-[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
+[Features](#features) • [Installation](#installation) • [Quickstart](#quickstart) • [Usage](#-usage) • [Configuration](#configuration) • [Self-Training](#self-training-sidecar) • [Autonomy](#autonomy--heartbeat) • [Skills](#-high-power-skills) • [Plugins](#-dynamic-plugin-system) • [Hardware](#hardware--robotics) • [Security](#security--privacy) • [Blog](docs/blog/robotics.md) • [Docs](https://fredabila.github.io/orcbot/docs/)
 
 </div>
 
@@ -51,6 +51,7 @@ OrcBot is a next-generation **autonomous reasoning agent**. Beyond the v2.0 Stra
 *   💬 **Rich Telegram UX**: Inline buttons, polls, message editing, emoji reactions (with reply fallback), and message pinning.
 *   🔁 **Clarification Delivery**: `request_supporting_data` now actively sends questions through the active channel before pausing.
 *   ✅ **Shared Execution Semantics**: Main-step, parallel, and bonus-step execution now run through shared helpers so cooldowns, duplicate side-effect blocking, and failure handling stay aligned.
+*   🧪 **Self-Training Sidecar**: Captures accepted trajectories, exports offline datasets, evaluates candidates, and promotes stronger models under admin control.
 
 ---
 
@@ -204,6 +205,61 @@ This is the part of the system that most directly improved OrcBot's autonomy und
 
 ---
 
+## Self-Training Sidecar
+
+OrcBot now supports a production-safe self-training loop. The key design choice is that this is not live online weight mutation inside the action loop. Instead, the agent continuously produces learning data from real work while model rollout remains a separate, reviewable operation.
+
+### Workflow
+
+1. **Capture**: completed actions become redacted trajectories with tool steps, delivery audits, and final user-facing answers.
+2. **Filter**: low-quality runs, unresolved failures, and status-only deliveries are rejected from the training export.
+3. **Prepare**: when enough accepted examples exist, OrcBot writes a JSONL dataset and an offline training manifest.
+4. **Evaluate**: candidate models are scored against accepted trajectories.
+5. **Promote**: an admin explicitly registers a trained candidate model and promotes it into the live config only if the evaluation gate passes.
+
+### Artifacts
+
+- `self-training-trajectories.json`: all captured trajectories
+- `self-training-trajectories.jsonl`: accepted trajectories only
+- `self-training-job.json`: current offline training manifest
+- `self-training-eval-report.json`: latest evaluation output
+- `self-training-launch.json`: background launch audit trail
+- `self-training-candidates.json`: registered model candidates
+- `self-training-promotion.json`: latest promotion record with previous-model context
+
+### Skills
+
+- `get_self_training_status()`
+- `prepare_self_training_job()`
+- `run_self_training_eval(limit?, provider?, modelName?)`
+- `build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)`
+- `launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)`
+- `register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)`
+- `promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)`
+
+### Safety Model
+
+- Training data is redacted before persistence.
+- Acceptance is gated on goal completion and substantive delivery.
+- Launching training remains an offline/background concern, not an in-loop side effect.
+- Promotion is admin-only and reuses OrcBot's normal `modelName` and `llmProvider` hot-reload path.
+- Every promotion records the previous model so rollback stays explicit.
+
+### Example Config
+
+```yaml
+selfTrainingEnabled: true
+selfTrainingTrainOnIdle: true
+selfTrainingMinQualityScore: 0.72
+selfTrainingMinAcceptedExamples: 25
+selfTrainingEvalPassThreshold: 0.55
+selfTrainingPromotionMinAverageScore: 0.70
+selfTrainingRequireEvalForPromotion: true
+selfTrainingLaunchCommand: python trainer.py --manifest {jobManifestPath} --export {exportPath} --model {modelName}
+```
+
+---
+
 ## Hardware & Robotics
 
 OrcBot is software-first, but its skill system makes it a strong brain for hardware stacks. The recommended pattern is to keep **real-world control in a dedicated hardware bridge** (ROS2, MQTT, REST, or serial gateway), and let OrcBot plan, reason, and issue safe commands through that bridge.
@@ -255,6 +311,43 @@ npm run build
 npm run setup
 ```
 
+**Install from GitHub Packages**
+```bash
+echo "@fredabila:registry=https://npm.pkg.github.com" >> ~/.npmrc
+echo "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN" >> ~/.npmrc
+npm install -g @fredabila/orcbot
+```
+
+The published package lives in GitHub Packages under `@fredabila/orcbot`. The CLI command remains `orcbot`.
+
+**Publish to GitHub Packages**
+```bash
+npm version patch
+git push --follow-tags
+gh release create v$(node -p "require('./package.json').version") --generate-notes
+```
+
+Publishing is handled by `.github/workflows/publish-package.yml`.
+
+- GitHub Packages publishes `@fredabila/orcbot` using the repository `GITHUB_TOKEN`.
+- npmjs publishes `orcbot` using a repository secret named `NPM_TOKEN`.
+
+To keep the public npm package updated, add an `NPM_TOKEN` repository secret from your npm account automation token.
+
+For local manual npmjs publishing, use:
+
+```bash
+npm run publish:npmjs
+```
+
+If your npm account requires 2FA for publish, pass the current OTP explicitly:
+
+```bash
+npm run publish:npmjs -- --otp=123456
+```
+
+If GitHub Actions fails with `EOTP`, your `NPM_TOKEN` is the wrong type. CI publishing requires an npm `Automation` token because standard publish tokens still require interactive OTP entry.
+
 ---
 
 ## Documentation
@@ -263,6 +356,8 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 
 **Key Guides:**
 *   🌐 [**Browser & Identity Improvements**](BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
+*   🔐 [**Google Identity Service**](docs/GOOGLE_IDENTITY.md) - OAuth setup, Gmail OTP workflows, storage model, and security guidance
+*   ☁️ [**Google Workspace CLI Integration**](docs/GOOGLE_WORKSPACE_CLI.md) - Using `gws` as OrcBot's broad Google Workspace backend for Docs, Drive, and more
 *   ⏱️ [**Polling System Guide**](POLLING_USAGE.md) - Event-driven condition monitoring
 *   ⚙️ [**Configuration Guide**](docs/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
 *   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
@@ -270,6 +365,7 @@ Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 *   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
 *   🚀 [**Extraordinary Use Cases**](docs/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
 *   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
+*   🧪 [**Self-Training Sidecar Page**](https://orcbot.vercel.app/self-training) - Capture, evaluation, launch, and promotion workflow
 
 ---
 
@@ -469,6 +565,43 @@ gatewayApiKey: your-secret-key
 **Recommended for remote access: Tailscale (private mesh network)**
 - Keep the gateway private to your Tailnet instead of exposing port 3100 publicly.
 - Still set `gatewayApiKey` for defense-in-depth.
+
+### MCP Server
+
+OrcBot can also run as an MCP server, either over stdio for local spawned clients or over stateless Streamable HTTP for remote MCP clients.
+
+```bash
+# Start OrcBot as an MCP server and run the agent loop
+orcbot mcp
+
+# Start MCP without auto-starting the agent loop
+orcbot mcp --no-agent-loop
+
+# Start a remote MCP endpoint over Streamable HTTP
+orcbot mcp --http -p 3190 -k my-mcp-token
+```
+
+You can also configure HTTP mode in `orcbot.config.yaml` or via environment variables instead of passing flags every time:
+
+```yaml
+mcpHost: 0.0.0.0
+mcpPort: 3190
+mcpPath: /mcp
+mcpApiKey: your-mcp-token
+```
+
+Supported environment variables are `MCP_HOST`, `MCP_PORT`, `MCP_PATH`, and `MCP_API_KEY`.
+
+The MCP server currently exposes agent-mediated tools for:
+
+- `orcbot_chat`: send a prompt through OrcBot's normal gateway-chat path and wait for a reply
+- `orcbot_queue_task`: enqueue work asynchronously
+- `orcbot_status`: inspect runtime state and queue counts
+- `orcbot_list_skills`: inspect the currently registered skill catalog
+
+For HTTP mode, OrcBot serves MCP at the configured `mcpPath` and a lightweight health check at `/health`. CLI flags override config values. If `mcpApiKey` is unset, OrcBot falls back to `gatewayApiKey` for compatibility. Clients must send the token through `X-Api-Key` or `Authorization: Bearer ...`.
+
+Use stderr for local diagnostics only in stdio mode. Stdout is reserved for the MCP protocol stream.
 - Restrict access with Tailnet ACLs to trusted operators/devices only.
 
 ---
@@ -487,12 +620,18 @@ Key settings (excerpt):
 - `modelName`: LLM model to use
 - `llmProvider`: Explicit provider selection (`openai`, `google`, `bedrock`, `openrouter`)
 - `openrouterApiKey`: API key for OpenRouter (access 200+ models)
+- `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`: Google identity service settings for Gmail-backed auth workflows
+- `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`: Optional Google Workspace CLI binary path and default account selector
+- `githubCliPath`: Optional GitHub CLI binary path if `gh` is not already on PATH
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
 - `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules
 - `reasoningExposeChecklist`: Set to `true` to send the agent's internal step-by-step checklist to the user before starting complex tasks.
+- `selfTrainingEnabled`, `selfTrainingTrainOnIdle`, `selfTrainingMinAcceptedExamples`
+- `selfTrainingEvalPassThreshold`, `selfTrainingPromotionMinAverageScore`, `selfTrainingRequireEvalForPromotion`
+- `selfTrainingLaunchCommand`: command template with `{jobManifestPath}`, `{exportPath}`, `{modelName}`, `{provider}`, and `{jobId}` placeholders.
 
 ### Autonomy Channel Policy
 To prevent background spam, the agent uses `autonomyAllowedChannels` to restrict where it can send "out of the blue" updates.
@@ -539,6 +678,65 @@ manage_config({ action: "approve", key: "openaiApiKey" })
 ```
 
 See [Config Management Documentation](docs/CONFIG_MANAGEMENT.md) for complete details.
+
+### Google Identity Service
+
+OrcBot can connect to a Google account for mailbox-assisted authentication workflows such as verification emails, magic links, and OTP retrieval.
+
+Setup options:
+
+- TUI: `orcbot ui` -> `Tooling` -> `Google Identity (OAuth + Gmail OTP)`
+- Environment variables: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`
+- YAML config: `googleOAuthClientId`, `googleOAuthClientSecret`, `googleOAuthRedirectUri`
+
+Core skills:
+
+- `google_identity_status()`
+- `google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)`
+- `google_inbox_search(query, maxResults?)`
+- `google_latest_otp(from_contains?, subject_contains?)`
+
+Operational notes:
+
+- Refresh tokens are persisted under the OrcBot data directory in `google-identity.json`.
+- If `ORCBOT_SECRET_KEY` or `orcbotSecretKey` is set, the refresh token is encrypted before storage.
+- Gmail access is read-only.
+
+Full setup and security guidance: [docs/GOOGLE_IDENTITY.md](docs/GOOGLE_IDENTITY.md)
+
+### Google Workspace CLI
+
+OrcBot can also use the Google Workspace CLI (`gws`) as a broad Google backend for Docs, Drive, Sheets, Calendar, and Gmail operations.
+
+Setup options:
+
+- TUI: `orcbot ui` -> `Tooling` -> `Google Workspace CLI (gws)`
+- Environment variables: `GOOGLE_WORKSPACE_CLI_PATH`, `GOOGLE_WORKSPACE_CLI_ACCOUNT`
+- YAML config: `googleWorkspaceCliPath`, `googleWorkspaceCliAccount`
+
+Core skills:
+
+- `google_workspace_status()`
+- `google_workspace_command(args:array, json?, account?)`
+- `google_docs_create(title, content?, account?)`
+- `google_docs_write(document_id, text, account?)`
+- `google_drive_list(query?, pageSize?, account?)`
+- `google_sheets_create(title, account?)`
+- `google_sheets_read(spreadsheet_id, range, account?)`
+- `google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)`
+- `google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)`
+- `google_gmail_triage(max?, query?, labels?, account?)`
+- `google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)`
+- `google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)`
+- `google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)`
+
+Operational notes:
+
+- The TUI can install `@googleworkspace/cli`, run `gws auth setup`, and run `gws auth login` for you.
+- OrcBot executes `gws` without a shell when the agent calls Workspace skills.
+- Workspace write operations remain elevated because they can modify user data.
+
+Full setup and usage guidance: [docs/GOOGLE_WORKSPACE_CLI.md](docs/GOOGLE_WORKSPACE_CLI.md)
 
 ---
 

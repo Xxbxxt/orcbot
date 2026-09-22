@@ -3,7 +3,7 @@ import { TokenTracker } from './TokenTracker';
 import { MultiLLM } from './MultiLLM';
 import { SkillsManager } from './SkillsManager';
 import { DecisionEngine } from './DecisionEngine';
-import { SimulationEngine } from './SimulationEngine';
+import { SimulationEngine, parseExecutionPlan } from './SimulationEngine';
 import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
 import { PollingManager } from './PollingManager';
@@ -23,6 +23,10 @@ import { BootstrapManager } from './BootstrapManager';
 import { UsagePing } from './UsagePing';
 import { AgenticUser } from './AgenticUser';
 import { KnowledgeStore } from '../memory/KnowledgeStore';
+import { SystemProfiler } from './SystemProfiler';
+import { GoogleIdentityManager } from './GoogleIdentityManager';
+import { GoogleWorkspaceCli } from './GoogleWorkspaceCli';
+import { GitHubCli } from './GitHubCli';
 import { memoryToolsSkills } from '../skills/memoryTools';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
@@ -41,6 +45,7 @@ import { ErrorClassifier } from './ErrorClassifier';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { SyntaxChecker } from '../utils/SyntaxChecker';
 import { isDeepEqual } from '../utils/ObjectUtils';
 import { shellSessions } from '../utils/ShellSession';
@@ -50,13 +55,26 @@ import { BookLogManager } from '../memory/BookLogManager';
 import { registerBookLogSkills } from '../skills/bookLogTools';
 import { registerChannelManagementSkills } from '../skills/channelManagement';
 import { registerFileTools } from '../skills/fileTools';
+import { registerApiTools } from '../skills/apiTools';
+import { registerChromeCdpTools } from '../skills/chromeCdpTools';
 import { ChannelRegistry } from '../channels/ChannelRegistry';
 import { BlockReviewer, ReviewResult, BlockVerdict } from './BlockReviewer';
 import { parseBrowserPerformActions } from './BrowserPerformParser';
 import { resolveBrowserScratchpadTarget } from './BrowserScratchpad';
-import { collectCompletionAuditIssues } from './CompletionAudit';
+import { collectCompletionAuditIssues, StepLedger, auditDelivery, type DeliveryAuditResult } from './CompletionAudit';
 import { buildDelegatedTaskFollowupAction } from './DelegatedTaskFollowup';
 import { resolveInboundRoute } from './InboundRouting';
+import { resolveDataHomePath } from '../utils/dataHome';
+import {
+    BuildLaunchPlanOptions,
+    LaunchPlanResult,
+    RegisterCandidateModelInput,
+    RegisterCandidateModelResult,
+    RunEvaluationOptions,
+    SelfTrainingManager,
+    SelfTrainingPromotionRecord,
+    SelfTrainingStatus,
+} from './SelfTrainingManager';
 
 /**
  * Tracks users who have interacted with the bot across channels.
@@ -83,6 +101,10 @@ export class Agent {
     public pollingManager: PollingManager;
     public usagePing: UsagePing;
     public config: ConfigManager;
+    public systemProfiler: SystemProfiler;
+    public googleIdentity: GoogleIdentityManager;
+    public googleWorkspaceCli: GoogleWorkspaceCli;
+    public githubCli: GitHubCli;
     public telegram: TelegramChannel | undefined;
     public whatsapp: WhatsAppChannel | undefined;
     public discord: DiscordChannel | undefined;
@@ -104,6 +126,7 @@ export class Agent {
     public isRunning: boolean = false;
     private lastActionTime: number;
     private lastHeartbeatAt: number = 0;
+    private lastLightweightHeartbeatAt: number = 0;
     private consecutiveIdleHeartbeats: number = 0;
     private lastHeartbeatProductive: boolean = true;
     private heartbeatRunning: boolean = false;
@@ -117,7 +140,10 @@ export class Agent {
     private worldEventsRefreshRunning: boolean = false;
     private lastWorldEventsSummary: string = '';
     private _blankPageCount: number = 0;
+    private clarificationClassifierCache?: Map<string, { blocking: boolean; expiresAt: number }>;
+    private deliveryMessageClassifierCache?: Map<string, { label: 'acknowledgement' | 'substantive' | 'neutral'; expiresAt: number }>;
     private agentConfigFile: string;
+    private selfTraining: SelfTrainingManager;
     private agentIdentity: string = '';
     private isBusy: boolean = false;
     /** Per-lane busy flags used by the parallel worker pool */
@@ -182,6 +208,11 @@ export class Agent {
         this.agentConfigFile = this.config.get('agentIdentityPath');
         this.initializeStorage();
         this.messageBus = new MessageBus(this);
+        // Initialize system profiler - will be loaded/profiled during startup
+        this.systemProfiler = new SystemProfiler(this.config.getDataHome());
+        this.googleIdentity = new GoogleIdentityManager(this.config);
+        this.googleWorkspaceCli = new GoogleWorkspaceCli(this.config);
+        this.githubCli = new GitHubCli(this.config);
 
         this.tools = new ToolsManager(
             this.config.get('toolsPath') || path.join(this.config.getDataHome(), 'tools')
@@ -299,6 +330,7 @@ export class Agent {
         );
         this.decisionEngine.setKnowledgeStore(this.knowledgeStore);
         this.decisionEngine.setBookLog(this.bookLog);
+        this.decisionEngine.setSystemProfiler(this.systemProfiler);
         this.simulationEngine = new SimulationEngine(this.llm);
         this.blockReviewer = new BlockReviewer(this.llm);
         this.actionQueue = new ActionQueue(this.config.get('actionQueuePath') || './actions.json', {
@@ -313,6 +345,32 @@ export class Agent {
 
         // Initialize RuntimeTuner for self-tuning capabilities
         this.tuner = new RuntimeTuner(path.dirname(this.config.get('memoryPath')));
+
+        this.selfTraining = new SelfTrainingManager({
+            enabled: this.config.get('selfTrainingEnabled') !== false,
+            redactSensitiveData: this.config.get('selfTrainingRedactSensitiveData') !== false,
+            minQualityScore: Number(this.config.get('selfTrainingMinQualityScore') || 0.72),
+            maxTrajectories: Number(this.config.get('selfTrainingMaxTrajectories') || 1000),
+            trainOnIdle: this.config.get('selfTrainingTrainOnIdle') !== false,
+            minAcceptedExamples: Number(this.config.get('selfTrainingMinAcceptedExamples') || 25),
+            preparationCooldownMinutes: Number(this.config.get('selfTrainingPreparationCooldownMinutes') || 60),
+            storePath: this.config.get('selfTrainingStorePath') || path.join(this.config.getDataHome(), 'self-training-trajectories.json'),
+            exportPath: this.config.get('selfTrainingExportPath') || path.join(this.config.getDataHome(), 'self-training-trajectories.jsonl'),
+            jobManifestPath: this.config.get('selfTrainingJobManifestPath') || path.join(this.config.getDataHome(), 'self-training-job.json'),
+            evalReportPath: this.config.get('selfTrainingEvalReportPath') || path.join(this.config.getDataHome(), 'self-training-eval-report.json'),
+            evalPassThreshold: Number(this.config.get('selfTrainingEvalPassThreshold') || 0.55),
+            evalSampleSize: Number(this.config.get('selfTrainingEvalSampleSize') || 10),
+            launchCommandTemplate: this.config.get('selfTrainingLaunchCommand'),
+            launchCwd: this.config.get('selfTrainingLaunchCwd'),
+            launchSessionPrefix: this.config.get('selfTrainingLaunchSessionPrefix') || 'self-train',
+            launchRecordPath: this.config.get('selfTrainingLaunchRecordPath') || path.join(this.config.getDataHome(), 'self-training-launch.json'),
+            candidateRegistryPath: this.config.get('selfTrainingCandidateRegistryPath') || path.join(this.config.getDataHome(), 'self-training-candidates.json'),
+            promotionRecordPath: this.config.get('selfTrainingPromotionRecordPath') || path.join(this.config.getDataHome(), 'self-training-promotion.json'),
+            promotionMinAverageScore: Number(this.config.get('selfTrainingPromotionMinAverageScore') || 0.7),
+            requireEvalForPromotion: this.config.get('selfTrainingRequireEvalForPromotion') !== false,
+            modelName: this.config.get('modelName'),
+            provider: this.config.get('llmProvider') || 'auto',
+        });
 
         this.browser = new WebBrowser(
             this.config.get('serperApiKey'),
@@ -439,17 +497,7 @@ export class Agent {
                 if (key === 'actionQueue') defaultContent = '[]';
                 if (key === 'memory') defaultContent = '{"memories":[]}';
                 if (key === 'skills') {
-                    // Try process.cwd() first (if run locally in dev), then fallback to relative to __dirname (when built/installed globally)
-                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
-                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md'); // __dirname is dist/core/ in prod
-                    
-                    if (fs.existsSync(localSkillsPath)) {
-                        defaultContent = fs.readFileSync(localSkillsPath, 'utf-8');
-                    } else if (fs.existsSync(packageSkillsPath)) {
-                        defaultContent = fs.readFileSync(packageSkillsPath, 'utf-8');
-                    } else {
-                        defaultContent = '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
-                    }
+                    defaultContent = this.getBuiltinSkillsRegistryContent();
                 }
 
                 try {
@@ -458,53 +506,94 @@ export class Agent {
                 } catch (e) {
                     logger.error(`Failed to initialize ${key} at ${filePath}: ${e}`);
                 }
-            } else if (key === 'skills') {
-                // AUTO-SYNC: If SKILLS.md exists, merge any NEW core skills from the package
-                try {
-                    const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
-                    const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md');
-                    const masterSkillsPath = fs.existsSync(localSkillsPath) ? localSkillsPath : (fs.existsSync(packageSkillsPath) ? packageSkillsPath : null);
-
-                    if (masterSkillsPath) {
-                        const masterContent = fs.readFileSync(masterSkillsPath, 'utf-8');
-                        const currentContent = fs.readFileSync(filePath, 'utf-8');
-                        
-                        // Simple sync logic: extract skill names (lines starting with - **name)
-                        // and append any that are in master but not in current.
-                        const extractSkillNames = (content: string) => {
-                            const regex = /- \*\*([a-zA-Z0-9_]+)\(/g;
-                            const names = new Set<string>();
-                            let match;
-                            while ((match = regex.exec(content)) !== null) {
-                                names.add(match[1]);
-                            }
-                            return names;
-                        };
-
-                        const masterSkills = extractSkillNames(masterContent);
-                        const currentSkills = extractSkillNames(currentContent);
-                        
-                        const missingSkills: string[] = [];
-                        for (const skill of masterSkills) {
-                            if (!currentSkills.has(skill)) {
-                                // Find the line in master content for this skill
-                                const lines = masterContent.split('\n');
-                                const skillLine = lines.find(l => l.startsWith(`- **${skill}(`));
-                                if (skillLine) missingSkills.push(skillLine);
-                            }
-                        }
-
-                        if (missingSkills.length > 0) {
-                            logger.info(`Agent: Syncing ${missingSkills.length} new core skills to ${filePath}`);
-                            const updatedContent = currentContent.trim() + '\n\n## Newly Added Core Skills\n' + missingSkills.join('\n') + '\n';
-                            fs.writeFileSync(filePath, updatedContent);
-                        }
-                    }
-                } catch (e) {
-                    logger.warn(`Agent: Failed to sync SKILLS.md: ${e}`);
-                }
             }
         }
+
+        try {
+            this.syncSkillsRegistryFiles();
+        } catch (e) {
+            logger.warn(`Agent: Failed to sync SKILLS.md: ${e}`);
+        }
+    }
+
+    private getBuiltinSkillsRegistrySourcePath(): string | null {
+        const localSkillsPath = path.resolve(process.cwd(), 'SKILLS.md');
+        const packageSkillsPath = path.resolve(__dirname, '../../SKILLS.md');
+
+        if (fs.existsSync(localSkillsPath)) {
+            return localSkillsPath;
+        }
+        if (fs.existsSync(packageSkillsPath)) {
+            return packageSkillsPath;
+        }
+        return null;
+    }
+
+    private getBuiltinSkillsRegistryContent(): string {
+        const sourcePath = this.getBuiltinSkillsRegistrySourcePath();
+        if (!sourcePath) {
+            return '# OrcBot Skills Registry\n\n(Workspace SKILLS.md not found. Populate this file manually.)\n';
+        }
+        return fs.readFileSync(sourcePath, 'utf-8');
+    }
+
+    private getSkillsRegistryTargets(): string[] {
+        const configuredSkillsPath = this.config.get('skillsPath');
+        const dataHomeSkillsPath = path.join(this.config.getDataHome(), 'SKILLS.md');
+        return Array.from(new Set([configuredSkillsPath, dataHomeSkillsPath].filter((value): value is string => !!value)));
+    }
+
+    private extractSkillDefinitionLines(content: string): Map<string, string> {
+        const definitions = new Map<string, string>();
+        for (const line of content.split(/\r?\n/)) {
+            const match = line.match(/^- \*\*([a-zA-Z0-9_]+)\(/);
+            if (match) {
+                definitions.set(match[1], line);
+            }
+        }
+        return definitions;
+    }
+
+    private mergeBuiltinAndLocalSkills(masterContent: string, currentContent: string): string {
+        const masterDefinitions = this.extractSkillDefinitionLines(masterContent);
+        const currentDefinitions = this.extractSkillDefinitionLines(currentContent);
+        const customLines = Array.from(currentDefinitions.entries())
+            .filter(([skillName, line]) => !masterDefinitions.has(skillName) || masterDefinitions.get(skillName) !== line)
+            .map(([, line]) => line);
+
+        let merged = masterContent.trimEnd();
+        if (customLines.length > 0) {
+            merged += '\n\n## Local Skill Notes\n' + customLines.join('\n');
+        }
+        return merged + '\n';
+    }
+
+    private syncSkillsRegistryFiles(sourceContent?: string): void {
+        const masterContent = sourceContent ?? this.getBuiltinSkillsRegistryContent();
+
+        for (const targetPath of this.getSkillsRegistryTargets()) {
+            const targetDir = path.dirname(targetPath);
+            if (!fs.existsSync(targetDir)) {
+                fs.mkdirSync(targetDir, { recursive: true });
+            }
+
+            const currentContent = fs.existsSync(targetPath) ? fs.readFileSync(targetPath, 'utf-8') : '';
+            const desiredContent = this.mergeBuiltinAndLocalSkills(masterContent, currentContent);
+            if (currentContent !== desiredContent) {
+                fs.writeFileSync(targetPath, desiredContent);
+                logger.info(`Agent: Synced skills registry to ${targetPath}`);
+            }
+        }
+    }
+
+    public syncSkillsRegistryNow(): { success: boolean; targets: string[]; sourcePath: string | null } {
+        const sourcePath = this.getBuiltinSkillsRegistrySourcePath();
+        this.syncSkillsRegistryFiles();
+        return {
+            success: true,
+            targets: this.getSkillsRegistryTargets(),
+            sourcePath,
+        };
     }
 
     private isSequentialUIComponent(skillName: string): boolean {
@@ -586,6 +675,124 @@ export class Agent {
             fallbackModelNames: newConfig.fallbackModelNames,
             fastModelName: newConfig.fastModelName
         });
+    }
+
+    public getSelfTrainingStatus(): SelfTrainingStatus {
+        return this.selfTraining.getStatus();
+    }
+
+    public prepareSelfTrainingJob() {
+        return this.selfTraining.prepareTrainingJobIfNeeded();
+    }
+
+    public async runSelfTrainingEvaluation(options: RunEvaluationOptions = {}) {
+        return this.selfTraining.runEvaluation(this.llm, options);
+    }
+
+    public buildSelfTrainingLaunchPlan(options: BuildLaunchPlanOptions = {}): LaunchPlanResult {
+        return this.selfTraining.buildLaunchPlan(options);
+    }
+
+    public async launchSelfTrainingJob(options: BuildLaunchPlanOptions & { dryRun?: boolean } = {}) {
+        const planResult = this.selfTraining.buildLaunchPlan(options);
+        if (!planResult.ready || !planResult.plan) {
+            return planResult;
+        }
+
+        if (options.dryRun) {
+            return { launched: false, reason: 'dry_run', plan: planResult.plan };
+        }
+
+        const { spawn } = require('child_process');
+        const child = spawn(planResult.plan.command, {
+            cwd: planResult.plan.cwd,
+            shell: true,
+            detached: false,
+            stdio: 'pipe',
+            env: {
+                ...process.env,
+                ORCBOT_SELF_TRAINING_JOB: planResult.plan.jobManifestPath,
+                ORCBOT_SELF_TRAINING_EXPORT: planResult.plan.exportPath,
+                ORCBOT_SELF_TRAINING_STORE: planResult.plan.storePath,
+                ORCBOT_SELF_TRAINING_JOB_ID: planResult.plan.jobId,
+            }
+        });
+
+        const session = shellSessions.attach(planResult.plan.sessionId, child, planResult.plan.command, planResult.plan.cwd);
+        this.selfTraining.recordLaunch({
+            launchedAt: new Date().toISOString(),
+            jobId: planResult.plan.jobId,
+            sessionId: planResult.plan.sessionId,
+            command: planResult.plan.command,
+            cwd: planResult.plan.cwd,
+            pid: session.pid,
+        });
+
+        return {
+            launched: true,
+            sessionId: planResult.plan.sessionId,
+            pid: session.pid,
+            command: planResult.plan.command,
+            cwd: planResult.plan.cwd,
+            jobId: planResult.plan.jobId,
+        };
+    }
+
+    public registerSelfTrainingCandidate(input: RegisterCandidateModelInput): RegisterCandidateModelResult {
+        return this.selfTraining.registerCandidateModel(input);
+    }
+
+    public promoteSelfTrainingCandidate(input: { candidateId?: string; modelName?: string; provider?: string; dryRun?: boolean }) {
+        const decision = this.selfTraining.preparePromotion({
+            candidateId: input.candidateId,
+            modelName: input.modelName,
+            provider: input.provider,
+        });
+
+        if (!decision.eligible || !decision.candidate) {
+            return decision;
+        }
+
+        const previousModelName = this.config.get('modelName');
+        const previousProvider = this.config.get('llmProvider') || 'auto';
+        if (input.dryRun) {
+            return {
+                promoted: false,
+                reason: 'dry_run',
+                decision,
+                previousModelName,
+                previousProvider,
+            };
+        }
+
+        if (decision.candidate.provider && decision.candidate.provider !== 'auto') {
+            this.config.set('llmProvider', decision.candidate.provider as any);
+        } else {
+            this.config.set('llmProvider', undefined as any);
+        }
+        this.config.set('modelName', decision.candidate.modelName);
+
+        const record: SelfTrainingPromotionRecord = {
+            promotedAt: new Date().toISOString(),
+            candidateId: decision.candidate.id,
+            modelName: decision.candidate.modelName,
+            provider: decision.candidate.provider,
+            previousModelName,
+            previousProvider,
+            evaluationAverageScore: decision.candidate.evaluationAverageScore,
+            evaluationPassRate: decision.candidate.evaluationPassRate,
+            evaluationPassThreshold: decision.candidate.evaluationPassThreshold,
+        };
+        this.selfTraining.recordPromotion(record);
+
+        return {
+            promoted: true,
+            candidate: decision.candidate,
+            previousModelName,
+            previousProvider,
+            activeModelName: this.config.get('modelName'),
+            activeProvider: this.config.get('llmProvider') || 'auto',
+        };
     }
 
     private async hotReloadChannels(oldConfig: any, newConfig: any) {
@@ -911,6 +1118,28 @@ export class Agent {
         return resolved;
     }
 
+    private getProjectRootPath(): string | null {
+        const configured = String(this.config.get('projectRoot') || '').trim();
+        if (!configured) return null;
+        return path.resolve(configured);
+    }
+
+    private getPreferredAgentRoot(): string {
+        const projectRoot = this.getProjectRootPath();
+        if (projectRoot && fs.existsSync(projectRoot) && fs.statSync(projectRoot).isDirectory()) {
+            return projectRoot;
+        }
+        return this.getBuildWorkspacePath();
+    }
+
+    private getKnownAgentRoots(): string[] {
+        return Array.from(new Set([
+            this.getPreferredAgentRoot(),
+            this.getBuildWorkspacePath(),
+            path.resolve(this.config.getDataHome())
+        ]));
+    }
+
     private isPathRestricted(targetPath: string): boolean {
         const normalized = path.normalize(targetPath).toLowerCase();
         // Block access to node_modules and .git to prevent accidental modification
@@ -924,11 +1153,32 @@ export class Agent {
         const raw = String(targetPath || '').trim();
         let resolved: string;
         if (!raw) {
-            resolved = this.getBuildWorkspacePath();
+            resolved = this.getPreferredAgentRoot();
         } else if (path.isAbsolute(raw)) {
             resolved = path.resolve(raw);
+            if (process.platform === 'win32') {
+                const root = path.parse(resolved).root;
+                if (root && /^[a-zA-Z]:\\$/.test(root) && !fs.existsSync(root)) {
+                    const knownRoots = this.getKnownAgentRoots().join(', ');
+                    throw new Error(`Unknown or inaccessible drive for path "${resolved}". Use one of the known OrcBot roots instead: ${knownRoots}`);
+                }
+            }
         } else {
-            resolved = path.resolve(this.getBuildWorkspacePath(), raw);
+            const projectRoot = this.getProjectRootPath();
+            const buildWorkspace = this.getBuildWorkspacePath();
+            const projectCandidate = projectRoot ? path.resolve(projectRoot, raw) : null;
+            const projectRelativeHints = [
+                'src', 'tests', 'apps', 'docs', 'assets', 'saas', '.github',
+                'package.json', 'tsconfig.json', 'README.md', 'AGENTS.md', 'SKILLS.md'
+            ];
+            const shouldPreferProjectRoot = !!projectCandidate && (
+                fs.existsSync(projectCandidate) ||
+                projectRelativeHints.some(prefix => raw === prefix || raw.startsWith(`${prefix}${path.sep}`) || raw.startsWith(`${prefix}/`) || raw.startsWith(`${prefix}\\`))
+            );
+
+            resolved = shouldPreferProjectRoot && projectCandidate
+                ? projectCandidate
+                : path.resolve(buildWorkspace, raw);
         }
 
         if (this.isPathRestricted(resolved)) {
@@ -1001,6 +1251,8 @@ export class Agent {
                 registerBookLogSkills(this);
                 registerChannelManagementSkills(this);
                 registerFileTools(this);
+                registerApiTools(this);
+                registerChromeCdpTools(this);
 
                 this.skills.registerSkill({
                     name: 'create_time_capsule',
@@ -1618,6 +1870,8 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                 usage: 'send_gateway_chat(message)',
                 handler: async (args: any) => {
                     const message = args.message || args.content || args.text;
+                    const currentAction = this.currentActionId ? this.actionQueue.get(this.currentActionId) : undefined;
+                    const sourceId = args.sourceId || args.jid || args.clientId || currentAction?.payload?.sourceId || 'gateway-web';
 
                     if (!message) return 'Error: Missing message content.';
 
@@ -1628,7 +1882,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         type: 'short',
                         content: message,
                         timestamp: new Date().toISOString(),
-                        metadata: { source: 'gateway-chat', role: 'assistant' }
+                        metadata: { source: 'gateway-chat', sourceId, role: 'assistant' }
                     });
 
                     // Broadcast via event bus so GatewayServer can forward to WebSocket clients
@@ -1637,6 +1891,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                         role: 'assistant',
                         content: message,
                         format: hasMarkdown(message) ? 'markdown' : 'text',
+                        sourceId,
                         timestamp: new Date().toISOString(),
                         messageId
                     });
@@ -2099,6 +2354,19 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                     const resolvedPath = this.resolveAgentWorkspacePath(String(filePath));
                     const dir = path.dirname(resolvedPath);
 
+                    // Pre-Execution Sandboxing: Prevent saving structurally broken code (OpenClaw loop fix)
+                    if (resolvedPath.endsWith('.js') || resolvedPath.endsWith('.ts')) {
+                        let fullContentToCheck = content;
+                        if (append && fs.existsSync(resolvedPath)) {
+                            fullContentToCheck = fs.readFileSync(resolvedPath, 'utf8') + content;
+                        }
+                        const isTS = resolvedPath.endsWith('.ts');
+                        const validation = SyntaxChecker.verify(fullContentToCheck, isTS);
+                        if (!validation.valid) {
+                            return `Error: Syntax Check Failed. The code has a syntax error and was NOT saved. You must fix the code before writing it.\nSyntax Error details:\n${validation.error}`;
+                        }
+                    }
+
                     // Create parent directories if needed
                     if (!fs.existsSync(dir)) {
                         fs.mkdirSync(dir, { recursive: true });
@@ -2205,11 +2473,12 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         // Skill: List Directory
         this.skills.registerSkill({
             name: 'list_directory',
-            description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the project root. NOTE: Access to node_modules and .git is blocked.',
+            description: 'List files and subdirectories in a directory. Use this to explore the project structure and find relevant source code or configuration. Defaults to the detected project root, then falls back to OrcBot\'s build workspace. NOTE: Access to node_modules and .git is blocked.',
             usage: 'list_directory(path)',
             isDeep: true,
+            isParallelSafe: true,
             handler: async (args: any) => {
-                const dirPath = args.path || args.dir || args.directory || this.getBuildWorkspacePath();
+                const dirPath = args.path || args.dir || args.directory || this.getPreferredAgentRoot();
 
                 try {
                     const resolvedPath = this.resolveAgentWorkspacePath(String(dirPath));
@@ -2552,6 +2821,1203 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             }
         });
 
+        this.skills.registerSkill({
+            name: 'google_identity_status',
+            description: 'Check Google identity/OAuth connection status for agent browser authentication workflows.',
+            usage: 'google_identity_status()',
+            handler: async () => {
+                const status = this.googleIdentity.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.connected
+                        ? 'Google identity is connected and usable for Gmail/OTP workflows.'
+                        : 'Google identity is not connected yet.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_identity_connect',
+            description: 'Connect Google identity by exchanging an OAuth authorization code. If no code is provided, returns an authorization URL.',
+            usage: 'google_identity_connect(client_id?, client_secret?, code_or_redirect_url?, email?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const clientId = String(args.client_id || args.clientId || '').trim();
+                const clientSecret = String(args.client_secret || args.clientSecret || '').trim();
+                const codeOrRedirect = String(args.code_or_redirect_url || args.code || args.redirect_url || args.redirectUrl || '').trim();
+                const email = String(args.email || '').trim();
+
+                if (clientId && clientSecret) {
+                    this.googleIdentity.setCredentials({ clientId, clientSecret, email: email || undefined });
+                }
+
+                if (!codeOrRedirect) {
+                    try {
+                        const url = this.googleIdentity.getAuthorizationUrl();
+                        return {
+                            success: true,
+                            needsCode: true,
+                            authorizationUrl: url,
+                            instructions: 'Open the URL, approve consent, then call google_identity_connect again with code_or_redirect_url.'
+                        };
+                    } catch (e) {
+                        return { success: false, error: `Unable to build authorization URL: ${e}` };
+                    }
+                }
+
+                try {
+                    await this.googleIdentity.exchangeAuthorizationCode(codeOrRedirect);
+                    const status = this.googleIdentity.getStatus();
+                    return {
+                        success: true,
+                        connected: status.connected,
+                        email: status.email,
+                        scope: status.scope,
+                        updatedAt: status.updatedAt
+                    };
+                } catch (e) {
+                    return { success: false, error: `Google OAuth connect failed: ${e}` };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_inbox_search',
+            description: 'Search the connected Google mailbox (Gmail API) for verification emails, magic links, or OTP-related messages.',
+            usage: 'google_inbox_search(query, maxResults?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const query = String(args.query || args.q || '').trim();
+                const maxResults = Number(args.maxResults || args.max_results || 5);
+                if (!query) return { success: false, error: 'Missing query.' };
+
+                try {
+                    const items = await this.googleIdentity.searchInbox(query, maxResults);
+                    return { success: true, count: items.length, items };
+                } catch (e) {
+                    return { success: false, error: `Inbox search failed: ${e}` };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_latest_otp',
+            description: 'Find the latest numeric OTP code from recent Gmail messages using optional sender/subject filters.',
+            usage: 'google_latest_otp(from_contains?, subject_contains?)',
+            isElevated: true,
+            handler: async (args: any) => {
+                const fromContains = String(args.from_contains || args.fromContains || '').trim() || undefined;
+                const subjectContains = String(args.subject_contains || args.subjectContains || '').trim() || undefined;
+
+                try {
+                    const result = await this.googleIdentity.findLatestOtp({ fromContains, subjectContains });
+                    if (result.code) {
+                        return {
+                            success: true,
+                            code: result.code,
+                            message: result.message
+                        };
+                    }
+                    return {
+                        success: false,
+                        error: 'No OTP code found in recent matching emails.',
+                        message: result.message
+                    };
+                } catch (e) {
+                    return { success: false, error: `OTP lookup failed: ${e}` };
+                }
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_workspace_status',
+            description: 'Check whether Google Workspace CLI (gws) is installed and whether its auth/account context appears available.',
+            usage: 'google_workspace_status()',
+            isElevated: true,
+            handler: async () => {
+                const status = await this.googleWorkspaceCli.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.installed
+                        ? 'Google Workspace CLI is installed. Use google_workspace_command or higher-level Google Workspace skills.'
+                        : 'Google Workspace CLI is not installed or not on PATH.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_workspace_command',
+            description: 'Run a structured Google Workspace CLI (gws) command without using a shell. Args must be an array of raw CLI tokens, e.g. ["drive","files","list"].',
+            usage: 'google_workspace_command(args:array, json?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const commandArgs = Array.isArray(args.args)
+                    ? args.args.map((item: any) => String(item))
+                    : [];
+                if (commandArgs.length === 0) {
+                    return { success: false, error: 'Missing args array. Example: { args: ["drive", "files", "list"] }' };
+                }
+
+                const json = args.json !== false && args.json !== 'false';
+                const account = String(args.account || '').trim() || undefined;
+                const result = await this.googleWorkspaceCli.run(commandArgs, { json, account });
+                return result.success
+                    ? {
+                        success: true,
+                        binary: result.binary,
+                        args: result.args,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        binary: result.binary,
+                        args: result.args,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_cli_status',
+            description: 'Check whether GitHub CLI (gh) is installed and whether its auth context appears available.',
+            usage: 'github_cli_status()',
+            isElevated: true,
+            handler: async () => {
+                const status = await this.githubCli.getStatus();
+                return {
+                    success: true,
+                    ...status,
+                    note: status.installed
+                        ? 'GitHub CLI is installed. Use github_cli_command for structured GitHub operations.'
+                        : 'GitHub CLI is not installed or not on PATH.'
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_cli_command',
+            description: 'Run a structured GitHub CLI (gh) command without using a shell. Args must be an array of raw CLI tokens, e.g. ["release","list"].',
+            usage: 'github_cli_command(args:array, json?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const commandArgs = Array.isArray(args.args)
+                    ? args.args.map((item: any) => String(item))
+                    : [];
+                if (commandArgs.length === 0) {
+                    return { success: false, error: 'Missing args array. Example: { args: ["release", "list"] }' };
+                }
+
+                const json = args.json === true || args.json === 'true';
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.run(commandArgs, { json, cwd });
+                return result.success
+                    ? {
+                        success: true,
+                        binary: result.binary,
+                        args: result.args,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        binary: result.binary,
+                        args: result.args,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_list',
+            description: 'List pull requests through GitHub CLI with optional state, repo, and branch filters.',
+            usage: 'github_pr_list(state?, limit?, repo?, base?, head?, author?, assignee?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const state = String(args.state || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const base = String(args.base || '').trim() || undefined;
+                const head = String(args.head || '').trim() || undefined;
+                const author = String(args.author || '').trim() || undefined;
+                const assignee = String(args.assignee || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+
+                const result = await this.githubCli.listPullRequests({
+                    state,
+                    repo,
+                    base,
+                    head,
+                    author,
+                    assignee,
+                    cwd,
+                    limit,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        pullRequests: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_issue_create',
+            description: 'Create a GitHub issue through GitHub CLI with optional repo, labels, and assignees.',
+            usage: 'github_issue_create(title, body?, repo?, labels?, assignees?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || '').trim();
+                if (!title) {
+                    return { success: false, error: 'Missing title.' };
+                }
+
+                const body = typeof args.body === 'string' ? args.body : (typeof args.description === 'string' ? args.description : undefined);
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const labels = Array.isArray(args.labels)
+                    ? args.labels.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.labels || '').trim() || undefined;
+                const assignees = Array.isArray(args.assignees)
+                    ? args.assignees.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.assignees || '').trim() || undefined;
+
+                const result = await this.githubCli.createIssue({ title, body, repo, labels, assignees, cwd });
+                return result.success
+                    ? {
+                        success: true,
+                        issueUrl: result.data?.url,
+                        output: result.data?.output || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_release_create',
+            description: 'Create a GitHub release through GitHub CLI with optional notes, generated notes, target commit, and repo override.',
+            usage: 'github_release_create(tag, title?, notes?, repo?, target?, draft?, prerelease?, generate_notes?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const tag = String(args.tag || args.version || '').trim();
+                if (!tag) {
+                    return { success: false, error: 'Missing tag.' };
+                }
+
+                const title = String(args.title || '').trim() || undefined;
+                const notes = typeof args.notes === 'string' ? args.notes : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const target = String(args.target || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const draft = args.draft === true || args.draft === 'true';
+                const prerelease = args.prerelease === true || args.prerelease === 'true';
+                const generateNotes = args.generate_notes === false || args.generate_notes === 'false'
+                    ? false
+                    : !!notes ? (args.generate_notes === true || args.generate_notes === 'true') : true;
+
+                const result = await this.githubCli.createRelease({
+                    tag,
+                    title,
+                    notes,
+                    repo,
+                    target,
+                    cwd,
+                    draft,
+                    prerelease,
+                    generateNotes,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        releaseUrl: result.data?.url,
+                        output: result.data?.output || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_runs',
+            description: 'List GitHub Actions workflow runs through GitHub CLI with optional workflow, branch, event, status, user, and repo filters.',
+            usage: 'github_workflow_runs(workflow?, branch?, event?, status?, limit?, repo?, user?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const workflow = String(args.workflow || args.name || '').trim() || undefined;
+                const branch = String(args.branch || '').trim() || undefined;
+                const event = String(args.event || '').trim() || undefined;
+                const status = String(args.status || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const user = String(args.user || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+
+                const result = await this.githubCli.listWorkflowRuns({ workflow, branch, event, status, repo, user, cwd, limit });
+                return result.success
+                    ? {
+                        success: true,
+                        runs: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_rerun',
+            description: 'Rerun a GitHub Actions workflow run through GitHub CLI, optionally rerunning only failed jobs.',
+            usage: 'github_workflow_rerun(run_id, failed?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const runId = String(args.run_id || args.runId || args.id || '').trim();
+                if (!runId) {
+                    return { success: false, error: 'Missing run_id.' };
+                }
+
+                const failed = args.failed === true || args.failed === 'true';
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.rerunWorkflowRun({ runId, failed, repo, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_checks',
+            description: 'Inspect status checks for a pull request through GitHub CLI.',
+            usage: 'github_pr_checks(pull_request, repo?, watch?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const watch = args.watch === true || args.watch === 'true';
+                const result = await this.githubCli.getPullRequestChecks({ pullRequest, repo, watcher: watch, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        checks: Array.isArray(result.data) ? result.data : [],
+                        count: Array.isArray(result.data) ? result.data.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_review',
+            description: 'Submit a pull request review through GitHub CLI as an approval, comment, or request for changes.',
+            usage: 'github_pr_review(pull_request, event, body?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const rawEvent = String(args.event || args.action || '').trim().toUpperCase();
+                const event = rawEvent === 'APPROVE' || rawEvent === 'REQUEST_CHANGES' || rawEvent === 'COMMENT'
+                    ? rawEvent as 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES'
+                    : undefined;
+                if (!event) {
+                    return { success: false, error: 'Missing or invalid event. Use APPROVE, COMMENT, or REQUEST_CHANGES.' };
+                }
+
+                const body = typeof args.body === 'string' ? args.body : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.reviewPullRequest({ pullRequest, event, body, repo, cwd });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_merge',
+            description: 'Merge a pull request through GitHub CLI using merge, squash, or rebase, with optional auto-merge and branch cleanup flags.',
+            usage: 'github_pr_merge(pull_request, strategy?, subject?, body?, auto?, admin?, delete_branch?, match_head_commit?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                if (!pullRequest) {
+                    return { success: false, error: 'Missing pull_request.' };
+                }
+
+                const strategyRaw = String(args.strategy || '').trim().toLowerCase();
+                const strategy = strategyRaw === 'squash' || strategyRaw === 'rebase' || strategyRaw === 'merge'
+                    ? strategyRaw as 'merge' | 'squash' | 'rebase'
+                    : undefined;
+                const subject = String(args.subject || '').trim() || undefined;
+                const body = typeof args.body === 'string' ? args.body : undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const matchHeadCommit = String(args.match_head_commit || args.matchHeadCommit || '').trim() || undefined;
+                const auto = args.auto === true || args.auto === 'true';
+                const admin = args.admin === true || args.admin === 'true';
+                const deleteBranch = args.delete_branch === true || args.delete_branch === 'true' || args.deleteBranch === true || args.deleteBranch === 'true';
+
+                const result = await this.githubCli.mergePullRequest({
+                    pullRequest,
+                    strategy,
+                    subject,
+                    body,
+                    auto,
+                    admin,
+                    deleteBranch,
+                    matchHeadCommit,
+                    repo,
+                    cwd,
+                });
+
+                return result.success
+                    ? {
+                        success: true,
+                        output: result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_issue_comment',
+            description: 'Post a comment on a GitHub issue through GitHub CLI.',
+            usage: 'github_issue_comment(issue, body, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const issue = String(args.issue || args.issue_number || args.number || '').trim();
+                const body = String(args.body || args.comment || '').trim();
+                if (!issue) return { success: false, error: 'Missing issue.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.commentOnIssue({ issue, body, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_pr_comment',
+            description: 'Post a comment on a pull request through GitHub CLI.',
+            usage: 'github_pr_comment(pull_request, body, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const pullRequest = String(args.pull_request || args.pullRequest || args.number || '').trim();
+                const body = String(args.body || args.comment || '').trim();
+                if (!pullRequest) return { success: false, error: 'Missing pull_request.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.commentOnPullRequest({ pullRequest, body, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_workflow_dispatch',
+            description: 'Dispatch a GitHub Actions workflow through GitHub CLI with optional ref and input fields.',
+            usage: 'github_workflow_dispatch(workflow, ref?, fields?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const workflow = String(args.workflow || args.name || '').trim();
+                if (!workflow) return { success: false, error: 'Missing workflow.' };
+
+                const ref = String(args.ref || '').trim() || undefined;
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const fields = typeof args.fields === 'object' && args.fields !== null && !Array.isArray(args.fields)
+                    ? Object.fromEntries(Object.entries(args.fields).map(([key, value]) => [String(key), value as string | number | boolean]))
+                    : undefined;
+                const result = await this.githubCli.dispatchWorkflow({ workflow, ref, repo, cwd, fields });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_branch_list',
+            description: 'List repository branches through GitHub CLI, with optional repo override and name filtering.',
+            usage: 'github_branch_list(repo?, limit?, query?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const query = String(args.query || args.search || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listBranches({ repo, cwd, query, limit });
+
+                return result.success
+                    ? {
+                        success: true,
+                        defaultBranch: result.data?.defaultBranch,
+                        branches: Array.isArray(result.data?.branches) ? result.data.branches : [],
+                        count: Array.isArray(result.data?.branches) ? result.data.branches.length : 0,
+                        data: result.data,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                    }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_release_upload_asset',
+            description: 'Upload one or more files to an existing GitHub release through GitHub CLI.',
+            usage: 'github_release_upload_asset(tag, files, repo?, clobber?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const tag = String(args.tag || '').trim();
+                if (!tag) return { success: false, error: 'Missing tag.' };
+
+                const files = Array.isArray(args.files)
+                    ? args.files.map((item: any) => String(item).trim()).filter(Boolean)
+                    : String(args.files || '').split(',').map((item) => item.trim()).filter(Boolean);
+                if (files.length === 0) return { success: false, error: 'Missing files.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const clobber = args.clobber === true || args.clobber === 'true';
+                const result = await this.githubCli.uploadReleaseAsset({ tag, files, repo, clobber, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_list',
+            description: 'List GitHub repository labels through GitHub CLI.',
+            usage: 'github_label_list(repo?, limit?, search?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const search = String(args.search || args.query || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listLabels({ repo, cwd, search, limit });
+
+                return result.success
+                    ? { success: true, labels: Array.isArray(result.data) ? result.data : [], count: Array.isArray(result.data) ? result.data.length : 0, data: result.data, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_create',
+            description: 'Create or update a GitHub repository label through GitHub CLI.',
+            usage: 'github_label_create(name, color, description?, force?, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                const color = String(args.color || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+                if (!color) return { success: false, error: 'Missing color.' };
+
+                const description = String(args.description || '').trim() || undefined;
+                const force = args.force === true || args.force === 'true';
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.createLabel({ name, color, description, force, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_label_delete',
+            description: 'Delete a GitHub repository label through GitHub CLI.',
+            usage: 'github_label_delete(name, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.deleteLabel({ name, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_list',
+            description: 'List GitHub repository variables through GitHub CLI.',
+            usage: 'github_variable_list(repo?, limit?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const limit = Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined;
+                const result = await this.githubCli.listVariables({ repo, cwd, limit });
+
+                return result.success
+                    ? { success: true, variables: Array.isArray(result.data) ? result.data : [], count: Array.isArray(result.data) ? result.data.length : 0, data: result.data, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_set',
+            description: 'Create or update a GitHub repository variable through GitHub CLI.',
+            usage: 'github_variable_set(name, value, repo?, visibility?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                const value = String(args.value || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+                if (!value) return { success: false, error: 'Missing value.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const visibilityRaw = String(args.visibility || '').trim().toLowerCase();
+                const visibility = visibilityRaw === 'all' || visibilityRaw === 'private' || visibilityRaw === 'selected'
+                    ? visibilityRaw as 'all' | 'private' | 'selected'
+                    : undefined;
+                const result = await this.githubCli.setVariable({ name, value, repo, visibility, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'github_variable_delete',
+            description: 'Delete a GitHub repository variable through GitHub CLI.',
+            usage: 'github_variable_delete(name, repo?, cwd?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const name = String(args.name || '').trim();
+                if (!name) return { success: false, error: 'Missing name.' };
+
+                const repo = String(args.repo || '').trim() || undefined;
+                const cwd = String(args.cwd || '').trim() || undefined;
+                const result = await this.githubCli.deleteVariable({ name, repo, cwd });
+
+                return result.success
+                    ? { success: true, output: result.stdout, stdout: result.stdout, stderr: result.stderr }
+                    : { success: false, error: result.error || result.stderr || result.stdout, stdout: result.stdout, stderr: result.stderr };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_docs_create',
+            description: 'Create a Google Doc through Google Workspace CLI. Optionally append initial content after creation.',
+            usage: 'google_docs_create(title, content?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || args.name || '').trim();
+                const content = String(args.content || args.text || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!title) return { success: false, error: 'Missing title.' };
+
+                const createResult = await this.googleWorkspaceCli.createDoc(title, account);
+                if (!createResult.success) {
+                    return { success: false, error: createResult.error || createResult.stderr || createResult.stdout };
+                }
+
+                const documentId = createResult.data?.documentId || createResult.data?.document_id;
+                if (!documentId) {
+                    return {
+                        success: false,
+                        error: 'Document create did not return a documentId.',
+                        data: createResult.data,
+                        stdout: createResult.stdout
+                    };
+                }
+
+                let appendResult: any;
+                if (content) {
+                    appendResult = await this.googleWorkspaceCli.appendToDoc(String(documentId), content, account);
+                    if (!appendResult.success) {
+                        return {
+                            success: false,
+                            error: appendResult.error || appendResult.stderr || appendResult.stdout,
+                            documentId,
+                            documentUrl: `https://docs.google.com/document/d/${documentId}/edit`
+                        };
+                    }
+                }
+
+                return {
+                    success: true,
+                    title,
+                    documentId,
+                    documentUrl: `https://docs.google.com/document/d/${documentId}/edit`,
+                    created: createResult.data,
+                    appendOutput: appendResult?.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_docs_write',
+            description: 'Append plain text to an existing Google Doc through Google Workspace CLI.',
+            usage: 'google_docs_write(document_id, text, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const documentId = String(args.document_id || args.documentId || args.id || '').trim();
+                const text = String(args.text || args.content || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!documentId) return { success: false, error: 'Missing document_id.' };
+                if (!text) return { success: false, error: 'Missing text.' };
+
+                const result = await this.googleWorkspaceCli.appendToDoc(documentId, text, account);
+                return result.success
+                    ? {
+                        success: true,
+                        documentId,
+                        documentUrl: `https://docs.google.com/document/d/${documentId}/edit`,
+                        output: result.stdout,
+                    }
+                    : {
+                        success: false,
+                        error: result.error || result.stderr || result.stdout,
+                    };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_drive_list',
+            description: 'List Google Drive files via Google Workspace CLI with optional Drive query filtering.',
+            usage: 'google_drive_list(query?, pageSize?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const query = String(args.query || args.q || '').trim() || undefined;
+                const pageSize = Number(args.pageSize || args.page_size || 10);
+                const account = String(args.account || '').trim() || undefined;
+
+                const result = await this.googleWorkspaceCli.listDriveFiles({ query, pageSize, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    count: Array.isArray(result.data?.files) ? result.data.files.length : 0,
+                    files: result.data?.files || [],
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_create',
+            description: 'Create a Google Sheets spreadsheet via Google Workspace CLI.',
+            usage: 'google_sheets_create(title, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const title = String(args.title || args.name || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!title) return { success: false, error: 'Missing title.' };
+
+                const result = await this.googleWorkspaceCli.createSpreadsheet(title, account);
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                const spreadsheetId = result.data?.spreadsheetId || result.data?.spreadsheet_id;
+                return {
+                    success: true,
+                    title,
+                    spreadsheetId,
+                    spreadsheetUrl: spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit` : undefined,
+                    created: result.data,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_read',
+            description: 'Read cell values from a Google Sheet via Google Workspace CLI.',
+            usage: 'google_sheets_read(spreadsheet_id, range, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const spreadsheetId = String(args.spreadsheet_id || args.spreadsheetId || args.id || '').trim();
+                const range = String(args.range || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                if (!spreadsheetId) return { success: false, error: 'Missing spreadsheet_id.' };
+                if (!range) return { success: false, error: 'Missing range.' };
+
+                const result = await this.googleWorkspaceCli.readSheet({ spreadsheetId, range, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    spreadsheetId,
+                    range,
+                    values: result.data?.values || [],
+                    data: result.data,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_sheets_append',
+            description: 'Append one or more rows to a Google Sheet via Google Workspace CLI.',
+            usage: 'google_sheets_append(spreadsheet_id, values|json_values, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const spreadsheetId = String(args.spreadsheet_id || args.spreadsheetId || args.id || '').trim();
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+                if (!spreadsheetId) return { success: false, error: 'Missing spreadsheet_id.' };
+
+                const jsonValues = Array.isArray(args.json_values)
+                    ? args.json_values
+                    : Array.isArray(args.jsonValues)
+                        ? args.jsonValues
+                        : undefined;
+                const values = Array.isArray(args.values)
+                    ? args.values
+                    : typeof args.values === 'string'
+                        ? args.values
+                        : undefined;
+
+                if (!jsonValues && !values) {
+                    return { success: false, error: 'Missing values. Provide values as an array/string or json_values as a 2D array.' };
+                }
+
+                const result = await this.googleWorkspaceCli.appendSheet({
+                    spreadsheetId,
+                    values,
+                    jsonValues,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    spreadsheetId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_calendar_create_event',
+            description: 'Create a Google Calendar event via Google Workspace CLI.',
+            usage: 'google_calendar_create_event(summary, start, end, calendar?, location?, description?, attendees?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const summary = String(args.summary || args.title || '').trim();
+                const start = String(args.start || '').trim();
+                const end = String(args.end || '').trim();
+                const calendar = String(args.calendar || args.calendar_id || args.calendarId || '').trim() || undefined;
+                const location = String(args.location || '').trim() || undefined;
+                const description = String(args.description || args.body || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+                const attendees = Array.isArray(args.attendees)
+                    ? args.attendees.map((value: any) => String(value || '').trim()).filter(Boolean)
+                    : typeof args.attendees === 'string'
+                        ? args.attendees.split(',').map((value: string) => value.trim()).filter(Boolean)
+                        : [];
+
+                if (!summary) return { success: false, error: 'Missing summary.' };
+                if (!start) return { success: false, error: 'Missing start.' };
+                if (!end) return { success: false, error: 'Missing end.' };
+
+                const result = await this.googleWorkspaceCli.createCalendarEvent({
+                    summary,
+                    start,
+                    end,
+                    calendar,
+                    location,
+                    description,
+                    attendees,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    calendar: calendar || 'primary',
+                    event: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_triage',
+            description: 'Show an unread Gmail summary through Google Workspace CLI.',
+            usage: 'google_gmail_triage(max?, query?, labels?, account?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const max = Number(args.max || 20);
+                const query = String(args.query || '').trim() || undefined;
+                const labels = args.labels === true || args.labels === 'true';
+                const account = String(args.account || '').trim() || undefined;
+
+                const result = await this.googleWorkspaceCli.gmailTriage({ max, query, labels, account });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    count: Array.isArray(result.data) ? result.data.length : 0,
+                    messages: Array.isArray(result.data) ? result.data : result.data?.messages || [],
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_send',
+            description: 'Send a plain-text Gmail message through Google Workspace CLI.',
+            usage: 'google_gmail_send(to, subject, body, cc?, bcc?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim();
+                const subject = String(args.subject || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!to || (Array.isArray(to) && to.length === 0)) return { success: false, error: 'Missing to recipient(s).' };
+                if (!subject) return { success: false, error: 'Missing subject.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.sendGmail({ to, subject, body, cc, bcc, account, dryRun });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_reply',
+            description: 'Reply to a Gmail message through Google Workspace CLI, preserving thread headers automatically.',
+            usage: 'google_gmail_reply(message_id, body, to?, cc?, bcc?, from?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const messageId = String(args.message_id || args.messageId || args.id || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const from = String(args.from || '').trim() || undefined;
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim() || undefined;
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!messageId) return { success: false, error: 'Missing message_id.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.replyGmail({
+                    messageId,
+                    body,
+                    from,
+                    to,
+                    cc,
+                    bcc,
+                    account,
+                    dryRun,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    messageId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'google_gmail_reply_all',
+            description: 'Reply-all to a Gmail thread through Google Workspace CLI.',
+            usage: 'google_gmail_reply_all(message_id, body, to?, cc?, bcc?, remove?, from?, account?, dryRun?)',
+            isDeep: true,
+            isElevated: true,
+            handler: async (args: any) => {
+                const messageId = String(args.message_id || args.messageId || args.id || '').trim();
+                const body = String(args.body || args.message || args.text || '').trim();
+                const from = String(args.from || '').trim() || undefined;
+                const to = Array.isArray(args.to) ? args.to : String(args.to || '').trim() || undefined;
+                const cc = Array.isArray(args.cc) ? args.cc : String(args.cc || '').trim() || undefined;
+                const bcc = Array.isArray(args.bcc) ? args.bcc : String(args.bcc || '').trim() || undefined;
+                const remove = Array.isArray(args.remove) ? args.remove : String(args.remove || '').trim() || undefined;
+                const account = String(args.account || '').trim() || undefined;
+                const dryRun = args.dryRun === true || args.dry_run === true || args.dryRun === 'true' || args.dry_run === 'true';
+
+                if (!messageId) return { success: false, error: 'Missing message_id.' };
+                if (!body) return { success: false, error: 'Missing body.' };
+
+                const result = await this.googleWorkspaceCli.replyGmail({
+                    messageId,
+                    body,
+                    from,
+                    to,
+                    cc,
+                    bcc,
+                    remove,
+                    account,
+                    dryRun,
+                    replyAll: true,
+                });
+                if (!result.success) {
+                    return { success: false, error: result.error || result.stderr || result.stdout };
+                }
+
+                return {
+                    success: true,
+                    messageId,
+                    dryRun,
+                    output: result.data || result.stdout,
+                };
+            }
+        });
+
         // Skill: React to WhatsApp Message
         this.skills.registerSkill({
             name: 'react_whatsapp',
@@ -2577,19 +4043,46 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
         this.skills.registerSkill({
             name: 'reply_whatsapp_status',
             description: 'Reply to a contact\'s WhatsApp status update. This sends the message as a proper status reply, visible inside the status thread — NOT as a standalone DM. Use this when reacting to a status someone posted.',
-            usage: 'reply_whatsapp_status(jid, message)',
+            usage: 'reply_whatsapp_status(jid, message, status_message_id?)',
             handler: async (args: any) => {
-                const jid = args.jid || args.to;
+                const currentAction = this.actionQueue.getQueue().find(a => a.id === this.currentActionId);
+                const actionPayload = currentAction?.payload || {};
+
+                const jid = this.resolveContextualChatId(
+                    args.jid || args.to || actionPayload.sourceId,
+                    'whatsapp'
+                );
                 const message = args.message || args.content || args.text;
+                const statusMessageId =
+                    args.status_message_id ||
+                    args.statusMessageId ||
+                    args.message_id ||
+                    args.messageId ||
+                    actionPayload.statusMessageId ||
+                    actionPayload.messageId;
 
                 if (!jid) return 'Error: Missing jid.';
                 if (!message) return 'Error: Missing message content.';
 
+                const isStatusContext = actionPayload.source === 'whatsapp' && (actionPayload.type === 'status' || actionPayload.statusContentType);
+
                 if (this.whatsapp) {
-                    // Use sendStatusReply which correctly targets the status thread
-                    // rather than opening a new DM conversation
-                    await this.whatsapp.sendStatusReply(jid, message);
-                    return `Replied to ${jid}'s status successfully.`;
+                    // Avoid hard user-facing errors on normal DM tasks where status context is absent.
+                    if (!statusMessageId && !isStatusContext) {
+                        return `No active status context for ${jid}. Use send_whatsapp for a normal DM, or run this immediately after receiving a status update.`;
+                    }
+
+                    const result = await this.whatsapp.sendStatusReply(jid, message, statusMessageId);
+                    if (result.success && result.mode === 'status_thread') {
+                        return `Replied to ${jid}'s status in the native status thread.`;
+                    }
+                    if (result.success && result.mode === 'dm_fallback') {
+                        return `Sent a regular DM to ${jid} because native status context was unavailable.`;
+                    }
+                    if (result.reason === 'status_context_not_found') {
+                        return `Could not find recent status context for ${jid}. Ask the user to post a fresh status or use send_whatsapp for a normal DM.`;
+                    }
+                    return `Could not send status reply to ${jid} (${result.reason || 'unknown_error'}).`;
                 }
                 return 'WhatsApp channel not available';
             }
@@ -2623,6 +4116,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'get_contact_profile',
             description: 'Retrieve the stored profile/context for a specific WhatsApp contact.',
             usage: 'get_contact_profile(jid)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const jid = args.jid || args.to || args.id;
 
@@ -2847,6 +4341,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'recall_memory',
             description: 'Search your entire memory semantically — finds relevant memories across ALL channels, time periods, and memory types (short, episodic, long-term). Use this when you need to remember something from a past conversation, find context about a topic, or recall what happened with a specific person/project. Much more powerful than keyword search.',
             usage: 'recall_memory(query, limit?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const query = args.query || args.search || args.text || args.q;
                 const limit = parseInt(args.limit || '10', 10);
@@ -2902,6 +4397,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'search_memory_logs',
             description: 'Literal search across all daily memory log files, JOURNAL.md, and LEARNING.md. Use this for "deep" history search when semantic recall fails, or when you need to find exact technical details, dates, or specific names mentioned in the past. This is a very robust fallback.',
             usage: 'search_memory_logs(query, limit?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const query = args.query || args.q || args.text;
                 const limit = parseInt(args.limit || '10', 10);
@@ -2960,6 +4456,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'list_memory_logs',
             description: 'List all available daily memory log dates. Useful to see how far back your history goes or to identify specific days to search.',
             usage: 'list_memory_logs()',
+            isParallelSafe: true,
             handler: async () => {
                 try {
                     const dailyMemory = this.memory.getDailyMemory();
@@ -2979,6 +4476,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'read_memory_log',
             description: 'Read the full content of a specific daily memory log. Use list_memory_logs to see available dates and search_memory_logs to find relevant ones. Date format: YYYY-MM-DD.',
             usage: 'read_memory_log(date)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const date = args.date || args.text;
                 if (!date) return 'Error: Missing date string (YYYY-MM-DD).';
@@ -3544,6 +5042,7 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             name: 'get_system_info',
             description: 'Get comprehensive system information including OS, platform, shell, and command syntax guidance',
             usage: 'get_system_info()',
+            isParallelSafe: true,
             handler: async () => {
                 const os = require('os');
                 const isWindows = process.platform === 'win32';
@@ -3877,6 +5376,8 @@ Output the fixed CommonJS code now:`;
                 const skillsPath = this.config.get('skillsPath');
                 try {
                     fs.appendFileSync(skillsPath, `\n\n${skill_definition}`);
+                    const updatedContent = fs.readFileSync(skillsPath, 'utf-8');
+                    this.syncSkillsRegistryFiles(updatedContent);
                     // Instead of re-instantiating, we just log. 
                     // Manual skills are already registered. Plugins can be reloaded.
                     this.skills.loadPlugins();
@@ -4906,7 +6407,7 @@ Respond with: "VERIFIED: <reason>" or "FAILED: <reason>"`;
                     return screenshotResult;
                 }
 
-                const screenshotPath = path.join(os.homedir(), '.orcbot', 'screenshot.png');
+                const screenshotPath = resolveDataHomePath('screenshot.png');
                 if (!fs.existsSync(screenshotPath)) {
                     return `Error: Screenshot file not found at ${screenshotPath}`;
                 }
@@ -5867,6 +7368,7 @@ export default ${name};
             name: 'http_fetch',
             description: 'Fetch a URL using a simple HTTP request (no browser needed). Supports GET, POST, PUT, PATCH, DELETE. Returns the response body as text or JSON. Much faster and lighter than browser_navigate for APIs, JSON endpoints, and simple web pages.',
             usage: 'http_fetch(url, method?, headers?, body?, timeout?)',
+            isParallelSafe: true,
             handler: async (args: any) => {
                 const url = args.url || args.link;
                 if (!url) return 'Error: Missing url.';
@@ -6759,6 +8261,7 @@ Be thorough and academic.`;
                 name: 'read_codebase_file',
                 description: 'Read the contents of a source file in the project codebase. Requires enableSelfModification to be true. Cannot read from node_modules or .git.',
                 usage: 'read_codebase_file(path)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
                         return 'Error: Self-Modification is disabled. To enable codebase access, ask the user to toggle "Self-Modification" in the TUI security menu.';
@@ -6787,6 +8290,7 @@ Be thorough and academic.`;
                 name: 'search_codebase',
                 description: 'Search for source code using multiple keywords or a regex. Supports context lines (contextLines) to see surrounding code. Use multiple terms in "query" (e.g., "login AND validate") to target specific logic. Excludes node_modules and .git.',
                 usage: 'search_codebase(query, include?, contextLines?)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     if (!this.config.get('enableSelfModification')) {
                         return 'Error: Self-Modification is disabled.';
@@ -6846,6 +8350,7 @@ Be thorough and academic.`;
                 name: 'locate_code_symbol',
                 description: 'Quickly find the definition of a function, class, interface, or variable. Targets "export const/class/function" etc.',
                 usage: 'locate_code_symbol(symbolName)',
+                isParallelSafe: true,
                 handler: async (args: any) => {
                     const symbol = args.symbolName || args.symbol || args.name;
                     if (!symbol) return 'Error: Missing symbol name.';
@@ -6974,6 +8479,98 @@ Be thorough and academic.`;
                     }
 
                     return `Task "${task.id}" created with priority ${priority}. Use distribute_tasks() to auto-assign or assign manually.`;
+                }
+            });
+
+            // Skill: Await Subtask — polls until a delegated task finishes, returns its conclusion.
+            this.skills.registerSkill({
+                name: 'await_subtask',
+                description: 'Wait for a previously delegated task to finish and return its result. Polls every 3 seconds up to timeoutSeconds (default 120). Use after delegate_task() when you need the result before continuing.',
+                usage: 'await_subtask(task_id, timeoutSeconds?)',
+                isDeep: true,
+                handler: async (args: any) => {
+                    const taskId = args.task_id || args.id || args.taskId;
+                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
+                    if (!taskId) return 'Error: Missing task_id.';
+
+                    const pollMs = 3000;
+                    const deadline = Date.now() + timeout * 1000;
+
+                    while (Date.now() < deadline) {
+                        const action = this.actionQueue.getAction(taskId);
+                        if (!action) return `Error: Task "${taskId}" not found.`;
+
+                        if (action.status === 'completed' || action.status === 'failed') {
+                            // Retrieve the conclusion from episodic memory
+                            const conclusionId = `${taskId}-conclusion`;
+                            const conclusion = this.memory.getMemory(conclusionId);
+                            const resultText = conclusion?.content || `Task ${action.status} (no conclusion stored).`;
+                            return `Subtask "${taskId}" ${action.status}. Result: ${resultText}`;
+                        }
+
+                        await new Promise(resolve => setTimeout(resolve, pollMs));
+                    }
+                    return `Subtask "${taskId}" did not complete within ${timeout}s (still ${this.actionQueue.getAction(taskId)?.status || 'unknown'}).`;
+                }
+            });
+
+            // Skill: Run Subtask — create + await in one call (inline synchronous subtask pattern).
+            this.skills.registerSkill({
+                name: 'run_subtask',
+                description: 'Create a subtask, wait for it to complete, and return its result — all in one step. Ideal for parallel research, file processing, or breaking a complex task into focused sub-problems. timeoutSeconds defaults to 120, max 300.',
+                usage: 'run_subtask(description, timeoutSeconds?, priority?)',
+                isDeep: true,
+                handler: async (args: any) => {
+                    const description = args.description || args.task;
+                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
+                    const priority = parseInt(args.priority || '5');
+                    if (!description) return 'Error: Missing task description.';
+
+                    // Enforce max spawn depth (workers cannot spawn further sub-tasks)
+                    const depth = (args._spawnDepth || 0) as number;
+                    const MAX_DEPTH = 2;
+                    if (depth >= MAX_DEPTH) {
+                        return `Error: Spawn depth limit (${MAX_DEPTH}) reached. Execute this work directly instead of delegating further.`;
+                    }
+
+                    try {
+                        const subtaskId = `subtask-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+                        this.actionQueue.push({
+                            id: subtaskId,
+                            type: 'message',
+                            status: 'pending',
+                            priority,
+                            payload: {
+                                description,
+                                isSubtask: true,
+                                parentActionId: args._parentActionId,
+                                spawnDepth: depth + 1,
+                            },
+                            timestamp: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                        });
+
+                        const pollMs = 3000;
+                        const deadline = Date.now() + timeout * 1000;
+
+                        while (Date.now() < deadline) {
+                            const action = this.actionQueue.getAction(subtaskId);
+                            if (!action) return `Error: Subtask "${subtaskId}" disappeared from queue.`;
+
+                            if (action.status === 'completed' || action.status === 'failed') {
+                                const conclusionId = `${subtaskId}-conclusion`;
+                                const conclusion = this.memory.getMemory(conclusionId);
+                                const resultText = conclusion?.content || `Subtask ${action.status} (no conclusion stored).`;
+                                return `[Subtask result] ${resultText}`;
+                            }
+
+                            await new Promise(resolve => setTimeout(resolve, pollMs));
+                        }
+
+                        return `Subtask "${subtaskId}" did not complete within ${timeout}s — it will continue running in background. Check await_subtask("${subtaskId}") later.`;
+                    } catch (e) {
+                        return `Error creating subtask: ${e}`;
+                    }
                 }
             });
 
@@ -7327,6 +8924,208 @@ Be thorough and academic.`;
             }
         });
 
+        this.skills.registerSkill({
+            name: 'get_self_training_status',
+            description: 'Get self-training capture statistics, accepted trajectory counts, and the latest prepared offline training job manifest.',
+            usage: 'get_self_training_status()',
+            handler: async () => {
+                return JSON.stringify(this.selfTraining.getStatus(), null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'prepare_self_training_job',
+            description: 'Prepare an offline training job manifest from accepted self-training trajectories. Does not train live weights.',
+            usage: 'prepare_self_training_job()',
+            handler: async () => {
+                const result = this.selfTraining.prepareTrainingJobIfNeeded();
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'run_self_training_eval',
+            description: 'Evaluate accepted self-training trajectories against the current or specified model. Admin only because it consumes model calls.',
+            usage: 'run_self_training_eval(limit?, provider?, modelName?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can run self-training model evaluations.';
+                }
+
+                const limit = args.limit ? Number(args.limit) : undefined;
+                const provider = args.provider;
+                const modelName = args.modelName || args.model;
+                const report = await this.selfTraining.runEvaluation(this.llm, { limit, provider, modelName });
+                return JSON.stringify(report, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'build_self_training_launch_plan',
+            description: 'Build the command and working directory for launching an offline self-training job without executing it. Admin only.',
+            usage: 'build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can build self-training launch plans.';
+                }
+
+                const result = this.selfTraining.buildLaunchPlan({
+                    commandTemplate: args.commandTemplate,
+                    cwd: args.cwd,
+                    sessionId: args.sessionId,
+                });
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'launch_self_training_job',
+            description: 'Launch a prepared offline self-training job in a background shell session. Admin only. Requires selfTrainingLaunchCommand config or an explicit commandTemplate.',
+            usage: 'launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can launch self-training jobs.';
+                }
+
+                const planResult = this.selfTraining.buildLaunchPlan({
+                    commandTemplate: args.commandTemplate,
+                    cwd: args.cwd,
+                    sessionId: args.sessionId,
+                });
+
+                if (!planResult.ready || !planResult.plan) {
+                    return JSON.stringify(planResult, null, 2);
+                }
+
+                if (args.dryRun === true || String(args.dryRun || '').toLowerCase() === 'true') {
+                    return JSON.stringify({ launched: false, reason: 'dry_run', plan: planResult.plan }, null, 2);
+                }
+
+                const { spawn } = require('child_process');
+                const child = spawn(planResult.plan.command, {
+                    cwd: planResult.plan.cwd,
+                    shell: true,
+                    detached: false,
+                    stdio: 'pipe',
+                    env: {
+                        ...process.env,
+                        ORCBOT_SELF_TRAINING_JOB: planResult.plan.jobManifestPath,
+                        ORCBOT_SELF_TRAINING_EXPORT: planResult.plan.exportPath,
+                        ORCBOT_SELF_TRAINING_STORE: planResult.plan.storePath,
+                        ORCBOT_SELF_TRAINING_JOB_ID: planResult.plan.jobId,
+                    }
+                });
+
+                const session = shellSessions.attach(planResult.plan.sessionId, child, planResult.plan.command, planResult.plan.cwd);
+                this.selfTraining.recordLaunch({
+                    launchedAt: new Date().toISOString(),
+                    jobId: planResult.plan.jobId,
+                    sessionId: planResult.plan.sessionId,
+                    command: planResult.plan.command,
+                    cwd: planResult.plan.cwd,
+                    pid: session.pid,
+                });
+
+                return JSON.stringify({
+                    launched: true,
+                    sessionId: planResult.plan.sessionId,
+                    pid: session.pid,
+                    command: planResult.plan.command,
+                    cwd: planResult.plan.cwd,
+                    jobId: planResult.plan.jobId,
+                }, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'register_self_training_candidate',
+            description: 'Register a trained candidate model so it can be promoted later if evaluation passes. Admin only.',
+            usage: 'register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can register self-training candidates.';
+                }
+
+                const notes = Array.isArray(args.notes)
+                    ? args.notes.map((note: any) => String(note))
+                    : typeof args.notes === 'string'
+                        ? [args.notes]
+                        : [];
+
+                const result = this.selfTraining.registerCandidateModel({
+                    candidateId: args.candidateId,
+                    modelName: String(args.modelName || args.model || '').trim(),
+                    provider: args.provider,
+                    jobId: args.jobId,
+                    notes,
+                });
+                return JSON.stringify(result, null, 2);
+            }
+        });
+
+        this.skills.registerSkill({
+            name: 'promote_self_training_candidate',
+            description: 'Promote a registered self-training candidate into the live model configuration. Admin only.',
+            usage: 'promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)',
+            handler: async (args: any) => {
+                if (!this.isUserAdmin(args)) {
+                    return 'Error: Only admin users can promote self-training candidates.';
+                }
+
+                const decision = this.selfTraining.preparePromotion({
+                    candidateId: args.candidateId,
+                    modelName: args.modelName || args.model,
+                    provider: args.provider,
+                });
+
+                if (!decision.eligible || !decision.candidate) {
+                    return JSON.stringify(decision, null, 2);
+                }
+
+                const previousModelName = this.config.get('modelName');
+                const previousProvider = this.config.get('llmProvider') || 'auto';
+                const dryRun = args.dryRun === true || String(args.dryRun || '').toLowerCase() === 'true';
+
+                if (dryRun) {
+                    return JSON.stringify({
+                        promoted: false,
+                        reason: 'dry_run',
+                        decision,
+                        previousModelName,
+                        previousProvider,
+                    }, null, 2);
+                }
+
+                if (decision.candidate.provider && decision.candidate.provider !== 'auto') {
+                    this.config.set('llmProvider', decision.candidate.provider as any);
+                } else {
+                    this.config.set('llmProvider', undefined as any);
+                }
+                this.config.set('modelName', decision.candidate.modelName);
+
+                this.selfTraining.recordPromotion({
+                    promotedAt: new Date().toISOString(),
+                    candidateId: decision.candidate.id,
+                    modelName: decision.candidate.modelName,
+                    provider: decision.candidate.provider,
+                    previousModelName,
+                    previousProvider,
+                    evaluationAverageScore: decision.candidate.evaluationAverageScore,
+                    evaluationPassRate: decision.candidate.evaluationPassRate,
+                    evaluationPassThreshold: decision.candidate.evaluationPassThreshold,
+                });
+
+                return JSON.stringify({
+                    promoted: true,
+                    candidate: decision.candidate,
+                    previousModelName,
+                    previousProvider,
+                    activeModelName: this.config.get('modelName'),
+                    activeProvider: this.config.get('llmProvider') || 'auto',
+                }, null, 2);
+            }
+        });
+
         // Skill: Reset Tuning
         this.skills.registerSkill({
             name: 'reset_tuning',
@@ -7639,6 +9438,7 @@ Be thorough and academic.`;
             description: 'Search the RAG knowledge store for information relevant to a query. Returns the most similar document chunks with relevance scores. Use this when you need to recall ingested knowledge — documentation, datasets, files, or web pages that were previously stored.',
             usage: 'rag_search(query, limit?, collection?, tags?)',
             isDeep: true,
+            isParallelSafe: true,
             handler: async (args: any) => {
                 try {
                     const query = args.query || args.q || args.search;
@@ -8121,6 +9921,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 return false;
             }
 
+            await this.primeDeliveryMessageClassification(message);
+
             // Save progress messages to memory so the LLM can see them in thread context
             // and knows what status updates it already sent the user.
             const chatId = action.payload?.chatId || sourceId;
@@ -8161,31 +9963,125 @@ The plugin handles all logic internally. See the plugin source for implementatio
      * Last-resort user-visible response for channel actions that otherwise produced no output.
      * This bypasses progress-feedback toggles so users are never left with total silence.
      */
+    private buildGroundedNoResponseMessage(action: Action, reason?: string): string | null {
+        const memories = this.memory.getActionMemories(action.id) || [];
+        if (memories.length === 0) return null;
+
+        const loweredDescription = String(action.payload?.description || '').toLowerCase();
+        const isContinuationTask = loweredDescription.startsWith('continuation:') ||
+            String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment';
+
+        const toolsAttempted = new Set<string>();
+        const errorSnippets: string[] = [];
+        const resultSnippets: string[] = [];
+        let lastBlocker = '';
+
+        for (const mem of memories.slice(-30)) {
+            const content = String(mem.content || '');
+            const lowered = content.toLowerCase();
+            const tool = String(mem.metadata?.tool || mem.metadata?.skill || '');
+
+            // Track all tools attempted (skip SYSTEM pseudo-entries)
+            if (tool && !tool.startsWith('[') && tool !== 'system' && tool.length < 60) {
+                toolsAttempted.add(tool);
+            }
+
+            // Extract blockers from SYSTEM error injections: [SYSTEM: ... error ...]
+            const sysErrMatch = content.match(/\[SYSTEM[^\]]*?(?:ERROR|error|failed|Failed)[^\]]*?:\s*([^\]]{10,160})/);
+            if (sysErrMatch) {
+                const snippet = sysErrMatch[1].replace(/\s+/g, ' ').trim();
+                if (snippet && !errorSnippets.includes(snippet)) {
+                    errorSnippets.push(snippet);
+                    lastBlocker = snippet;
+                }
+            }
+
+            // Generic error pattern outside SYSTEM blocks
+            if (!lowered.includes('[system:')) {
+                const errMatch = content.match(/(?:Error|Exception|failed|timed out)[:\s]+([^\n]{10,120})/i);
+                if (errMatch) {
+                    const snippet = errMatch[1].trim();
+                    if (snippet && !errorSnippets.includes(snippet)) {
+                        errorSnippets.push(snippet);
+                        if (!lastBlocker) lastBlocker = snippet;
+                    }
+                }
+            }
+
+            // Capture partial result observations (non-SYSTEM, non-error, non-empty)
+            if (!lowered.includes('[system:') && !lowered.includes('error') && content.length > 20) {
+                const cleaned = content.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+                if (cleaned.length > 15 && resultSnippets.length < 2) {
+                    resultSnippets.push(cleaned.slice(0, 100));
+                }
+            }
+        }
+
+        // Always produce a message — never leave the user with total silence
+        const lines: string[] = [];
+
+        if (reason === 'loop-exhausted') {
+            lines.push(isContinuationTask
+                ? "⚠️ I got stuck in a loop trying to resume that task."
+                : "⚠️ I got stuck in a loop and couldn't complete your request.");
+        } else if (reason === 'action-failed') {
+            lines.push(isContinuationTask
+                ? "⚠️ I ran into a persistent error resuming the task."
+                : "⚠️ I ran into an error and couldn't complete your request.");
+        } else {
+            lines.push(isContinuationTask
+                ? "⚠️ I wasn't able to finish resuming the task."
+                : "⚠️ I wasn't able to finish your request.");
+        }
+
+        if (toolsAttempted.size > 0) {
+            lines.push(`What I tried: ${Array.from(toolsAttempted).slice(0, 5).join(', ')}`);
+        }
+
+        const blocker = lastBlocker || errorSnippets[0] || '';
+        if (blocker) {
+            lines.push(`Blocker: ${blocker.slice(0, 150)}`);
+        } else if (resultSnippets.length > 0) {
+            lines.push(`Last observation: ${resultSnippets[0]}`);
+        }
+
+        lines.push(reason === 'action-failed'
+            ? 'Please try again or provide any missing info (credentials, permissions, etc.).'
+            : 'Please try again or rephrase your request.');
+
+        return lines.join('\n');
+    }
+
     private async sendNoResponseFallback(action: Action, reason?: string): Promise<boolean> {
         const source = action.payload?.source;
         const sourceId = action.payload?.sourceId;
         if (!source) return false;
         if (source !== 'gateway-chat' && !sourceId) return false;
 
-        const message = reason
+        const groundedMessage = this.buildGroundedNoResponseMessage(action, reason);
+        const message = groundedMessage || (reason
             ? `🔄 I encountered a slight technical hitch while processing that (${reason.slice(0, 80)}...). I'm attempting to resolve it or you can try rephrasing.`
-            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.';
+            : '🔄 I hit a brief snag before I could deliver my full response. I am looking into it now.');
 
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'email') {
@@ -8193,6 +10089,7 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 if (!emailChannel) return false;
                 const subject = action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot: request update';
                 await emailChannel.sendEmail(sourceId, subject, message, action.payload?.inReplyTo, action.payload?.references);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'gateway-chat') {
@@ -8200,9 +10097,11 @@ The plugin handles all logic internally. See the plugin source for implementatio
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
+                    sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `fallback-${Date.now()}`
                 });
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
         } catch (e) {
@@ -8390,7 +10289,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
 
             // Only check follow-up-style actions (user asking about status/completion)
             const taskDesc = (action.payload?.description || '').toLowerCase();
-            const isFollowUpInquiry = /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
+            const continuationIntent = String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment';
+            const isFollowUpInquiry = continuationIntent || /\b(are (you|u) done|is it (ready|done|finished)|status|update|what('?s| is) (the )?(progress|status)|how('?s| is) it going|finished yet|ready yet|done yet|completed)\b/.test(taskDesc);
             if (!isFollowUpInquiry) return;
 
             // Check if any sent message acknowledges incomplete work
@@ -8449,7 +10349,8 @@ The plugin handles all logic internally. See the plugin source for implementatio
             // Build a description for the continuation task
             const contextHint = taskContextMemories.map(m => m.content?.slice(0, 100)).join(' | ');
 
-            const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Compile all available results and deliver a comprehensive response to the user.`;
+            const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+            const continuationDesc = `CONTINUATION: Resume the incomplete task that the user asked about. The user asked "${action.payload?.description?.slice(0, 100)}" and I acknowledged the work is not done. I MUST now actually complete it. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}${contextHint ? `Previous progress context: ${contextHint}` : 'Check episodic memory for the original task details.'}. Recover the intended deliverable before doing generic directory or memory exploration. Compile all available results and deliver a comprehensive response to the user.`;
 
             if (this.hasExistingRecoveryTask(
                 'empty_promise_recovery',
@@ -8515,11 +10416,157 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message)
             });
 
+            if (issues.length > 0) {
+                const completionReview = await this.reviewCompletionAuditIssues(action, {
+                    issues,
+                    messagesSent: context.messagesSent,
+                    substantiveDeliveriesSent: context.substantiveDeliveriesSent,
+                    sentMessagesInAction: context.sentMessagesInAction,
+                    taskComplexity: context.taskComplexity,
+                });
+
+                if (!completionReview.shouldBlock) {
+                    return { ok: true, issues: [] };
+                }
+            }
+
             return { ok: issues.length === 0, issues };
         } catch (e) {
             logger.debug(`Agent: Completion log audit failed (non-blocking): ${e}`);
             return { ok: true, issues: [] };
         }
+    }
+
+    private async reviewCompletionAuditIssues(
+        action: Action,
+        params: {
+            issues: string[];
+            messagesSent: number;
+            substantiveDeliveriesSent: number;
+            sentMessagesInAction: string[];
+            taskComplexity?: string;
+        }
+    ): Promise<{ shouldBlock: boolean; reason: string; usedLlm: boolean }> {
+        const fallback = {
+            shouldBlock: true,
+            reason: params.issues.join(' | '),
+            usedLlm: false,
+        };
+
+        if (params.issues.length === 0) {
+            return { shouldBlock: false, reason: 'No completion audit issues.', usedLlm: false };
+        }
+
+        // Silent termination remains a hard block; there is nothing ambiguous to review.
+        if (params.issues.some(issue => issue.includes('No user-visible message was sent'))) {
+            return fallback;
+        }
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return fallback;
+        }
+
+        try {
+            const taskDescription = typeof action.payload === 'string'
+                ? action.payload
+                : (action.payload?.description || 'Unknown task');
+            const systemPrompt = 'You review whether completion-audit issues should still block an action from being marked complete. Return strict compact JSON only: {"block":"yes|no","confidence":0-1,"reason":"..."}. Choose yes when the user is still missing a real final result. Choose no only when the flagged issues are misleading and the user already received a concrete enough answer, artifact, or resolved outcome.';
+            const userPrompt = `Task: """${taskDescription.slice(0, 500)}"""\nTask complexity: ${String(params.taskComplexity || 'standard')}\nMessages sent: ${params.messagesSent}\nSubstantive deliveries counted: ${params.substantiveDeliveriesSent}\n\nFlagged completion-audit issues:\n${params.issues.map((issue, index) => `${index + 1}. ${issue}`).join('\n')}\n\nRecent user-facing messages:\n${params.sentMessagesInAction.slice(-3).map((message, index) => `${index + 1}. ${message}`).join('\n') || 'NONE'}\n\nShould these issues still BLOCK completion right now?`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const block = String(parsed?.block || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+            const reason = String(parsed?.reason || '').trim();
+
+            if ((block === 'yes' || block === 'no') && Number.isFinite(confidence) && confidence >= 0.6) {
+                return {
+                    shouldBlock: block === 'yes',
+                    reason: reason || fallback.reason,
+                    usedLlm: true,
+                };
+            }
+        } catch (e) {
+            logger.debug(`Agent: Completion audit review failed, using deterministic fallback: ${e}`);
+        }
+
+        return fallback;
+    }
+
+    private shouldReviewDeliveryReconciliation(params: {
+        isUserFacingAction: boolean;
+        goalsMet: boolean;
+        substantiveDeliveriesSent: number;
+        messagesSent: number;
+        sentMessagesInAction: string[];
+        deliveryAudit: DeliveryAuditResult;
+    }): boolean {
+        const {
+            isUserFacingAction,
+            goalsMet,
+            substantiveDeliveriesSent,
+            messagesSent,
+            sentMessagesInAction,
+            deliveryAudit,
+        } = params;
+
+        if (!isUserFacingAction || goalsMet) return false;
+        if (substantiveDeliveriesSent <= 0) return false;
+        if (messagesSent <= 0) return false;
+
+        return true;
+    }
+
+    private async reviewDeliveryReconciliation(
+        action: Action,
+        params: {
+            deliveryAudit: DeliveryAuditResult;
+            messagesSent: number;
+            substantiveDeliveriesSent: number;
+            sentMessagesInAction: string[];
+            stepLedger: StepLedger;
+        }
+    ): Promise<{ shouldReconcile: boolean; reason: string; usedLlm: boolean }> {
+        const fallback = {
+            shouldReconcile: params.deliveryAudit.delivered,
+            reason: params.deliveryAudit.reason,
+            usedLlm: false,
+        };
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return fallback;
+        }
+
+        try {
+            const taskDescription = typeof action.payload === 'string'
+                ? action.payload
+                : (action.payload?.description || 'Unknown task');
+            const recentMessages = params.sentMessagesInAction.slice(-3).map((message, index) => `${index + 1}. ${message}`).join('\n');
+            const systemPrompt = 'You review whether an action should be reconciled as completed after guardrails stopped it. Return strict compact JSON only: {"reconcile":"yes|no","confidence":0-1,"reason":"..."}. Choose yes only if the user already received a concrete enough result, artifact, or answer to consider the task complete. Choose no when the user mainly received status/progress chatter, when the final answer is still missing, or when failures mean follow-up work is still required.';
+            const userPrompt = `Task: """${taskDescription.slice(0, 500)}"""\nMessages sent: ${params.messagesSent}\nSubstantive deliveries counted: ${params.substantiveDeliveriesSent}\nDelivery audit delivered=${params.deliveryAudit.delivered ? 'yes' : 'no'}\nDelivery audit unresolvedFailures=${params.deliveryAudit.unresolvedFailures ? 'yes' : 'no'}\nDelivery audit onlyStatus=${params.deliveryAudit.onlySentStatusMessages ? 'yes' : 'no'}\nDelivery audit reason: ${params.deliveryAudit.reason}\n\nRecent user-facing messages:\n${recentMessages || 'NONE'}\n\nExecution summary:\n${params.stepLedger.summarize().slice(0, 1200)}\n\nShould the original action be reconciled as COMPLETE right now?`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const reconcile = String(parsed?.reconcile || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+            const reason = String(parsed?.reason || '').trim();
+
+            if ((reconcile === 'yes' || reconcile === 'no') && Number.isFinite(confidence)) {
+                if (confidence >= 0.6) {
+                    return {
+                        shouldReconcile: reconcile === 'yes',
+                        reason: reason || params.deliveryAudit.reason,
+                        usedLlm: true,
+                    };
+                }
+            }
+        } catch (e) {
+            logger.debug(`Agent: Delivery reconciliation review failed, using deterministic fallback: ${e}`);
+        }
+
+        return fallback;
     }
 
     // ─── Post-Action Reflection & Learning ───────────────────────────
@@ -8663,6 +10710,11 @@ REFLECTION: <1-2 sentences>`;
      * Falls back to a lightweight heuristic if LLM is unavailable or fails.
      */
     private async classifyTaskComplexity(description: string): Promise<'trivial' | 'simple' | 'standard' | 'complex'> {
+        const normalizedDescription = String(description || '').trim().toLowerCase();
+        if (normalizedDescription.startsWith('continuation:')) {
+            return 'standard';
+        }
+
         // Extract the actual user message from the task description
         const quotedMatch = description.match(/"([^"]+)"/);
         const payload = (quotedMatch?.[1] || description).trim();
@@ -8788,6 +10840,21 @@ REFLECTION: <1-2 sentences>`;
     private messageContainsQuestion(message: string): boolean {
         const normalized = message.toLowerCase().trim();
 
+        // Soft follow-up offers are not blocking clarification questions.
+        // They should not pause execution or suppress later explicit clarification tools.
+        const optionalFollowUpPatterns = [
+            /\blet me know if you'd like\b/i,
+            /\blet me know if you want me to\b/i,
+            /\bif you'd like,? i can\b/i,
+            /\bif you want,? i can\b/i,
+            /\bi can also\b/i,
+            /\bwant me to also\b/i,
+            /\bwould you like me to also\b/i,
+        ];
+        if (!normalized.endsWith('?') && optionalFollowUpPatterns.some(pattern => pattern.test(normalized))) {
+            return false;
+        }
+
         // Direct question indicators
         const questionPatterns = [
             /\?$/,  // Ends with question mark
@@ -8821,6 +10888,97 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
+    private getClarificationClassifierCache(): Map<string, { blocking: boolean; expiresAt: number }> {
+        if (!this.clarificationClassifierCache) {
+            this.clarificationClassifierCache = new Map();
+        }
+        return this.clarificationClassifierCache;
+    }
+
+    private getDeliveryMessageClassifierCache(): Map<string, { label: 'acknowledgement' | 'substantive' | 'neutral'; expiresAt: number }> {
+        if (!this.deliveryMessageClassifierCache) {
+            this.deliveryMessageClassifierCache = new Map();
+        }
+        return this.deliveryMessageClassifierCache;
+    }
+
+    private isBlockingClarificationQuestionHeuristic(message: string): boolean {
+        const normalized = (message || '').toLowerCase().trim();
+        if (!normalized) return false;
+        if (!this.messageContainsQuestion(normalized)) return false;
+
+        const blockingPatterns = [
+            /\b(can|could) you (tell|provide|give|confirm|clarify|share|specify)\b/i,
+            /\bplease (confirm|clarify|specify|tell|share|provide)\b/i,
+            /\blet me know (which|what|whether|if)\b/i,
+            /\bi need (your|the)\b/i,
+            /\bbefore i can\b/i,
+            /\bto continue\b/i,
+            /\bwhat is your\b/i,
+            /\bwhich (one|option|environment|repo|branch|file|path)\b/i,
+            /\bwhat (is|are|should|would|do)\b/i,
+            /\bwhere (is|are|should)\b/i,
+            /\bdo you (want|need|prefer)\b/i,
+            /\bwould you (like|prefer|want)\b/i,
+            /\bshould i\b/i,
+            /\bis that (ok|okay|fine|correct|right)\b/i,
+        ];
+
+        return blockingPatterns.some(pattern => pattern.test(normalized));
+    }
+
+    private async isBlockingClarificationQuestion(message: string): Promise<boolean> {
+        const normalized = (message || '').trim();
+        if (!normalized) return false;
+        if (!this.messageContainsQuestion(normalized)) return false;
+
+        const heuristicVerdict = this.isBlockingClarificationQuestionHeuristic(normalized);
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            return heuristicVerdict;
+        }
+
+        const cacheKey = normalized.toLowerCase();
+        const cache = this.getClarificationClassifierCache();
+        const now = Date.now();
+        const cached = cache.get(cacheKey);
+        if (cached && cached.expiresAt > now) {
+            return cached.blocking;
+        }
+
+        try {
+            const systemPrompt = 'You classify whether an assistant message is asking a blocking clarification question. Return strict compact JSON only: {"label":"blocking|non_blocking","confidence":0-1}. Choose blocking only when the assistant genuinely needs user input before it can continue the current task. Optional follow-up offers, upsells, and post-completion choices are non_blocking.';
+            const userPrompt = `Assistant message:\n"""${normalized.slice(0, 500)}"""\n\nClassify whether this message REQUIRES the user to answer before the assistant can continue the current task.\n\nExamples:\n- blocking: "What is your store URL?"\n- blocking: "Before I continue, which environment should I use?"\n- non_blocking: "I fixed it. Want me to also add tests?"\n- non_blocking: "Let me know if you want me to package the patch too."`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const label = String(parsed?.label || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+
+            if ((label === 'blocking' || label === 'non_blocking') && Number.isFinite(confidence)) {
+                const blocking = confidence >= 0.6
+                    ? label === 'blocking'
+                    : heuristicVerdict;
+                cache.set(cacheKey, { blocking, expiresAt: now + 10 * 60 * 1000 });
+                return blocking;
+            }
+        } catch (e) {
+            logger.debug(`Agent: Clarification classifier failed, using heuristic fallback: ${e}`);
+        }
+
+        cache.set(cacheKey, { blocking: heuristicVerdict, expiresAt: now + 2 * 60 * 1000 });
+        return heuristicVerdict;
+    }
+
+    private async hasBlockingClarificationMessage(messages: string[]): Promise<boolean> {
+        for (const message of messages) {
+            if (await this.isBlockingClarificationQuestion(message)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private getGuidanceMode(): 'strict' | 'balanced' | 'fluid' {
         const mode = String(this.config.get('guidanceMode') || 'balanced').toLowerCase();
         if (mode === 'strict' || mode === 'balanced' || mode === 'fluid') return mode;
@@ -8849,6 +11007,141 @@ REFLECTION: <1-2 sentences>`;
         }
 
         return Array.from(new Set(matches)).slice(0, maxItems);
+    }
+
+    private isLikelyBase64Payload(text: string): boolean {
+        const trimmed = String(text || '').trim();
+        if (!trimmed) return false;
+        if (trimmed.startsWith('data:') && trimmed.includes(';base64,')) return true;
+        if (trimmed.length < 512) return false;
+        if (!/^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) return false;
+        const normalized = trimmed.replace(/[\r\n]/g, '');
+        return normalized.length >= 512 && normalized.length % 4 === 0;
+    }
+
+    private safeSerializeToolResult(toolResult: any): { raw: string; format: 'json' | 'text' } {
+        if (typeof toolResult === 'string') {
+            return { raw: toolResult, format: 'text' };
+        }
+
+        try {
+            return { raw: JSON.stringify(toolResult, null, 2), format: 'json' };
+        } catch {
+            return { raw: String(toolResult), format: 'text' };
+        }
+    }
+
+    private buildCompactToolResult(value: any, depth: number = 0): any {
+        if (value === null || value === undefined) return value;
+        if (depth >= 2) {
+            if (Array.isArray(value)) return `[array:${value.length}]`;
+            if (typeof value === 'object') return '[object]';
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (this.isLikelyBase64Payload(trimmed)) {
+                return `[base64 payload omitted: ${trimmed.length} chars]`;
+            }
+            if (trimmed.length > 800) {
+                return `${trimmed.slice(0, 280)} ... [${trimmed.length - 560} chars omitted] ... ${trimmed.slice(-280)}`;
+            }
+            return value;
+        }
+
+        if (typeof value !== 'object') return value;
+
+        if (Array.isArray(value)) {
+            const compactItems = value.slice(0, 5).map((entry) => this.buildCompactToolResult(entry, depth + 1));
+            if (value.length > 5) compactItems.push(`[${value.length - 5} more item(s)]`);
+            return compactItems;
+        }
+
+        const compact: Record<string, any> = {};
+        const entries = Object.entries(value);
+        for (const [key, entryValue] of entries.slice(0, 12)) {
+            compact[key] = this.buildCompactToolResult(entryValue, depth + 1);
+        }
+        if (entries.length > 12) {
+            compact.__truncatedKeys = entries.length - 12;
+        }
+        return compact;
+    }
+
+    private getToolResultArtifactDir(): string {
+        const dir = path.join(this.config.getDataHome(), 'tool-results');
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        return dir;
+    }
+
+    private persistToolResultArtifact(action: Action, step: number, toolName: string, rawContent: string, format: 'json' | 'text'): {
+        path: string;
+        bytes: number;
+        sha1: string;
+    } {
+        const digest = crypto.createHash('sha1').update(rawContent).digest('hex').slice(0, 12);
+        const ext = format === 'json' ? 'json' : 'txt';
+        const safeToolName = String(toolName || 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const fileName = `${action.id}-step-${step}-${safeToolName}-${digest}.${ext}`;
+        const artifactPath = path.join(this.getToolResultArtifactDir(), fileName);
+        fs.writeFileSync(artifactPath, rawContent, 'utf8');
+        return {
+            path: artifactPath,
+            bytes: Buffer.byteLength(rawContent, 'utf8'),
+            sha1: digest,
+        };
+    }
+
+    private formatToolResultForContext(action: Action, step: number, toolName: string, toolResult: any): {
+        summaryString: string;
+        memoryContent: string;
+        memoryMetadata: Record<string, any>;
+        ledgerSnippet: string;
+        artifactPath?: string;
+    } {
+        const serialized = this.safeSerializeToolResult(toolResult);
+        const compactResult = this.buildCompactToolResult(toolResult);
+        const compactString = typeof compactResult === 'string'
+            ? compactResult
+            : JSON.stringify(compactResult);
+
+        const shouldPersistArtifact =
+            serialized.raw.length > 6000 ||
+            this.isLikelyBase64Payload(serialized.raw) ||
+            (compactString !== serialized.raw && serialized.raw.length > 2000);
+
+        let artifactInfo: { path: string; bytes: number; sha1: string } | undefined;
+        if (shouldPersistArtifact) {
+            artifactInfo = this.persistToolResultArtifact(action, step, toolName, serialized.raw, serialized.format);
+        }
+
+        const summaryBase = compactString.length > 2000 ? `${compactString.slice(0, 2000)}...` : compactString;
+        const summaryString = artifactInfo
+            ? `${summaryBase} [raw tool result stored at ${artifactInfo.path}]`
+            : summaryBase;
+
+        return {
+            summaryString,
+            memoryContent: artifactInfo
+                ? `Tool ${toolName} returned a large result. Summary: ${summaryBase}. Raw artifact: ${artifactInfo.path} (${artifactInfo.bytes} bytes).`
+                : `Tool ${toolName} returned: ${summaryBase}`,
+            memoryMetadata: artifactInfo
+                ? {
+                    resultPreview: compactResult,
+                    resultArtifact: {
+                        path: artifactInfo.path,
+                        bytes: artifactInfo.bytes,
+                        sha1: artifactInfo.sha1,
+                        format: serialized.format,
+                    }
+                }
+                : { resultPreview: compactResult },
+            ledgerSnippet: summaryBase.slice(0, 200),
+            artifactPath: artifactInfo?.path,
+        };
     }
 
     private buildToolSignatureKey(toolName: string, metadata: any): string {
@@ -9009,12 +11302,12 @@ REFLECTION: <1-2 sentences>`;
         });
     }
 
-    private recordSuccessfulSideEffectDelivery(
+    private async recordSuccessfulSideEffectDelivery(
         action: Action,
         toolCall: { name: string; metadata?: any },
         resultString: string,
         successfulSideEffectKeys: Set<string>
-    ): { substantiveDelivery: boolean; outboundMessage: string } {
+    ): Promise<{ substantiveDelivery: boolean; outboundMessage: string }> {
         const toolMetadata = toolCall.metadata || {};
         const sideEffectKey = this.buildSideEffectKey(toolCall.name, toolMetadata);
         successfulSideEffectKeys.add(sideEffectKey);
@@ -9042,10 +11335,159 @@ REFLECTION: <1-2 sentences>`;
             }
         }
 
+        if (action.payload?.isHeartbeat) {
+            this.lastHeartbeatMessageSentAt = Date.now();
+        }
+
+        const deliveryCandidate = outboundMessage || resultString;
+        let deliveryLabel: 'acknowledgement' | 'substantive' | 'neutral' = 'neutral';
+        if (deliveryCandidate) {
+            deliveryLabel = await this.classifyDeliveryMessageQuality(deliveryCandidate);
+            if (outboundMessage && resultString && outboundMessage !== resultString) {
+                // Prime the cache for the tool result string as well, since later audits and
+                // side-effect bookkeeping may inspect either form depending on the tool.
+                await this.classifyDeliveryMessageQuality(resultString);
+            }
+        }
+
         return {
-            substantiveDelivery: this.isSubstantiveDeliveryMessage(resultString),
+            substantiveDelivery: deliveryLabel === 'substantive' || this.isSubstantiveDeliveryMessage(deliveryCandidate),
             outboundMessage
         };
+    }
+
+    private heartbeatHasConcreteLead(idleTimeMs: number, intervalMinutes: number): { shouldQueue: boolean; reason: string } {
+        const now = Date.now();
+        const queue = this.actionQueue.getQueue();
+        const recentFailureWindowMs = 6 * 60 * 60 * 1000;
+
+        const hasRecentFailedTask = queue.some(action => {
+            if (action.status !== 'failed' || action.payload?.isHeartbeat) return false;
+            const updatedAt = Date.parse(action.updatedAt || action.timestamp || '') || 0;
+            return updatedAt > 0 && (now - updatedAt) <= recentFailureWindowMs;
+        });
+        if (hasRecentFailedTask) {
+            return { shouldQueue: true, reason: 'recent-failed-task' };
+        }
+
+        const recentContext = this.memory.getRecentContext(12) || [];
+        const hasRecentObjectiveSignal = recentContext.some((memoryEntry: any) => {
+            const ts = memoryEntry?.timestamp ? new Date(memoryEntry.timestamp).getTime() : 0;
+            if (!ts || (now - ts) > recentFailureWindowMs) return false;
+            const content = String(memoryEntry?.content || '').toLowerCase();
+            return content.includes('[objective] active') ||
+                content.includes('[objective] failed') ||
+                content.includes('follow up') ||
+                content.includes('waiting for') ||
+                content.includes('resume when') ||
+                content.includes('urgent');
+        });
+        if (hasRecentObjectiveSignal) {
+            return { shouldQueue: true, reason: 'recent-objective-signal' };
+        }
+
+        const hasGuidedHeartbeatContext = this.heartbeatJobMeta.size > 0 || !!this.manageHeartbeatInstructions('read').trim();
+        if (hasGuidedHeartbeatContext) {
+            return { shouldQueue: true, reason: 'guided-heartbeat-context' };
+        }
+
+        const creativeHeartbeatThresholdMinutes = Math.max(intervalMinutes * 2, 45);
+        if (idleTimeMs >= creativeHeartbeatThresholdMinutes * 60 * 1000) {
+            return { shouldQueue: true, reason: 'long-idle-creative-window' };
+        }
+
+        return {
+            shouldQueue: false,
+            reason: `generic-idle-window-not-met (<${creativeHeartbeatThresholdMinutes}m and no concrete lead)`
+        };
+    }
+
+    private didHeartbeatProduceUsefulWork(params: {
+        stepLedger: StepLedger;
+        substantiveDeliveriesSent: number;
+        anyUserDeliverySuccess: boolean;
+    }): boolean {
+        const { stepLedger, substantiveDeliveriesSent, anyUserDeliverySuccess } = params;
+        if (substantiveDeliveriesSent > 0 || anyUserDeliverySuccess) return true;
+        return stepLedger.all().some(entry => entry.success);
+    }
+
+    private async runLightweightHeartbeat(reason: string): Promise<boolean> {
+        if (this.config.get('lightweightHeartbeatEnabled') === false) return false;
+
+        const configuredInterval = Number(this.config.get('lightweightHeartbeatIntervalMinutes') ?? 10);
+        const intervalMinutes = Math.max(1, Number.isFinite(configuredInterval) ? configuredInterval : 10);
+        const now = Date.now();
+        if ((now - this.lastLightweightHeartbeatAt) < intervalMinutes * 60 * 1000) {
+            return false;
+        }
+
+        this.lastLightweightHeartbeatAt = now;
+        const tasks: string[] = [];
+
+        try {
+            this.memory.flushToDisk();
+            tasks.push('memory-flush');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat memory flush skipped: ${e}`);
+        }
+
+        try {
+            const syncResult = this.syncSkillsRegistryNow();
+            if (syncResult.success) tasks.push('skills-sync');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat skills sync skipped: ${e}`);
+        }
+
+        try {
+            this.skills.loadPlugins(true);
+            tasks.push('plugin-verify');
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat plugin verify skipped: ${e}`);
+        }
+
+        const healthIntervalMinutes = Math.max(5, Number(this.config.get('pluginHealthCheckIntervalMinutes') || 15));
+        if ((now - this.lastPluginHealthCheckAt) >= healthIntervalMinutes * 60 * 1000) {
+            try {
+                const health = await this.skills.checkPluginsHealth();
+                this.lastPluginHealthCheckAt = now;
+                if (health.issues.length > 0) {
+                    tasks.push(`plugin-health:${health.issues.length}-issue(s)`);
+                    this.memory.saveMemory({
+                        id: `lightweight-heartbeat-plugin-health-${now}`,
+                        type: 'short',
+                        content: `[SYSTEM: Lightweight heartbeat detected ${health.issues.length} plugin health issue(s).]`,
+                        metadata: {
+                            source: 'lightweight-heartbeat',
+                            category: 'plugin-health',
+                            issues: health.issues.slice(0, 5),
+                        }
+                    });
+                } else if (health.healthy.length > 0) {
+                    tasks.push(`plugin-health:${health.healthy.length}`);
+                }
+            } catch (e) {
+                logger.debug(`Agent: Lightweight heartbeat plugin health skipped: ${e}`);
+            }
+        }
+
+        try {
+            const prep = this.selfTraining.prepareTrainingJobIfNeeded();
+            if (prep?.prepared) {
+                tasks.push(`self-training-prep:${prep.job?.id || 'prepared'}`);
+            }
+        } catch (e) {
+            logger.debug(`Agent: Lightweight heartbeat self-training prep skipped: ${e}`);
+        }
+
+        if (tasks.length === 0) {
+            return false;
+        }
+
+        this.lastHeartbeatProductive = true;
+        this.consecutiveIdleHeartbeats = 0;
+        logger.info(`Agent: Lightweight heartbeat ran (${reason}): ${tasks.join(', ')}`);
+        return true;
     }
 
     private async assessToolExecutionOutcome(params: {
@@ -9063,6 +11505,10 @@ REFLECTION: <1-2 sentences>`;
         resultString: string;
         resultIndicatesError: boolean;
         forceBreak: boolean;
+        memoryContent: string;
+        memoryMetadata: Record<string, any>;
+        ledgerSnippet: string;
+        artifactPath?: string;
     }> {
         const {
             action,
@@ -9078,7 +11524,8 @@ REFLECTION: <1-2 sentences>`;
         } = params;
 
         const toolSignature = this.buildToolSignatureKey(toolCall.name, toolCall.metadata || {});
-        const resultString = JSON.stringify(toolResult) || '';
+        const formattedResult = this.formatToolResultForContext(action, currentStep, toolCall.name, toolResult);
+        const resultString = formattedResult.summaryString;
         const resultIndicatesError = this.doesToolResultIndicateError(toolResult);
 
         if (resultIndicatesError) {
@@ -9105,6 +11552,10 @@ REFLECTION: <1-2 sentences>`;
                         resultString,
                         resultIndicatesError,
                         forceBreak: true,
+                        memoryContent: formattedResult.memoryContent,
+                        memoryMetadata: formattedResult.memoryMetadata,
+                        ledgerSnippet: formattedResult.ledgerSnippet,
+                        artifactPath: formattedResult.artifactPath,
                     };
                 }
                 skillFailCounts[toolCall.name] = 0;
@@ -9122,10 +11573,14 @@ REFLECTION: <1-2 sentences>`;
             resultString,
             resultIndicatesError,
             forceBreak: false,
+            memoryContent: formattedResult.memoryContent,
+            memoryMetadata: formattedResult.memoryMetadata,
+            ledgerSnippet: formattedResult.ledgerSnippet,
+            artifactPath: formattedResult.artifactPath,
         };
     }
 
-    private getToolExecutionBlockReason(params: {
+    private async getToolExecutionBlockReason(params: {
         action: Action;
         toolCall: { name: string; metadata?: any };
         toolMeta: { isSend?: boolean; isSideEffect?: boolean };
@@ -9135,9 +11590,10 @@ REFLECTION: <1-2 sentences>`;
         sentMessagesInAction?: string[];
         sentMessageAlreadyInStep?: boolean;
         bonusMessageSent?: boolean;
+        clarificationAlreadyAsked?: boolean;
         applyTurnCooldown?: boolean;
         contextLabel: 'main' | 'bonus';
-    }): string | null {
+    }): Promise<string | null> {
         const {
             action,
             toolCall,
@@ -9148,6 +11604,7 @@ REFLECTION: <1-2 sentences>`;
             sentMessagesInAction = [],
             sentMessageAlreadyInStep = false,
             bonusMessageSent = false,
+            clarificationAlreadyAsked = false,
             applyTurnCooldown = false,
             contextLabel,
         } = params;
@@ -9178,6 +11635,16 @@ REFLECTION: <1-2 sentences>`;
 
         if (applyTurnCooldown && toolMeta.isSend && sentMessageAlreadyInStep && !this.isSequentialUIComponent(toolCall.name)) {
             return `Blocked redundant tool '${toolCall.name}' due to turn cooldown (action ${action.id})`;
+        }
+
+        const priorBlockingClarificationAsked = clarificationAlreadyAsked || await this.hasBlockingClarificationMessage(sentMessagesInAction);
+
+        if (
+            contextLabel === 'main' &&
+            toolCall.name === 'request_supporting_data' &&
+            priorBlockingClarificationAsked
+        ) {
+            return `Blocked duplicate clarification request after a prior user-facing question in action ${action.id}`;
         }
 
         if (contextLabel !== 'bonus') {
@@ -9247,8 +11714,10 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: boolean;
             goalsMet: boolean;
             waitingForClarification: boolean;
+            clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
+            budgetMessagesSent: number;
             anyUserDeliverySuccess: boolean;
             substantiveDeliveriesSent: number;
             sentMessageCountInStep: number;
@@ -9268,6 +11737,7 @@ REFLECTION: <1-2 sentences>`;
             memoryContentPrefix?: string;
             pauseLogMessage: string;
             onBlocked?: (blockReason: string) => void;
+            stepLedger?: StepLedger;
         };
     }): Promise<{ replanAfterFailure: boolean }> {
         const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
@@ -9280,7 +11750,7 @@ REFLECTION: <1-2 sentences>`;
             const isSendTool = options.contextLabel === 'bonus' ? toolMeta.isSideEffect : toolMeta.isSend;
             const remainingQueuedTools = Math.max(0, (options.remainingQueuedToolsOffset || 0) + toolCalls.length - toolIndex - 1);
 
-            const blockReason = this.getToolExecutionBlockReason({
+            const blockReason = await this.getToolExecutionBlockReason({
                 action,
                 toolCall,
                 toolMeta,
@@ -9290,11 +11760,28 @@ REFLECTION: <1-2 sentences>`;
                 sentMessagesInAction,
                 sentMessageAlreadyInStep: state.sentMessageCountInStep > 0,
                 bonusMessageSent: state.bonusMessageSent,
+                clarificationAlreadyAsked: state.clarificationAlreadyAsked,
                 applyTurnCooldown: options.applyTurnCooldown,
                 contextLabel: options.contextLabel,
             });
             if (blockReason) {
                 options.onBlocked?.(blockReason);
+                if (
+                    options.contextLabel === 'main' &&
+                    toolCall.name === 'request_supporting_data' &&
+                    (state.clarificationAlreadyAsked || await this.hasBlockingClarificationMessage(sentMessagesInAction))
+                ) {
+                    logger.info(`Agent: ${blockReason}. Reusing the earlier user-facing question and pausing for clarification.`);
+                    this.memory.saveMemory({
+                        id: `${options.memoryIdPrefix}-${toolCall.name}-deduped`,
+                        type: 'short',
+                        content: '[SYSTEM: CLARIFICATION ALREADY ASKED] A prior user-facing message in this action already asked the required question. Do not send a second clarification message. Pause and wait for the user response instead.',
+                        metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, dedupedClarification: true }
+                    });
+                    state.waitingForClarification = true;
+                    state.forceBreak = true;
+                    break;
+                }
                 continue;
             }
 
@@ -9323,9 +11810,6 @@ REFLECTION: <1-2 sentences>`;
                 break;
             }
 
-            const resultString = options.contextLabel === 'bonus'
-                ? JSON.stringify(toolResult).slice(0, 500)
-                : (JSON.stringify(toolResult) || '');
             const toolDurationMs = Date.now() - toolStartedAt;
             const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
             const assessed = await this.assessToolExecutionOutcome({
@@ -9340,7 +11824,15 @@ REFLECTION: <1-2 sentences>`;
                 blockedFailedSignatures: options.blockedFailedSignatures,
                 skillFailCounts: options.skillFailCounts,
             });
-            const { resultIndicatesError, forceBreak: toolForceBreak } = assessed;
+            const {
+                resultIndicatesError,
+                forceBreak: toolForceBreak,
+                resultString,
+                memoryContent,
+                memoryMetadata,
+                ledgerSnippet,
+                artifactPath,
+            } = assessed;
 
             if (toolForceBreak) {
                 state.forceBreak = true;
@@ -9355,17 +11847,23 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 if (toolMeta.isSideEffect) {
-                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    const delivery = await this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
+                    state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
                     state.sentMessageCountInStep++;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+                    if (delivery.outboundMessage && !sentMessagesInAction.includes(delivery.outboundMessage)) {
+                        sentMessagesInAction.push(delivery.outboundMessage);
+                    }
+                    if (delivery.outboundMessage && await this.isBlockingClarificationQuestion(delivery.outboundMessage)) {
+                        state.clarificationAlreadyAsked = true;
+                    }
 
                     if (options.contextLabel === 'bonus') {
                         state.bonusMessageSent = true;
                         state.goalsMet = true;
-                        sentMessagesInAction.push(delivery.outboundMessage);
                         state.lastUserDeliveryAtMs = Date.now();
                     }
                 }
@@ -9375,12 +11873,29 @@ REFLECTION: <1-2 sentences>`;
                 id: `${options.memoryIdPrefix}-${toolCall.name}`,
                 type: 'short',
                 content: options.memoryContentPrefix
-                    ? `${options.memoryContentPrefix} Tool ${toolCall.name} returned: ${resultString}`
-                    : `Tool ${toolCall.name} returned: ${resultString.slice(0, 1000)}`,
+                    ? `${options.memoryContentPrefix} ${memoryContent}`
+                    : memoryContent,
                 metadata: options.contextLabel === 'bonus'
-                    ? { actionId: action.id, step: currentStep, tool: toolCall.name, result: toolResult }
-                    : { tool: toolCall.name, result: toolResult }
+                    ? { actionId: action.id, step: currentStep, tool: toolCall.name, result: toolResult, ...memoryMetadata }
+                    : { tool: toolCall.name, result: toolResult, ...memoryMetadata }
             });
+
+            // Record in step ledger for delivery audit
+            if (options.stepLedger) {
+                const argSnippet = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
+                options.stepLedger.record({
+                    step: currentStep,
+                    tool: toolCall.name,
+                    args: argSnippet,
+                    success: !resultIndicatesError,
+                    isDeep: !!toolMeta.isDeep && !isInternalTool,
+                    isSideEffect: !!toolMeta.isSideEffect,
+                    resultSnippet: resultIndicatesError ? undefined : ledgerSnippet,
+                    errorSnippet: resultIndicatesError ? ledgerSnippet : undefined,
+                    artifactPath,
+                    timestamp: Date.now(),
+                });
+            }
 
             if (resultIndicatesError && remainingQueuedTools > 0) {
                 logger.info(`Agent: ${options.pauseLogMessage.replace('{tool}', toolCall.name)}`);
@@ -9408,8 +11923,10 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: boolean;
             goalsMet: boolean;
             waitingForClarification: boolean;
+            clarificationAlreadyAsked: boolean;
             deepToolExecutedSinceLastMessage: boolean;
             messagesSent: number;
+            budgetMessagesSent: number;
             anyUserDeliverySuccess: boolean;
             substantiveDeliveriesSent: number;
             sentMessageCountInStep: number;
@@ -9422,6 +11939,7 @@ REFLECTION: <1-2 sentences>`;
             skillFailCounts: Record<string, number>;
             remainingQueuedToolsOffset?: number;
             memoryIdPrefix: string;
+            stepLedger?: StepLedger;
         };
     }): Promise<{ replanAfterFailure: boolean }> {
         const { action, currentStep, toolCalls, getSkillMeta, state, options } = params;
@@ -9493,7 +12011,15 @@ REFLECTION: <1-2 sentences>`;
                 blockedFailedSignatures: options.blockedFailedSignatures,
                 skillFailCounts: options.skillFailCounts,
             });
-            const { resultIndicatesError, resultString, forceBreak: toolForceBreak } = assessed;
+            const {
+                resultIndicatesError,
+                resultString,
+                forceBreak: toolForceBreak,
+                memoryContent,
+                memoryMetadata,
+                ledgerSnippet,
+                artifactPath,
+            } = assessed;
 
             if (toolForceBreak) {
                 state.forceBreak = true;
@@ -9507,20 +12033,47 @@ REFLECTION: <1-2 sentences>`;
                 }
 
                 if (toolMeta.isSideEffect) {
-                    const delivery = this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
+                    const delivery = await this.recordSuccessfulSideEffectDelivery(action, toolCall, resultString, options.successfulSideEffectKeys);
                     state.messagesSent++;
+                    state.budgetMessagesSent++;
                     state.anyUserDeliverySuccess = true;
                     state.deepToolExecutedSinceLastMessage = false;
                     if (delivery.substantiveDelivery) state.substantiveDeliveriesSent++;
+                    if (delivery.outboundMessage && await this.isBlockingClarificationQuestion(delivery.outboundMessage)) {
+                        state.clarificationAlreadyAsked = true;
+                    }
                 }
             }
 
             this.memory.saveMemory({
                 id: `${options.memoryIdPrefix}-${toolCall.name}-${Math.random().toString(36).slice(2, 7)}`,
                 type: 'short',
-                content: `[TOOL: ${toolCall.name}] Result: ${String(toolResult).slice(0, 2000)}`,
-                metadata: { actionId: action.id, step: currentStep, tool: toolCall.name, success: !resultIndicatesError }
+                content: `[TOOL: ${toolCall.name}] ${memoryContent}`,
+                metadata: {
+                    actionId: action.id,
+                    step: currentStep,
+                    tool: toolCall.name,
+                    success: !resultIndicatesError,
+                    ...memoryMetadata,
+                }
             });
+
+            // Record in step ledger for delivery audit
+            if (options.stepLedger) {
+                const argSnippet = JSON.stringify(toolCall.metadata || {}).slice(0, 200);
+                options.stepLedger.record({
+                    step: currentStep,
+                    tool: toolCall.name,
+                    args: argSnippet,
+                    success: !resultIndicatesError,
+                    isDeep: !!toolMeta.isDeep && !isInternalTool,
+                    isSideEffect: !!toolMeta.isSideEffect,
+                    resultSnippet: resultIndicatesError ? undefined : ledgerSnippet,
+                    errorSnippet: resultIndicatesError ? ledgerSnippet : undefined,
+                    artifactPath,
+                    timestamp: Date.now(),
+                });
+            }
 
             if (state.forceBreak) break;
         }
@@ -9532,8 +12085,10 @@ REFLECTION: <1-2 sentences>`;
         forceBreak: boolean;
         goalsMet: boolean;
         waitingForClarification: boolean;
+        clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
+        budgetMessagesSent: number;
         anyUserDeliverySuccess: boolean;
         substantiveDeliveriesSent: number;
         lastUserDeliveryAtMs: number;
@@ -9541,8 +12096,10 @@ REFLECTION: <1-2 sentences>`;
         forceBreak: boolean;
         goalsMet: boolean;
         waitingForClarification: boolean;
+        clarificationAlreadyAsked: boolean;
         deepToolExecutedSinceLastMessage: boolean;
         messagesSent: number;
+        budgetMessagesSent: number;
         anyUserDeliverySuccess: boolean;
         substantiveDeliveriesSent: number;
         lastUserDeliveryAtMs: number;
@@ -9551,33 +12108,38 @@ REFLECTION: <1-2 sentences>`;
             forceBreak: state.forceBreak,
             goalsMet: state.goalsMet,
             waitingForClarification: state.waitingForClarification,
+            clarificationAlreadyAsked: state.clarificationAlreadyAsked,
             deepToolExecutedSinceLastMessage: state.deepToolExecutedSinceLastMessage,
             messagesSent: state.messagesSent,
+            budgetMessagesSent: state.budgetMessagesSent,
             anyUserDeliverySuccess: state.anyUserDeliverySuccess,
             substantiveDeliveriesSent: state.substantiveDeliveriesSent,
             lastUserDeliveryAtMs: state.lastUserDeliveryAtMs,
         };
     }
 
-    private handleNoToolDecision(params: {
+    private async handleNoToolDecision(params: {
         action: Action;
         currentStep: number;
         decision: any;
         isChannelTask: boolean;
         messagesSent: number;
+        substantiveDeliveriesSent: number;
         maxSteps: number;
         maxNoToolsRetries: number;
         noToolsRetryCount: number;
-    }): {
+    }): Promise<{
+        forcedDeliverySent: boolean;
         noToolsRetryCount: number;
         outcome: 'continue' | 'break' | 'complete';
-    } {
+    }> {
         const {
             action,
             currentStep,
             decision,
             isChannelTask,
             messagesSent,
+            substantiveDeliveriesSent,
             maxSteps,
             maxNoToolsRetries,
             noToolsRetryCount,
@@ -9587,7 +12149,36 @@ REFLECTION: <1-2 sentences>`;
         if (goalsNotMet) {
             this.injectDecisionRecoveryGuidance(action, currentStep, decision);
             const nextRetryCount = noToolsRetryCount + 1;
+
+            const groundedLoopAnalysis = String(decision?.verification?.analysis || '').toLowerCase();
+            const isContinuationTask = String(action.payload?.continuationIntent || '').toLowerCase() === 'resume_prior_commitment' ||
+                String(action.payload?.description || '').toLowerCase().startsWith('continuation:');
+            const groundedMessageAvailable = isChannelTask && substantiveDeliveriesSent === 0 && !!this.buildGroundedNoResponseMessage(action, 'loop-exhausted');
+            const shouldForceGroundedDelivery = groundedMessageAvailable && (
+                nextRetryCount >= maxNoToolsRetries ||
+                (isContinuationTask && nextRetryCount >= 2 && groundedLoopAnalysis.includes('loop detected'))
+            );
+
+            if (shouldForceGroundedDelivery) {
+                logger.warn(`Agent: Forcing grounded delivery for ${action.id} after repeated no-tool continuation retries (${nextRetryCount}/${maxNoToolsRetries}).`);
+                const fallbackSent = await this.sendNoResponseFallback(action, 'loop-exhausted');
+                if (fallbackSent) {
+                    this.memory.saveMemory({
+                        id: `${action.id}-step-${currentStep}-grounded-delivery-forced`,
+                        type: 'short',
+                        content: `[SYSTEM: GROUNDED DELIVERY FORCED. Repeated no-tool recovery attempts were exhausted, so an evidence-based user update was sent instead of retrying again.]`,
+                        metadata: { actionId: action.id, step: currentStep, forcedDelivery: true }
+                    });
+                    return {
+                        forcedDeliverySent: true,
+                        noToolsRetryCount: nextRetryCount,
+                        outcome: 'break',
+                    };
+                }
+            }
+
             return {
+                forcedDeliverySent: false,
                 noToolsRetryCount: nextRetryCount,
                 outcome: nextRetryCount >= maxNoToolsRetries ? 'break' : 'continue',
             };
@@ -9604,17 +12195,20 @@ REFLECTION: <1-2 sentences>`;
                     metadata: { actionId: action.id, step: currentStep, error: 'silent_termination_blocked' }
                 });
                 return {
+                    forcedDeliverySent: false,
                     noToolsRetryCount: nextRetryCount,
                     outcome: 'continue',
                 };
             }
             return {
+                forcedDeliverySent: false,
                 noToolsRetryCount: nextRetryCount,
                 outcome: 'break',
             };
         }
 
         return {
+            forcedDeliverySent: false,
             noToolsRetryCount,
             outcome: 'complete',
         };
@@ -9827,41 +12421,21 @@ REFLECTION: <1-2 sentences>`;
         return !!this.config.get('reasoningExposeChecklist');
     }
 
-    private extractChecklistItemsFromPlan(plan: string, maxItems: number): string[] {
-        if (!plan || typeof plan !== 'string') return [];
-        const lines = plan
-            .split('\n')
-            .map(line => line.trim())
-            .filter(Boolean)
-            .filter(line => !/^execution\s*plan\s*:?$/i.test(line));
-
-        const items: string[] = [];
-        for (const line of lines) {
-            const numbered = line.match(/^\d+[\.)]\s+(.+)$/);
-            const bullet = line.match(/^[\-*•]\s+(.+)$/);
-            const checked = line.match(/^\[[ xX]\]\s+(.+)$/);
-            const value = (numbered?.[1] || bullet?.[1] || checked?.[1] || '').trim();
-            if (!value) continue;
-            items.push(value.replace(/\s+/g, ' '));
-            if (items.length >= maxItems) break;
-        }
-
-        return items;
-    }
-
     private buildChecklistPreviewMessage(executionPlan: string): string {
         const configured = Number(this.config.get('reasoningChecklistMaxItems') ?? 5);
         const maxItems = Number.isFinite(configured)
             ? Math.min(8, Math.max(3, Math.floor(configured)))
             : 5;
-        const items = this.extractChecklistItemsFromPlan(executionPlan, maxItems);
+        const parsedPlan = parseExecutionPlan(executionPlan, maxItems);
+        const items = parsedPlan.checklistItems;
         if (items.length === 0) {
             return '';
         }
 
         const body = items.map((item, index) => `${index + 1}. ${item}`).join('\n');
+        const budgetLine = parsedPlan.stepBudget ? `STEP BUDGET: ${parsedPlan.stepBudget} steps\n` : '';
         const robustTag = this.isRobustReasoningEnabled() ? '\n\nMode: robust reasoning (strict completion checks enabled).' : '';
-        return `🧭 Task checklist\n${body}${robustTag}`;
+        return `🧭 Task checklist\n${budgetLine}${body}${robustTag}`;
     }
 
     private async sendChecklistPreview(action: Action, message: string): Promise<boolean> {
@@ -9874,24 +12448,29 @@ REFLECTION: <1-2 sentences>`;
         try {
             if (source === 'telegram' && this.telegram) {
                 await this.telegram.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'whatsapp' && this.whatsapp) {
                 await this.whatsapp.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'discord' && this.discord) {
                 await this.discord.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'slack' && this.slack) {
                 await this.slack.sendMessage(sourceId, message);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'email') {
                 const emailChannel = this.getOrCreateEmailChannel();
                 if (!emailChannel) return false;
                 await emailChannel.sendEmail(sourceId, action.payload?.subject ? `Re: ${action.payload.subject}` : 'OrcBot response', message, action.payload?.inReplyTo, action.payload?.references);
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
             if (source === 'gateway-chat') {
@@ -9899,9 +12478,11 @@ REFLECTION: <1-2 sentences>`;
                     type: 'chat:message',
                     role: 'assistant',
                     content: message,
+                    sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `checklist-${Date.now()}`
                 });
+                await this.primeDeliveryMessageClassification(message);
                 return true;
             }
         } catch (e) {
@@ -9993,7 +12574,7 @@ REFLECTION: <1-2 sentences>`;
     }
 
     private getGuidanceRegexList(configKey: string, fallbackPatterns: string[]): RegExp[] {
-        const raw = this.config.get(configKey);
+        const raw = this.config?.get ? this.config.get(configKey) : undefined;
         const patterns = Array.isArray(raw) && raw.length > 0 ? raw : fallbackPatterns;
         const compiled: RegExp[] = [];
         for (const pattern of patterns) {
@@ -10007,7 +12588,7 @@ REFLECTION: <1-2 sentences>`;
     }
 
     private getGuidanceStopWords(): Set<string> {
-        const raw = this.config.get('guidanceQuestionStopWords');
+        const raw = this.config?.get ? this.config.get('guidanceQuestionStopWords') : undefined;
         const defaults = [
             'the', 'a', 'an', 'and', 'or', 'to', 'for', 'of', 'in', 'on', 'at', 'is', 'are', 'was', 'were',
             'be', 'been', 'being', 'do', 'does', 'did', 'can', 'could', 'would', 'should', 'will', 'please',
@@ -10092,8 +12673,8 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
-    private isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): boolean {
-        if (!this.messageContainsQuestion(currentMessage)) return false;
+    private async isRepeatedClarificationQuestion(currentMessage: string, priorMessages: string[]): Promise<boolean> {
+        if (!await this.isBlockingClarificationQuestion(currentMessage)) return false;
 
         const mode = this.getGuidanceMode();
         const configuredThreshold = Number(this.config.get('guidanceRepeatQuestionThreshold') ?? 0.65);
@@ -10106,7 +12687,7 @@ REFLECTION: <1-2 sentences>`;
 
         const current = (currentMessage || '').trim();
         for (const prior of priorMessages.slice(-6)) {
-            if (!this.messageContainsQuestion(prior)) continue;
+            if (!await this.isBlockingClarificationQuestion(prior)) continue;
             const score = this.questionSimilarity(current, prior);
             if (score >= similarityThreshold) {
                 return true;
@@ -10115,7 +12696,7 @@ REFLECTION: <1-2 sentences>`;
         return false;
     }
 
-    private isLikelyAcknowledgementMessage(message: string): boolean {
+    private isLikelyAcknowledgementMessageHeuristic(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
@@ -10158,7 +12739,7 @@ REFLECTION: <1-2 sentences>`;
      * Detect whether a sent message is a substantive delivery (not a short status/reassurance).
      * Used by completion gate to avoid terminating after only "working on it"-style replies.
      */
-    private isSubstantiveDeliveryMessage(message: string): boolean {
+    private isSubstantiveDeliveryMessageHeuristic(message: string): boolean {
         const normalized = (message || '').toLowerCase().trim();
         if (!normalized) return false;
 
@@ -10205,6 +12786,85 @@ REFLECTION: <1-2 sentences>`;
         if (/^first part of the execution plan\b/i.test(normalized)) return false;
 
         return true;
+    }
+
+    private getCachedDeliveryMessageLabel(message: string): 'acknowledgement' | 'substantive' | 'neutral' | null {
+        const normalized = (message || '').trim().toLowerCase();
+        if (!normalized) return null;
+        const cache = this.getDeliveryMessageClassifierCache();
+        const cached = cache.get(normalized);
+        if (!cached) return null;
+        if (cached.expiresAt <= Date.now()) {
+            cache.delete(normalized);
+            return null;
+        }
+        return cached.label;
+    }
+
+    private async classifyDeliveryMessageQuality(message: string): Promise<'acknowledgement' | 'substantive' | 'neutral'> {
+        const normalized = (message || '').trim();
+        if (!normalized) return 'neutral';
+
+        const cacheKey = normalized.toLowerCase();
+        const cache = this.getDeliveryMessageClassifierCache();
+        const cached = this.getCachedDeliveryMessageLabel(normalized);
+        if (cached) return cached;
+
+        const heuristicLabel: 'acknowledgement' | 'substantive' | 'neutral' = this.isLikelyAcknowledgementMessageHeuristic(normalized)
+            ? 'acknowledgement'
+            : this.isSubstantiveDeliveryMessageHeuristic(normalized)
+                ? 'substantive'
+                : 'neutral';
+
+        const llm = this.llm;
+        if (!llm?.callFast) {
+            cache.set(cacheKey, { label: heuristicLabel, expiresAt: Date.now() + 2 * 60 * 1000 });
+            return heuristicLabel;
+        }
+
+        try {
+            const systemPrompt = 'You classify assistant delivery messages. Return strict compact JSON only: {"label":"acknowledgement|substantive|neutral","confidence":0-1}. acknowledgement = status update, stall message, promise, or lightweight acknowledgement without concrete deliverable. substantive = concrete answer, completed result, verified finding, delivered artifact, or useful final/partial result. neutral = neither clearly acknowledgement nor clearly substantive.';
+            const userPrompt = `Assistant message:\n"""${normalized.slice(0, 600)}"""\n\nClassify this message for delivery auditing.\n\nExamples:\n- acknowledgement: "I am still working on it."\n- acknowledgement: "Hang tight, checking now."\n- substantive: "I fixed the config issue and restarted the service."\n- substantive: "Here is the branch list: main, dev, release."\n- substantive: "Voice note sent via Telegram to 8077489121"\n- neutral: "Okay."`;
+            const response = await llm.callFast(userPrompt, systemPrompt);
+            const jsonMatch = String(response || '').match(/\{[\s\S]*\}/);
+            const parsed = JSON.parse((jsonMatch ? jsonMatch[0] : response).trim());
+            const label = String(parsed?.label || '').toLowerCase();
+            const confidence = Number(parsed?.confidence ?? 0);
+
+            if ((label === 'acknowledgement' || label === 'substantive' || label === 'neutral') && Number.isFinite(confidence)) {
+                const resolvedLabel = confidence >= 0.6
+                    ? (label as 'acknowledgement' | 'substantive' | 'neutral')
+                    : heuristicLabel;
+                cache.set(cacheKey, { label: resolvedLabel, expiresAt: Date.now() + 10 * 60 * 1000 });
+                return resolvedLabel;
+            }
+        } catch (e) {
+            logger.debug(`Agent: Delivery message classifier failed, using heuristic fallback: ${e}`);
+        }
+
+        cache.set(cacheKey, { label: heuristicLabel, expiresAt: Date.now() + 2 * 60 * 1000 });
+        return heuristicLabel;
+    }
+
+    private async primeDeliveryMessageClassification(message: string): Promise<void> {
+        if (!message) return;
+        try {
+            await this.classifyDeliveryMessageQuality(message);
+        } catch (e) {
+            logger.debug(`Agent: Failed to prime delivery message classification: ${e}`);
+        }
+    }
+
+    private isLikelyAcknowledgementMessage(message: string): boolean {
+        const cached = this.getCachedDeliveryMessageLabel(message);
+        if (cached) return cached === 'acknowledgement';
+        return this.isLikelyAcknowledgementMessageHeuristic(message);
+    }
+
+    private isSubstantiveDeliveryMessage(message: string): boolean {
+        const cached = this.getCachedDeliveryMessageLabel(message);
+        if (cached) return cached === 'substantive';
+        return this.isSubstantiveDeliveryMessageHeuristic(message);
     }
 
     private currentThinkingMessageId: string | null = null;
@@ -10402,6 +13062,41 @@ REFLECTION: <1-2 sentences>`;
                     logger.info('Agent: Memory limits reloaded');
                 }
 
+                const selfTrainingChanged = [
+                    'selfTrainingEnabled',
+                    'selfTrainingMinQualityScore',
+                    'selfTrainingTrainOnIdle',
+                    'selfTrainingMinAcceptedExamples',
+                    'selfTrainingPreparationCooldownMinutes',
+                    'selfTrainingEvalPassThreshold',
+                    'selfTrainingEvalSampleSize',
+                    'selfTrainingLaunchCommand',
+                    'selfTrainingLaunchCwd',
+                    'selfTrainingPromotionMinAverageScore',
+                    'selfTrainingRequireEvalForPromotion',
+                    'modelName',
+                    'llmProvider'
+                ].some(key => !isDeepEqual(oldConfig[key], newConfig[key]));
+
+                if (selfTrainingChanged) {
+                    this.selfTraining.updateRuntimeConfig({
+                        enabled: newConfig.selfTrainingEnabled !== false,
+                        minQualityScore: Number(newConfig.selfTrainingMinQualityScore || 0.72),
+                        trainOnIdle: newConfig.selfTrainingTrainOnIdle !== false,
+                        minAcceptedExamples: Number(newConfig.selfTrainingMinAcceptedExamples || 25),
+                        preparationCooldownMinutes: Number(newConfig.selfTrainingPreparationCooldownMinutes || 60),
+                        evalPassThreshold: Number(newConfig.selfTrainingEvalPassThreshold || 0.55),
+                        evalSampleSize: Number(newConfig.selfTrainingEvalSampleSize || 10),
+                        launchCommandTemplate: newConfig.selfTrainingLaunchCommand,
+                        launchCwd: newConfig.selfTrainingLaunchCwd,
+                        modelName: newConfig.modelName,
+                        provider: newConfig.llmProvider || 'auto',
+                        promotionMinAverageScore: Number(newConfig.selfTrainingPromotionMinAverageScore || 0.7),
+                        requireEvalForPromotion: newConfig.selfTrainingRequireEvalForPromotion !== false,
+                    });
+                    logger.info('Agent: Self-training settings reloaded');
+                }
+
                 // Reload AgenticUser settings if changed
                 const agenticUserChanged =
                     oldConfig.agenticUserEnabled !== newConfig.agenticUserEnabled ||
@@ -10471,6 +13166,7 @@ REFLECTION: <1-2 sentences>`;
                         content: notification,
                         format: 'markdown',
                         agenticUser: true,
+                        sourceId,
                         timestamp: new Date().toISOString()
                     });
                     logger.info(`Agent: Sent AgenticUser notification to Gateway`);
@@ -10545,7 +13241,6 @@ REFLECTION: <1-2 sentences>`;
     private async checkHeartbeat() {
         this.detectStalledAction();
         this.recoverStaleInProgressActions();
-        await this.maybeRefreshWorldEventsContext();
 
         // Mutex: prevent overlapping heartbeat evaluations
         if (this.heartbeatRunning) {
@@ -10568,6 +13263,7 @@ REFLECTION: <1-2 sentences>`;
         if (postUserCooldownMs > 0 && this.lastUserActivityAt > 0) {
             const elapsedSinceUserActivity = Date.now() - this.lastUserActivityAt;
             if (elapsedSinceUserActivity < postUserCooldownMs) {
+                await this.runLightweightHeartbeat('recent-user-activity');
                 logger.debug(`Agent: Heartbeat skipped - recent user activity ${Math.floor(elapsedSinceUserActivity / 1000)}s ago`);
                 return;
             }
@@ -10576,6 +13272,7 @@ REFLECTION: <1-2 sentences>`;
         // Cooldown: skip if any heartbeat (including cron-scheduled) pushed a task very recently
         const heartbeatCooldownMs = 60_000;
         if (Date.now() - this.lastHeartbeatPushAt < heartbeatCooldownMs) {
+            await this.runLightweightHeartbeat('recent-heartbeat-push');
             return;
         }
 
@@ -10587,6 +13284,7 @@ REFLECTION: <1-2 sentences>`;
         // NOTE: 'waiting' tasks do NOT block heartbeat — the agent is idle while waiting
         // for user input, and heartbeat scheduled tasks should still fire.
         if (runningTasks.length > 0) {
+            await this.runLightweightHeartbeat('queue-active');
             logger.debug(`Agent: Heartbeat skipped - ${runningTasks.length} active task(s) in queue`);
             return;
         }
@@ -10595,11 +13293,27 @@ REFLECTION: <1-2 sentences>`;
             (a.status === 'pending' || a.status === 'in-progress') && a.payload?.isHeartbeat
         );
         if (pendingHeartbeat) {
+            await this.runLightweightHeartbeat('heartbeat-already-queued');
             logger.debug(`Agent: Heartbeat skipped - pending heartbeat task ${pendingHeartbeat.id} already queued`);
             return;
         }
 
         const idleTimeMs = Date.now() - this.lastActionTime;
+        const leadAssessment = this.heartbeatHasConcreteLead(idleTimeMs, intervalMinutes);
+        if (!leadAssessment.shouldQueue) {
+            await this.runLightweightHeartbeat(`no-concrete-lead:${leadAssessment.reason}`);
+            logger.debug(`Agent: Heartbeat skipped - ${leadAssessment.reason}`);
+            return;
+        }
+
+        try {
+            const prep = this.selfTraining.prepareTrainingJobIfNeeded();
+            if (prep.prepared) {
+                logger.info(`Agent: Prepared self-training job ${prep.job?.id} from ${prep.job?.acceptedTrajectoryCount} accepted trajectories during idle heartbeat window.`);
+            }
+        } catch (e) {
+            logger.warn(`Agent: Idle self-training preparation failed: ${e}`);
+        }
 
         // SMART COOLING: If the last heartbeat was unproductive (agent had nothing to do),
         // back off exponentially — 2×, 4×, up to 8× the base interval — so we don't spam
@@ -10610,13 +13324,16 @@ REFLECTION: <1-2 sentences>`;
         const effectiveIntervalMs = intervalMinutes * cooldownMultiplier * 60 * 1000;
 
         if ((Date.now() - this.lastHeartbeatAt) <= effectiveIntervalMs) {
+            await this.runLightweightHeartbeat('within-main-heartbeat-cooldown');
             // Still within cooldown window
             return;
         }
 
         this.heartbeatRunning = true;
         try {
-            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x`);
+            logger.info(`Agent: Heartbeat trigger - Agent idle for ${Math.floor(idleTimeMs / 60000)}m. Cooldown multiplier: ${cooldownMultiplier}x. Lead: ${leadAssessment.reason}`);
+
+            await this.maybeRefreshWorldEventsContext();
 
             // Check if we have workers available for delegation
             const runningWorkers = this.orchestrator.getRunningWorkers();
@@ -10647,6 +13364,7 @@ REFLECTION: <1-2 sentences>`;
 
     private buildSmartHeartbeatPrompt(idleTimeMs: number, workerCount: number, availableWorkers: number): string {
         const now = Date.now();
+        const worldEventsEnabled = this.config.get('worldEventsHeartbeatEnabled') !== false;
 
         // ── 0. Heartbeat state — per-check cadence tracking ──────────────────
         // heartbeat-state.json tracks when each class of proactive check last ran.
@@ -10827,9 +13545,11 @@ REFLECTION: <1-2 sentences>`;
         const worldEventAgeMinutes = this.lastWorldEventsRefreshAt > 0
             ? Math.floor((now - this.lastWorldEventsRefreshAt) / 60000)
             : -1;
-        const worldEventsContext = this.lastWorldEventsSummary
-            ? `LATEST WORLD EVENTS SIGNAL ${worldEventAgeMinutes >= 0 ? `(refreshed ${worldEventAgeMinutes}m ago)` : ''}:\n${this.lastWorldEventsSummary.slice(0, 1200)}`
-            : 'LATEST WORLD EVENTS SIGNAL: No recent world-event summary cached yet.';
+        const worldEventsContext = !worldEventsEnabled
+            ? ''
+            : this.lastWorldEventsSummary
+                ? `LATEST WORLD EVENTS SIGNAL ${worldEventAgeMinutes >= 0 ? `(refreshed ${worldEventAgeMinutes}m ago)` : ''}:\n${this.lastWorldEventsSummary.slice(0, 1200)}`
+                : 'LATEST WORLD EVENTS SIGNAL: No recent world-event summary cached yet.';
 
         return `
 PROACTIVE HEARTBEAT — Idle for ${idleMinutes} minutes.
@@ -10847,7 +13567,7 @@ ${recentContext.slice(0, 2000) || 'No recent activity'}
 TASK QUEUE:
 ${taskSummary}
 
-${worldEventsContext}
+${worldEventsContext ? `\n${worldEventsContext}\n` : ''}
 
 ACTIVE RECURRING SCHEDULES:
 ${activeSchedules}
@@ -10869,7 +13589,7 @@ Look at the context above and act on it:
 2. **Failed tasks** — Retry with a different strategy. Don't repeat the same approach.
 3. **Follow-ups** — User mentioned checking something later, monitoring something, or waiting for a result? Now is the time.
 4. **Stale conversations** — A contact hasn't been replied to? Compose a thoughtful response.
-5. **World-event deltas** — If world events suggest a risk/opportunity relevant to the user, propose a concrete, low-noise next action.
+${worldEventsEnabled ? '5. **World-event deltas** — If world events suggest a risk/opportunity relevant to the user, propose a concrete, low-noise next action.' : ''}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MODE B — CREATIVE INITIATIVE (your own ideas)
@@ -10922,10 +13642,10 @@ DECISION FRAMEWORK
 
 **Priority Order:**
 1. REACTIVE items from the last few hours (unfinished work, failed retries, pending follow-ups)
-2. Time-sensitive world-event implications relevant to user context (only if actionable)
-3. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
-4. Self-improvement (journal reflection, knowledge updates, skill analysis)
-5. If genuinely nothing valuable → terminate with goals_met: true
+2. CREATIVE initiatives that are clearly high-value (real insight, real preparation, real discovery)
+3. Self-improvement (journal reflection, knowledge updates, skill analysis)
+${worldEventsEnabled ? '4. Time-sensitive world-event implications relevant to user context (only if actionable)' : '4. If genuinely nothing valuable → terminate with goals_met: true'}
+${worldEventsEnabled ? '5. If genuinely nothing valuable → terminate with goals_met: true' : ''}
 
 **Time-of-day hints** (${dayOfWeek} ${timeOfDay}):
 ${timeOfDay === 'morning' ? '- Morning: Good time for briefings, daily prep, checking overnight messages' : ''}
@@ -10947,7 +13667,7 @@ ${autonomyLevel === 'low' ? '- Short idle. Prefer reacting to recent context ove
 - If you message the user, have something worth reading. No "just checking in" without substance.
 - ${messagingBarNote}
 - Don't repeat actions that recently failed unless you have a NEW strategy.
-- Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.
+${worldEventsEnabled ? '- Keep world-event usage contextual: no generic doomscroll summaries; only tie events to user-relevant impact or planning.' : ''}
 - If nothing meaningful to do, terminate cleanly (goals_met: true). Silence is better than noise.
 `;
     }
@@ -11404,6 +14124,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.isBusy = false;
         this.currentActionId = null;
         this.currentActionStartAt = null;
+        this.scheduleProcessNextAction('stalled action recovery');
     }
 
     private recoverStaleInProgressActions() {
@@ -11733,6 +14454,196 @@ Respond with a single actionable task description (one sentence). Be specific ab
         };
     }
 
+    private normalizeToolMetadata(toolName: string, rawMetadata: any): Record<string, any> {
+        const isRecord = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+        let normalized: Record<string, any>;
+        if (isRecord(rawMetadata)) {
+            normalized = { ...rawMetadata };
+        } else if (typeof rawMetadata === 'string') {
+            const trimmed = rawMetadata.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    normalized = isRecord(parsed) ? parsed : { input: rawMetadata };
+                } catch {
+                    normalized = { input: rawMetadata };
+                }
+            } else {
+                normalized = { input: rawMetadata };
+            }
+        } else if (rawMetadata == null) {
+            normalized = {};
+        } else {
+            normalized = { input: rawMetadata };
+        }
+
+        if (!normalized.query && typeof normalized.q === 'string') {
+            normalized.query = normalized.q;
+        }
+        if (!normalized.url && typeof normalized.link === 'string') {
+            normalized.url = normalized.link;
+        }
+        if (!normalized.message && typeof normalized.text === 'string') {
+            normalized.message = normalized.text;
+        }
+        if (!normalized.chatId && typeof normalized.chat_id === 'string') {
+            normalized.chatId = normalized.chat_id;
+        }
+        if (!normalized.channelId && typeof normalized.channel_id === 'string') {
+            normalized.channelId = normalized.channel_id;
+        }
+
+        if (!Object.keys(normalized).length && typeof rawMetadata === 'string' && rawMetadata.trim()) {
+            const text = rawMetadata.trim();
+            if (toolName.includes('search') || toolName.includes('fetch') || toolName.includes('browse')) {
+                normalized.query = text;
+            } else if (toolName.startsWith('send_') || toolName.includes('message')) {
+                normalized.message = text;
+            } else {
+                normalized.input = text;
+            }
+        }
+
+        return normalized;
+    }
+
+    private prepareToolCallForExecution(options: {
+        actionId: string;
+        step: number;
+        toolName: string;
+        metadata: any;
+        lane?: 'user' | 'autonomy';
+    }): { executable: boolean; reason?: string; toolName: string; metadata: Record<string, any> } {
+        const { actionId, step, toolName, metadata, lane } = options;
+        const knownSkill = this.skills.getSkill(toolName);
+        const normalizedMetadata = this.normalizeToolMetadata(toolName, metadata);
+
+        if (!knownSkill) {
+            const laneText = lane ? ` in lane ${lane}` : '';
+            const reason = `Unknown/hallucinated tool${laneText}: ${toolName}`;
+            logger.warn(`Agent: ${reason}`);
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId,
+                    step,
+                    source: 'guardrail',
+                    summary: reason,
+                    error: `Tool not registered in SkillsManager`,
+                    metadata: { proposedTool: toolName },
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return { executable: false, reason, toolName, metadata: normalizedMetadata };
+        }
+
+        return { executable: true, toolName, metadata: normalizedMetadata };
+    }
+
+    private isTransientToolError(errorText?: string): boolean {
+        const normalized = String(errorText || '').toLowerCase();
+        if (!normalized) return false;
+
+        return (
+            normalized.includes('timeout') ||
+            normalized.includes('timed out') ||
+            normalized.includes('etimedout') ||
+            normalized.includes('econnreset') ||
+            normalized.includes('econnrefused') ||
+            normalized.includes('network') ||
+            normalized.includes('fetch failed') ||
+            normalized.includes('429') ||
+            normalized.includes('rate limit') ||
+            normalized.includes('too many requests') ||
+            normalized.includes('temporar')
+        );
+    }
+
+    private async executeToolWithResilience(options: {
+        actionId: string;
+        step: number;
+        toolName: string;
+        metadata: any;
+        failureCounts: Record<string, number>;
+        lane?: 'user' | 'autonomy';
+    }): Promise<{ success: boolean; result?: any; error?: string; skippedByCircuit?: boolean }> {
+        const {
+            actionId,
+            step,
+            toolName,
+            metadata,
+            failureCounts,
+            lane
+        } = options;
+
+        const CIRCUIT_THRESHOLD = 3;
+        const currentFailures = failureCounts[toolName] || 0;
+        if (currentFailures >= CIRCUIT_THRESHOLD) {
+            const laneText = lane ? ` in lane ${lane}` : '';
+            const error = `Circuit open for ${toolName}${laneText} after ${currentFailures} failures`;
+            if (this.config.get('tforceEnabled') !== false) {
+                this.tforce.recordIncident({
+                    actionId,
+                    step,
+                    source: 'guardrail',
+                    summary: `Circuit breaker blocked tool${laneText}: ${toolName}`,
+                    error,
+                    timestamp: new Date().toISOString()
+                });
+            }
+            return { success: false, error, skippedByCircuit: true };
+        }
+
+        let attempt = 0;
+        let lastError = '';
+
+        while (true) {
+            attempt++;
+            try {
+                const result = await this.skills.executeSkill(toolName, metadata || {});
+                failureCounts[toolName] = 0;
+                return { success: true, result };
+            } catch (e) {
+                lastError = String(e);
+                const isSideEffect = this.getSkillMeta(toolName).isSideEffect;
+                const allowRetry = !isSideEffect && this.isTransientToolError(lastError);
+                const maxAttempts = allowRetry ? 2 : 1;
+
+                if (attempt < maxAttempts) {
+                    logger.warn(`Tool ${toolName} transient failure on attempt ${attempt}; retrying once`);
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                    continue;
+                }
+
+                failureCounts[toolName] = (failureCounts[toolName] || 0) + 1;
+                const laneText = lane ? ` in lane ${lane}` : '';
+                if (this.config.get('tforceEnabled') !== false) {
+                    this.tforce.recordIncident({
+                        actionId,
+                        step,
+                        source: 'tool',
+                        summary: `Tool failed${laneText}: ${toolName}`,
+                        error: lastError,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    if ((failureCounts[toolName] || 0) >= CIRCUIT_THRESHOLD) {
+                        this.tforce.recordIncident({
+                            actionId,
+                            step,
+                            source: 'guardrail',
+                            summary: `Circuit breaker opened${laneText}: ${toolName}`,
+                            error: `Reached ${failureCounts[toolName]} consecutive failures`,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                }
+
+                return { success: false, error: lastError };
+            }
+        }
+    }
+
     /**
      * Run a single decision cycle (used by worker processes)
      * Processes the next action in the queue and returns the result
@@ -11764,6 +14675,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolSteps = 0; // Track steps without tool execution
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3; // Fail if 3 consecutive steps produce no tools
+            const recentTools: string[] = [];
+            const toolFailureCounts: Record<string, number> = {};
 
             while (currentStep < MAX_STEPS) {
                 currentStep++;
@@ -11784,7 +14697,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
-                        recentTools: [],
+                        recentTools,
                         lastError,
                         totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
                         messagesSent: action.payload?.messagesSent || 0
@@ -11814,7 +14727,33 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
                             logger.info(`runOnce: Final tool execution: ${tool.name}`);
-                            await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            const prepared = this.prepareToolCallForExecution({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: tool.name,
+                                metadata: tool.metadata
+                            });
+                            if (!prepared.executable) {
+                                lastError = prepared.reason;
+                                continue;
+                            }
+
+                            const executeResult = await this.executeToolWithResilience({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: prepared.toolName,
+                                metadata: prepared.metadata,
+                                failureCounts: toolFailureCounts
+                            });
+
+                            if (executeResult.success) {
+                                recentTools.push(tool.name);
+                                if (recentTools.length > 8) {
+                                    recentTools.splice(0, recentTools.length - 8);
+                                }
+                            } else {
+                                lastError = executeResult.error;
+                            }
                         }
                     }
                     break;
@@ -11824,7 +14763,33 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     noToolSteps = 0; // Reset counter
                     for (const tool of decision.tools) {
                         logger.info(`runOnce: Executing tool: ${tool.name}`);
-                        await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        const prepared = this.prepareToolCallForExecution({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: tool.name,
+                            metadata: tool.metadata
+                        });
+                        if (!prepared.executable) {
+                            lastError = prepared.reason;
+                            continue;
+                        }
+
+                        const executeResult = await this.executeToolWithResilience({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: prepared.toolName,
+                            metadata: prepared.metadata,
+                            failureCounts: toolFailureCounts
+                        });
+
+                        if (executeResult.success) {
+                            recentTools.push(tool.name);
+                            if (recentTools.length > 8) {
+                                recentTools.splice(0, recentTools.length - 8);
+                            }
+                        } else {
+                            lastError = executeResult.error;
+                        }
                     }
                 } else {
                     noToolSteps++;
@@ -11925,6 +14890,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let noToolSteps = 0;
             let lastError: string | undefined;
             const MAX_NO_TOOL_STEPS = 3;
+            const recentTools: string[] = [];
+            const toolFailureCounts: Record<string, number> = {};
 
             // Initialize or reset tracking in the payload
             if (typeof action.payload.messagesSent !== 'number') {
@@ -11950,7 +14917,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         description: action.payload.description || '',
                         step: currentStep,
                         noToolSteps,
-                        recentTools: [],
+                        recentTools,
                         lastError,
                         totalDurationMs: this.currentActionStartAt ? Date.now() - this.currentActionStartAt : 0,
                         messagesSent: action.payload.messagesSent
@@ -11975,14 +14942,39 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     result = decision.content || 'Task completed';
                     if (decision.tools && decision.tools.length > 0) {
                         for (const tool of decision.tools) {
+                            const prepared = this.prepareToolCallForExecution({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: tool.name,
+                                metadata: tool.metadata,
+                                lane
+                            });
+                            if (!prepared.executable) {
+                                lastError = prepared.reason;
+                                continue;
+                            }
+
                             const toolMeta = this.getSkillMeta(tool.name);
-                            try {
-                                const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                            const executeResult = await this.executeToolWithResilience({
+                                actionId: action.id,
+                                step: currentStep,
+                                toolName: prepared.toolName,
+                                metadata: prepared.metadata,
+                                failureCounts: toolFailureCounts,
+                                lane
+                            });
+
+                            if (executeResult.success) {
+                                recentTools.push(tool.name);
+                                if (recentTools.length > 8) {
+                                    recentTools.splice(0, recentTools.length - 8);
+                                }
                                 if (toolMeta.isSideEffect) {
                                     action.payload.messagesSent++;
                                 }
-                            } catch (e) {
-                                logger.error(`Error executing skill ${tool.name}: ${e}`);
+                            } else {
+                                logger.error(`Error executing skill ${tool.name}: ${executeResult.error}`);
+                                lastError = executeResult.error;
                             }
                         }
                     }
@@ -12007,15 +14999,39 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 } else {
                     noToolSteps = 0;
                     for (const tool of decision.tools) {
+                        const prepared = this.prepareToolCallForExecution({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: tool.name,
+                            metadata: tool.metadata,
+                            lane
+                        });
+                        if (!prepared.executable) {
+                            lastError = prepared.reason;
+                            continue;
+                        }
+
                         const toolMeta = this.getSkillMeta(tool.name);
-                        try {
-                            const toolResult = await this.skills.executeSkill(tool.name, tool.metadata || {});
+                        const executeResult = await this.executeToolWithResilience({
+                            actionId: action.id,
+                            step: currentStep,
+                            toolName: prepared.toolName,
+                            metadata: prepared.metadata,
+                            failureCounts: toolFailureCounts,
+                            lane
+                        });
+
+                        if (executeResult.success) {
+                            recentTools.push(tool.name);
+                            if (recentTools.length > 8) {
+                                recentTools.splice(0, recentTools.length - 8);
+                            }
                             if (toolMeta.isSideEffect) {
                                 action.payload.messagesSent++;
                             }
-                        } catch (e) {
-                            logger.error(`Error executing skill ${tool.name}: ${e}`);
-                            lastError = String(e);
+                        } else {
+                            logger.error(`Error executing skill ${tool.name}: ${executeResult.error}`);
+                            lastError = executeResult.error;
                         }
                     }
                 }
@@ -12149,6 +15165,27 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
         });
         
+        // ── System Profiling ──
+        // Profile and cache the system the agent is running on so it knows
+        // what platforms, channels, and capabilities are available.
+        // This prevents the agent from asking "dumb questions" about the system.
+        try {
+            await this.systemProfiler.loadOrCreate({
+                memory: this.memory,
+                channels: {
+                    telegram: this.telegram,
+                    whatsapp: this.whatsapp,
+                    discord: this.discord,
+                    slack: this.slack,
+                    email: this.email
+                },
+                skills: this.skills,
+                config: this.config
+            });
+        } catch (e) {
+            logger.warn(`Agent: Failed to profile system: ${e}`);
+        }
+        
         // ── Ollama Warm-up ──
         // If Ollama is the selected provider, trigger a pre-load of the model
         // so it's ready when the first task hits the queue.
@@ -12200,7 +15237,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
     }
 
     private getInstanceLockPath(): string {
-        const actionQueuePath = this.config.get('actionQueuePath') || path.join(os.homedir(), '.orcbot', 'actions.json');
+        const actionQueuePath = this.config.get('actionQueuePath') || resolveDataHomePath('actions.json');
         return path.join(path.dirname(actionQueuePath), 'orcbot.lock');
     }
 
@@ -12523,6 +15560,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `onboarding-ack-${Date.now()}`
                 });
@@ -12642,6 +15680,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `onboarding-${Date.now()}`
                 });
@@ -12803,6 +15842,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     type: 'chat:message',
                     role: 'assistant',
                     content: msg,
+                    sourceId: metadata?.sourceId,
                     timestamp: new Date().toISOString(),
                     messageId: `reconnect-${Date.now()}`
                 });
@@ -13113,6 +16153,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     resumedFromWaitingAt: new Date().toISOString()
                 });
                 this.actionQueue.updateStatus(waitingAction.id, 'pending');
+                this.scheduleProcessNextAction(`resume waiting action ${waitingAction.id}`);
 
                 this.memory.saveMemory({
                     id: `${waitingAction.id}-resume-${messageId || Date.now()}`,
@@ -13246,6 +16287,20 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.persistentTypingTimer = null;
         }
     }
+
+    private scheduleProcessNextAction(reason: string): void {
+        setImmediate(() => {
+            if (this.isBusy) {
+                logger.debug(`Agent: Skipping scheduled queue wake-up (${reason}) because another action is already running`);
+                return;
+            }
+
+            this.processNextAction().catch(e => {
+                logger.error(`Agent: Scheduled queue wake-up failed (${reason}): ${e}`);
+            });
+        });
+    }
+
     private async processNextAction() {
         if (this.isBusy) return;
 
@@ -13258,7 +16313,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
         this.currentActionStartAt = Date.now();
         this.startPersistentTypingIndicator(action);
         try {
-            this.updateLastActionTime();
+            if (!action.payload?.isHeartbeat) {
+                this.updateLastActionTime();
+            }
 
             // HEARTBEAT FRESHNESS: Rebuild the heartbeat prompt at execution time.
             // Heartbeat prompts embed context (recent memories, task queue, timestamps)
@@ -13340,27 +16397,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
             logger.info(`Agent: Task complexity="${taskComplexity}" for action ${action.id}`);
 
             const isSimpleTask = taskComplexity === 'trivial' || taskComplexity === 'simple' || isGenericHeartbeat;
+            const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
             const actionStartedAtMs = Date.now();
             let lastUserDeliveryAtMs = actionStartedAtMs;
-
-            // PROGRESS FEEDBACK: Let user know we're working on non-trivial tasks
-            // Skip for heartbeats — no user initiated this task
-            // On retry attempts, say "trying again" rather than "working on it" so the
-            // user knows this is a recovery pass, not a fresh start.
-            if (!isSimpleTask && action.payload.source && !action.payload?.suppressProgressFeedback) {
-                const isRetryAttempt = (action.retry?.attempts ?? 0) > 0;
-                if (isRetryAttempt) {
-                    const progressSent = await this.sendProgressFeedback(action, 'retry', `Trying again on your request...`);
-                    if (progressSent) {
-                        lastUserDeliveryAtMs = Date.now();
-                    }
-                } else {
-                    const progressSent = await this.sendProgressFeedback(action, 'start');
-                    if (progressSent) {
-                        lastUserDeliveryAtMs = Date.now();
-                    }
-                }
-            }
 
             const executionPlan = isSimpleTask
                 ? 'Simple task: Respond directly and terminate. No multi-step planning needed.'
@@ -13373,11 +16412,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 );
 
             // Extract initial step budget from plan if available
-            let lastEstimatedRemaining = 0;
-            const budgetMatch = executionPlan.match(/STEP BUDGET:\s*(\d+)/i);
-            if (budgetMatch) {
-                lastEstimatedRemaining = parseInt(budgetMatch[1], 10);
-            }
+            let lastEstimatedRemaining = parseExecutionPlan(executionPlan).stepBudget ?? 0;
 
             const robustReasoningMode = this.isRobustReasoningEnabled();
             const exposeChecklistPreview = this.shouldExposeChecklistPreview();
@@ -13476,12 +16511,14 @@ Respond with a single actionable task description (one sentence). Be specific ab
             const MAX_MESSAGES = limits.messages;
             const isResearchTask = taskComplexity === 'complex';
             const isChannelTask = ['telegram', 'whatsapp', 'discord', 'slack', 'email'].includes((action.payload?.source || '').toString().toLowerCase());
+            const isUserFacingAction = isChannelTask || action.payload?.source === 'gateway-chat';
             const MAX_NO_TOOLS_RETRIES = 3; // Max retries when LLM returns no tools but goals_met=false
             const MAX_SKILL_REPEATS = this.config.get('maxToolRepeats') || 5; 
             const MAX_RESEARCH_SKILL_REPEATS = this.config.get('maxResearchToolRepeats') || 20;
             const MAX_CONSECUTIVE_FAILURES = 3; // Max consecutive failures of same skill before aborting
             let currentStep = 0;
             let messagesSent = 0;
+            let budgetMessagesSent = 0;
             let lastMessageContent = '';
             let lastStepToolSignatures = '';
             let loopCounter = 0;
@@ -13491,6 +16528,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let lastProgressFeedbackStep = 0;
             let consecutiveNonDeepTurns = 0;
             let waitingForClarification = false; // Track if we're paused for user input
+            let clarificationAlreadyAsked = false;
             const sentMessagesInAction: string[] = [];
             let substantiveDeliveriesSent = 0;
             let anyUserDeliverySuccess = false;
@@ -13507,6 +16545,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
             let deepWorkToolSucceeded = false; // Track if at least one deep work tool succeeded in this action
             let workPersistenceOverrides = 0; // Cap how many times work persistence can override termination
             const MAX_WORK_PERSISTENCE_OVERRIDES = 3; // After this many overrides, allow termination
+            const stepLedger = new StepLedger(); // Structured log of every tool call for delivery audit
             let imageGeneratedInAction = false; // Track if generate_image has been called in this action
             let imageDeliveredInAction = false; // Track if the generated image has been delivered
             let generatedImagePath = ''; // Path of the most recently generated image
@@ -13578,13 +16617,13 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
                 }
 
-                if (messagesSent >= MAX_MESSAGES) {
-                    logger.warn(`Agent: Message budget reached (${messagesSent}/${MAX_MESSAGES}) for action ${action.id}. Checking if task is truly done...`);
+                if (budgetMessagesSent >= MAX_MESSAGES) {
+                    logger.warn(`Agent: Delivery message budget reached (${budgetMessagesSent}/${MAX_MESSAGES}, visible=${messagesSent}) for action ${action.id}. Checking if task is truly done...`);
 
                     // REVIEW GATE: Don't blindly kill — ask the review layer if task is actually done
                     const budgetReviewResult = await this.reviewForcedTermination(
                         action, 'message_budget', currentStep,
-                        `Message budget reached (${messagesSent}/${MAX_MESSAGES}). Agent has been sending status updates while working.`,
+                        `Delivery message budget reached (${budgetMessagesSent}/${MAX_MESSAGES}) after ${messagesSent} visible messages. Agent may have been sending status updates while working.`,
                         { messagesSent, anyUserDeliverySuccess, substantiveDeliveriesSent }
                     );
 
@@ -13645,6 +16684,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 payload: {
                                     ...action.payload,
                                     messagesSent,
+                                    budgetMessagesSent,
+                                    substantiveDeliveriesSent,
                                     messagingLocked: messagesSent > 0,
                                     currentStep,
                                     maxSteps: lastEstimatedRemaining || MAX_STEPS,
@@ -13708,9 +16749,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     if (shouldSendProactive) {
                         const details = shouldForceInitial
-                            ? 'Started your task and working through it now...'
+                            ? (isRetryAttempt ? 'Trying again on your request...' : 'Started your task and working through it now...')
                             : `Still working and making progress (step ${currentStep})...`;
-                        const progressSent = await this.sendProgressFeedback(action, 'working', details);
+                        const progressType = shouldForceInitial && isRetryAttempt ? 'retry' : 'working';
+                        const progressSent = await this.sendProgressFeedback(action, progressType, details);
                         if (progressSent) {
                             lastUserDeliveryAtMs = Date.now();
                             messagesSent++;
@@ -13839,7 +16881,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             });
                             skillCallCounts[skillName] = 0;
                         } else {
-                            await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            const skillOveruseFeedback = await this.sendProgressFeedback(action, 'recovering', `Got stuck repeating '${skillName}'. Wrapping up with what I have...`);
+                            if (skillOveruseFeedback) messagesSent++;
                             forceBreak = true;
                             break;
                         }
@@ -13854,6 +16897,9 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             const sigPattern2 = `${last6Sigs[0]}|${last6Sigs[1]}`;
                             if (`${last6Sigs[2]}|${last6Sigs[3]}` === sigPattern2 && `${last6Sigs[4]}|${last6Sigs[5]}` === sigPattern2) {
                                 logger.warn(`Agent: Detected repeating pattern x3 in action ${action.id}. Breaking loop.`);
+                                const patternFeedback = await this.sendProgressFeedback(action, 'recovering', `Detected a repeated tool pattern — wrapping up with what I've found so far.`);
+                                if (patternFeedback) messagesSent++;
+                                forceBreak = true;
                                 break;
                             }
                         }
@@ -13867,8 +16913,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         forceBreak,
                         goalsMet,
                         waitingForClarification,
+                        clarificationAlreadyAsked,
                         deepToolExecutedSinceLastMessage,
                         messagesSent,
+                        budgetMessagesSent,
                         anyUserDeliverySuccess,
                         substantiveDeliveriesSent,
                         sentMessageCountInStep: sentMessageCountInThisStep,
@@ -13895,6 +16943,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     skillFailCounts,
                                     remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
                                     memoryIdPrefix: `${action.id}-step-${currentStep}`,
+                                    stepLedger,
                                 }
                             });
 
@@ -13903,8 +16952,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,
@@ -13934,6 +16985,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     remainingQueuedToolsOffset: Math.max(0, remainingToolsInBatch - batch.tools.length),
                                     memoryIdPrefix: `${action.id}-step-${currentStep}`,
                                     pauseLogMessage: 'Paused queued tools after {tool} failure.',
+                                    stepLedger,
                                     onBlocked: (blockReason) => {
                                         if (blockReason.includes('repeated failures')) logger.warn(`Agent: ${blockReason}`);
                                         else if (blockReason.includes('turn cooldown')) logger.info(`Agent: ${blockReason}`);
@@ -13947,8 +16999,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,
@@ -13983,17 +17037,25 @@ Respond with a single actionable task description (one sentence). Be specific ab
                     }
 
                     if (decision.verification?.goals_met) {
-                        // WORK PERSISTENCE CHECK: If work tools failed and the agent
-                        // only sent status messages (no substantive results), override
-                        // goals_met and force the agent to keep working.
-                        if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && substantiveDeliveriesSent === 0 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                        // WORK PERSISTENCE CHECK: Use the step ledger to determine if
+                        // deep work tools failed without recovery and only status messages
+                        // were sent. This is a real-time audit of what actually happened.
+                        const midActionAudit = auditDelivery({
+                            ledger: stepLedger,
+                            taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                            isChannelTask: isUserFacingAction,
+                            sentMessagesInAction,
+                            substantiveDeliveriesSent,
+                            isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
+                        });
+                        if (midActionAudit.unresolvedFailures && !midActionAudit.delivered && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
                             workPersistenceOverrides++;
-                            logger.warn(`Agent: Overriding goals_met for action ${action.id} \u2014 unresolved work failures exist and no substantive delivery was made. Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Continuing work.`);
+                            logger.warn(`Agent: Overriding goals_met for action ${action.id} \u2014 delivery audit: "${midActionAudit.reason}". Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Continuing work.`);
                             this.memory.saveMemory({
                                 id: `${action.id}-step-${currentStep}-work-persistence`,
                                 type: 'short',
-                                content: `[SYSTEM: WORK PERSISTENCE OVERRIDE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) \u2014 You told the user you are working on the task, but a tool failed and you haven't actually fixed the problem yet. Do NOT set goals_met=true until the underlying work is completed or you have genuinely exhausted all approaches. Try a different strategy to solve the error.]`,
-                                metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                                content: `[SYSTEM: WORK PERSISTENCE OVERRIDE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) \u2014 Step ledger shows: ${midActionAudit.reason}. You told the user you are working on the task, but you haven't actually fixed the problem yet. Do NOT set goals_met=true until the underlying work is completed or you have genuinely exhausted all approaches. Try a different strategy to solve the error.]`,
+                                metadata: { actionId: action.id, step: currentStep, workPersistence: true, auditReason: midActionAudit.reason }
                             });
                             continue;
                         }
@@ -14004,37 +17066,54 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                     if (forceBreak) break;
                 } else {
-                    const noToolOutcome = this.handleNoToolDecision({
+                    const noToolOutcome = await this.handleNoToolDecision({
                         action,
                         currentStep,
                         decision,
                         isChannelTask,
                         messagesSent,
+                        substantiveDeliveriesSent,
                         maxSteps: MAX_STEPS,
                         maxNoToolsRetries: MAX_NO_TOOLS_RETRIES,
                         noToolsRetryCount,
                     });
                     noToolsRetryCount = noToolOutcome.noToolsRetryCount;
+                    if (noToolOutcome.forcedDeliverySent) {
+                        messagesSent++;
+                        budgetMessagesSent++;
+                        anyUserDeliverySuccess = true;
+                        substantiveDeliveriesSent++;
+                        lastUserDeliveryAtMs = Date.now();
+                    }
                     if (noToolOutcome.outcome === 'continue') {
                         continue;
                     }
                     if (noToolOutcome.outcome === 'break') {
                         break;
                     }
-                    // WORK PERSISTENCE: If the agent wants to self-terminate but deep work
-                    // tools failed and the problem was never resolved, don't let it stop.
-                    // Inject guidance and force one more cycle so the LLM tries a different approach.
-                    if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded && currentStep < MAX_STEPS - 1 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
-                        workPersistenceOverrides++;
-                        const isLoopTermination = (decision.verification?.analysis || '').includes('loop prevention');
-                        logger.warn(`Agent: Blocking self-termination for ${action.id} — unresolved work failures (loop=${isLoopTermination}). Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Injecting recovery guidance.`);
-                        this.memory.saveMemory({
-                            id: `${action.id}-step-${currentStep}-work-persist-no-tool`,
-                            type: 'short',
-                            content: `[SYSTEM: WORK PERSISTENCE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) — You are trying to finish this task, but you have NOT resolved the underlying problem. A tool failed earlier and you haven't successfully completed the work. Do NOT just send a status message. You MUST either: (1) try a fundamentally different approach to fix the error, (2) search the web for solutions, or (3) if truly stuck after multiple attempts, send the user an honest message explaining exactly what failed and what alternatives exist. Then set goals_met=true.]`,
-                            metadata: { actionId: action.id, step: currentStep, workPersistence: true }
+                    // WORK PERSISTENCE: Use the step ledger to check if the agent is trying
+                    // to self-terminate while deep work tools failed and weren't resolved.
+                    if (currentStep < MAX_STEPS - 1 && workPersistenceOverrides < MAX_WORK_PERSISTENCE_OVERRIDES) {
+                        const selfTermAudit = auditDelivery({
+                            ledger: stepLedger,
+                            taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                            isChannelTask: isUserFacingAction,
+                            sentMessagesInAction,
+                            substantiveDeliveriesSent,
+                            isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
                         });
-                        continue;
+                        if (selfTermAudit.unresolvedFailures && !selfTermAudit.delivered) {
+                            workPersistenceOverrides++;
+                            const isLoopTermination = (decision.verification?.analysis || '').includes('loop prevention');
+                            logger.warn(`Agent: Blocking self-termination for ${action.id} — delivery audit: "${selfTermAudit.reason}" (loop=${isLoopTermination}). Override ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}. Injecting recovery guidance.`);
+                            this.memory.saveMemory({
+                                id: `${action.id}-step-${currentStep}-work-persist-no-tool`,
+                                type: 'short',
+                                content: `[SYSTEM: WORK PERSISTENCE (attempt ${workPersistenceOverrides}/${MAX_WORK_PERSISTENCE_OVERRIDES}) — Step ledger shows: ${selfTermAudit.reason}. You are trying to finish this task, but you have NOT resolved the underlying problem. Do NOT just send a status message. You MUST either: (1) try a fundamentally different approach to fix the error, (2) search the web for solutions, or (3) if truly stuck after multiple attempts, send the user an honest message explaining exactly what failed and what alternatives exist. Then set goals_met=true.]`,
+                                metadata: { actionId: action.id, step: currentStep, workPersistence: true, auditReason: selfTermAudit.reason }
+                            });
+                            continue;
+                        }
                     }
                     logger.info(`Agent: Action ${action.id} reached self-termination. Reasoning: ${decision.reasoning || 'No further tools needed.'}`);
                     goalsMet = true;
@@ -14095,6 +17174,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     payload: {
                                         ...action.payload,
                                         messagesSent,
+                                        budgetMessagesSent,
                                         messagingLocked: true,
                                         currentStep,
                                         executionPlan,
@@ -14135,8 +17215,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 sentMessageCountInStep: bonusMsgSentThisStep ? 1 : 0,
@@ -14158,6 +17240,7 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                     memoryIdPrefix: `${action.id}-bonus-${bonus}`,
                                     memoryContentPrefix: 'Bonus step:',
                                     pauseLogMessage: 'Paused bonus-step queued tools after {tool} failure.',
+                                    stepLedger,
                                     onBlocked: (blockReason) => {
                                         logger.warn(`Agent: ${blockReason}`);
                                     }
@@ -14168,8 +17251,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 forceBreak,
                                 goalsMet,
                                 waitingForClarification,
+                                clarificationAlreadyAsked,
                                 deepToolExecutedSinceLastMessage,
                                 messagesSent,
+                                budgetMessagesSent,
                                 anyUserDeliverySuccess,
                                 substantiveDeliveriesSent,
                                 lastUserDeliveryAtMs,
@@ -14240,20 +17325,61 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
-            const isUserFacingAction = action.payload?.source === 'telegram' || action.payload?.source === 'whatsapp' ||
-                action.payload?.source === 'discord' || action.payload?.source === 'slack' || action.payload?.source === 'email' || action.payload?.source === 'gateway-chat';
+            // ── Step Ledger Delivery Audit ──
+            // Instead of relying solely on flags, audit the actual tool execution log
+            // to determine if the action truly delivered on the task.
+            const deliveryAudit = auditDelivery({
+                ledger: stepLedger,
+                taskDescription: typeof action.payload === 'string' ? action.payload : (action.payload?.description || ''),
+                isChannelTask: isUserFacingAction,
+                sentMessagesInAction,
+                substantiveDeliveriesSent,
+                isLikelyAcknowledgementMessage: (msg: string) => this.isLikelyAcknowledgementMessage(msg),
+            });
+            logger.info(`Agent: Delivery audit for ${action.id}: delivered=${deliveryAudit.delivered}, reason="${deliveryAudit.reason}", unresolvedFailures=${deliveryAudit.unresolvedFailures}, onlyStatus=${deliveryAudit.onlySentStatusMessages}`);
+            if (stepLedger.size > 0) {
+                logger.debug(`Agent: Step ledger summary for ${action.id}:\n${deliveryAudit.summary}`);
+            }
+
             if (!goalsMet && isUserFacingAction && substantiveDeliveriesSent > 0) {
-                // Don't reconcile to completed if deep work tools failed and weren't resolved.
-                // Sending a status message like "I'm investigating" doesn't mean the task is done.
-                if (hasUnresolvedWorkFailure && !deepWorkToolSucceeded) {
-                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — unresolved work failures exist (only status messages were sent).`);
+                const needsReconciliationReview = this.shouldReviewDeliveryReconciliation({
+                    isUserFacingAction,
+                    goalsMet,
+                    substantiveDeliveriesSent,
+                    messagesSent,
+                    sentMessagesInAction,
+                    deliveryAudit,
+                });
+                const reconciliationDecision = needsReconciliationReview
+                    ? await this.reviewDeliveryReconciliation(action, {
+                        deliveryAudit,
+                        messagesSent,
+                        substantiveDeliveriesSent,
+                        sentMessagesInAction,
+                        stepLedger,
+                    })
+                    : {
+                        shouldReconcile: deliveryAudit.delivered,
+                        reason: deliveryAudit.reason,
+                        usedLlm: false,
+                    };
+
+                if (!reconciliationDecision.shouldReconcile) {
+                    logger.warn(`Agent: Skipping delivery reconciliation for ${action.id} — ${reconciliationDecision.usedLlm ? 'review' : 'delivery audit'} says task not completed: ${reconciliationDecision.reason}`);
                 } else {
-                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because user delivery succeeded.`);
+                    logger.warn(`Agent: Reconciled final status to completed for ${action.id} because ${reconciliationDecision.usedLlm ? 'lightweight review' : 'delivery audit'} confirmed: ${reconciliationDecision.reason}`);
                     this.memory.saveMemory({
                         id: `${action.id}-delivery-reconciled`,
                         type: 'short',
-                        content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion.]`,
-                        metadata: { actionId: action.id, deliveryReconciled: true, messagesSent, substantiveDeliveriesSent }
+                        content: `[SYSTEM: Final-state reconciliation: a substantive delivery/message was sent in this action. Marking task completed to avoid false failure due to guardrail exhaustion. Basis: ${reconciliationDecision.reason}]`,
+                        metadata: {
+                            actionId: action.id,
+                            deliveryReconciled: true,
+                            reconciliationReason: reconciliationDecision.reason,
+                            reconciliationReviewed: reconciliationDecision.usedLlm,
+                            messagesSent,
+                            substantiveDeliveriesSent
+                        }
                     });
                     goalsMet = true;
                 }
@@ -14316,7 +17442,8 @@ Respond with a single actionable task description (one sentence). Be specific ab
                             // Include the original task description so the recovery agent has clear
                             // context and doesn't confuse it with unrelated older tasks in memory.
                             const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
-                            const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. Review ONLY the step logs for action ${action.id} and send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
+                            const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+                            const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" gathered results but did not deliver a concrete final answer to the user. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}Review ONLY the step logs for action ${action.id} and recover the intended deliverable before doing generic directory or memory exploration. Send a specific answer now. Do not rehash or resend content from unrelated prior tasks.`;
                             await this.pushTask(
                                 recoveryDesc,
                                 9,
@@ -14333,10 +17460,70 @@ Respond with a single actionable task description (one sentence). Be specific ab
                                 action.lane === 'autonomy' ? 'autonomy' : 'user'
                             );
                             handedOffToRecovery = true;
+                            // Tell the user immediately so they're not left in silence
+                            // while the recovery task queues up.
+                            if (isUserFacingAction && messagesSent === 0) {
+                                const recoveryNotified = await this.sendProgressFeedback(action, 'recovering', `I gathered results but hit an issue delivering them. Retrying automatically now...`);
+                                if (recoveryNotified) messagesSent++;
+                            }
                         }
                     }
 
                     goalsMet = false;
+                }
+            }
+
+            if (
+                !goalsMet &&
+                !handedOffToRecovery &&
+                isUserFacingAction &&
+                !waitingForClarification &&
+                action.payload?.trigger !== 'completion_audit_recovery' &&
+                action.payload?.trigger !== 'empty_promise_recovery' &&
+                (messagesSent > 0 || anyUserDeliverySuccess || stepLedger.size > 0)
+            ) {
+                if (this.hasExistingRecoveryTask(
+                    'completion_audit_recovery',
+                    action.id,
+                    action.payload?.source,
+                    action.payload?.sourceId
+                )) {
+                    logger.info(`Agent: Skipping duplicate bounded recovery handoff for ${action.id}; recovery already exists or was recently completed.`);
+                    handedOffToRecovery = true;
+                } else {
+                    const originalDesc = (action.payload?.description || 'unknown task').slice(0, 300);
+                    const lastMessages = sentMessagesInAction.slice(-2).join(' | ');
+                    const continuationThreadContext = String(action.payload?.continuationThreadContext || action.payload?.replyToAgentText || '').trim();
+                    const recoveryDesc = `RECOVERY for action ${action.id}: The previous attempt at "${originalDesc}" stopped before the task was actually complete. ${continuationThreadContext ? `Recent assistant thread context: ${continuationThreadContext.slice(0, 500)}. ` : ''}Continue from the recorded execution state, finish the underlying task, and send the concrete final answer to the user. Recover the intended deliverable before doing generic directory or memory exploration. Recent user-facing messages: ${lastMessages || 'NONE'}. Step ledger summary: ${stepLedger.summarize().replace(/\n/g, '; ').slice(0, 800)}`;
+                    await this.pushTask(
+                        recoveryDesc,
+                        9,
+                        {
+                            source: action.payload?.source,
+                            sourceId: action.payload?.sourceId,
+                            chatId: action.payload?.chatId,
+                            userId: action.payload?.userId,
+                            senderName: action.payload?.senderName,
+                            sessionScopeId: action.payload?.sessionScopeId,
+                            trigger: 'completion_audit_recovery',
+                            originalActionId: action.id
+                        },
+                        action.lane === 'autonomy' ? 'autonomy' : 'user'
+                    );
+                    this.memory.saveMemory({
+                        id: `${action.id}-bounded-recovery-handoff`,
+                        type: 'short',
+                        content: `[SYSTEM: BOUNDED RECOVERY HANDOFF] This user-facing action stopped before the task was complete. A bounded recovery task has been queued to continue from the latest execution state and deliver the final answer.]`,
+                        metadata: { actionId: action.id, boundedRecovery: true }
+                    });
+                    handedOffToRecovery = true;
+                    // Tell the user immediately so they're not left hanging while
+                    // the recovery task queues. Only needed when no other message
+                    // was sent — if messagesSent > 0 they already heard from us.
+                    if (isUserFacingAction && messagesSent === 0) {
+                        const boundedRecoveryNotified = await this.sendProgressFeedback(action, 'recovering', `I ran into a problem completing that. Retrying automatically right now...`);
+                        if (boundedRecoveryNotified) messagesSent++;
+                    }
                 }
             }
 
@@ -14389,14 +17576,39 @@ Respond with a single actionable task description (one sentence). Be specific ab
             }
 
             // Record Final Response/Reasoning in Memory upon completion
+            const ledgerSummary = stepLedger.size > 0 ? ` Execution: ${stepLedger.summarize().replace(/\n/g, '; ')}` : '';
             this.memory.saveMemory({
                 id: `${action.id}-conclusion`,
                 type: 'episodic',
-                content: `Task ${goalsMet ? 'Finished' : 'Terminated without completion'}: ${action.payload.description}. Status: ${actionStatus}.`,
-                metadata: { actionId: action.id, steps: currentStep, goalsMet }
+                content: `Task ${goalsMet ? 'Finished' : 'Terminated without completion'}: ${action.payload.description}. Status: ${actionStatus}.${ledgerSummary}`.slice(0, 500),
+                metadata: { actionId: action.id, steps: currentStep, goalsMet, deliveryAudit: { delivered: deliveryAudit.delivered, reason: deliveryAudit.reason, unresolvedFailures: deliveryAudit.unresolvedFailures } }
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);
+
+            try {
+                const capture = this.selfTraining.captureCompletedAction({
+                    action,
+                    actionStatus,
+                    goalsMet,
+                    currentStep,
+                    messagesSent,
+                    substantiveDeliveriesSent,
+                    sentMessagesInAction,
+                    stepLedger,
+                    deliveryAudit,
+                    isUserFacingAction,
+                    modelName: this.config.get('modelName'),
+                    provider: this.config.get('llmProvider') || 'auto',
+                    skillCallCounts,
+                    isLikelyAcknowledgementMessage: (message: string) => this.isLikelyAcknowledgementMessage(message),
+                });
+                if (capture.captured) {
+                    logger.info(`Agent: Self-training trajectory ${capture.trajectoryId} captured for ${action.id} (accepted=${capture.accepted}, score=${capture.qualityScore}, reason=${capture.reason})`);
+                }
+            } catch (e) {
+                logger.warn(`Agent: Self-training capture failed for ${action.id}: ${e}`);
+            }
 
             // If ActionQueue silently auto-retried (flipped status back to 'pending'),
             // tell the user so they're not left wondering why nothing happened after
@@ -14422,11 +17634,15 @@ Respond with a single actionable task description (one sentence). Be specific ab
             // Only a heartbeat that exits with goalsMet=false (truly nothing to do) should
             // keep the counter incrementing, to back off genuinely idle periods.
             if (action.payload?.isHeartbeat) {
-                if (goalsMet) {
+                if (this.didHeartbeatProduceUsefulWork({
+                    stepLedger,
+                    substantiveDeliveriesSent,
+                    anyUserDeliverySuccess,
+                })) {
                     this.lastHeartbeatProductive = true;
                     this.consecutiveIdleHeartbeats = 0;
                 }
-                // !goalsMet → preset false + incremented counter from push time are correct
+                // No useful work → preserve the pre-set idle backoff state.
             } else {
                 // Real user-sourced or scheduled task completed — agent is active
                 this.lastHeartbeatProductive = true;
@@ -14482,6 +17698,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.currentActionId = null;
             this.currentActionStartAt = null;
 
+            const hasQueuedWork = this.actionQueue.getQueue().some(entry => entry.status === 'pending');
+            if (hasQueuedWork) {
+                this.scheduleProcessNextAction(`drain queue after ${action.id}`);
+            }
+
             // Flush any pending memory writes to disk before moving on
             this.memory.flushToDisk();
 
@@ -14494,6 +17715,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
             this.memory.consolidateInteractions(this.llm, 'session_end').catch(e => {
                 logger.error(`Background Interaction Consolidation Error: ${e}`);
             });
+            try {
+                this.selfTraining.prepareTrainingJobIfNeeded();
+            } catch (e) {
+                logger.warn(`Agent: Background self-training preparation failed: ${e}`);
+            }
         }
     }
 

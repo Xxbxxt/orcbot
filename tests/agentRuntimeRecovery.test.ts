@@ -25,7 +25,8 @@ function createAction(id: string): Action {
 }
 
 function createAgentHarness(options: {
-    action: Action;
+    action?: Action;
+    actions?: Action[];
     decisions: any[];
     executeSkill: (name: string, metadata: any) => Promise<any>;
     getSkill?: (name: string) => any;
@@ -34,7 +35,8 @@ function createAgentHarness(options: {
     configOverrides?: Record<string, any>;
 }) {
     const savedMemories: SavedMemory[] = [];
-    const actions = [options.action];
+    const actions = options.actions ? [...options.actions] : (options.action ? [options.action] : []);
+    const primaryAction = actions[0];
     const decisionMock = vi.fn(async () => {
         const next = options.decisions.shift();
         if (!next) {
@@ -94,7 +96,7 @@ function createAgentHarness(options: {
         saveMemory: vi.fn((entry: SavedMemory) => {
             savedMemories.push(entry);
         }),
-        getActionMemories: vi.fn(() => savedMemories.filter(entry => (entry.metadata?.actionId || '').toString() === options.action.id)),
+        getActionMemories: vi.fn((actionId?: string) => savedMemories.filter(entry => (entry.metadata?.actionId || '').toString() === String(actionId || primaryAction?.id || ''))),
         cleanupActionMemories: vi.fn(),
         flushToDisk: vi.fn(),
         consolidate: vi.fn().mockResolvedValue(undefined),
@@ -158,6 +160,7 @@ function createAgentHarness(options: {
 
     return {
         agent,
+        actions,
         savedMemories,
         decisionMock,
         executeSkillMock,
@@ -210,6 +213,206 @@ describe('Agent runtime recovery supervision', () => {
         expect(harness.agent.currentActionId).toBeNull();
     });
 
+    it('builds a grounded no-response fallback from actual continuation evidence', () => {
+        const action = createAction('continuation-fallback');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "are u done" about the earlier Shopify setup.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.savedMemories.push(
+            {
+                id: 'continuation-fallback-step-2-browser_navigate',
+                type: 'short',
+                content: 'Tool browser_navigate returned: {"url":"https://admin.shopify.com/","title":"Log in — Shopify"}',
+                metadata: { actionId: action.id, step: 2, tool: 'browser_navigate' }
+            },
+            {
+                id: 'continuation-fallback-step-3-browser_vision',
+                type: 'short',
+                content: '[SYSTEM: WORKFLOW_SIGNAL] browser_vision failed: Error analyzing screenshot: Error: OpenAI API key not configured',
+                metadata: { actionId: action.id, step: 3, tool: 'browser_vision' }
+            },
+            {
+                id: 'continuation-fallback-step-2-search_memory_logs',
+                type: 'short',
+                content: 'Tool search_memory_logs returned: []',
+                metadata: { actionId: action.id, step: 2, tool: 'search_memory_logs' }
+            }
+        );
+
+        const message = (harness.agent as any).buildGroundedNoResponseMessage(action, 'action-failed');
+
+        expect(message).toContain('Quick grounded update: not done yet.');
+        expect(message).toContain('Shopify admin login page');
+        expect(message).toContain('OpenAI API key is not configured');
+        expect(message).toContain('Shopify admin login email');
+    });
+
+    it('forces grounded delivery early for looping continuation actions with no tools', async () => {
+        const action = createAction('continuation-loop');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "are u done" about the Shopify setup.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.buildGroundedNoResponseMessage = vi.fn(() => 'Quick grounded update: not done yet.');
+        harness.agent.sendNoResponseFallback = vi.fn(async () => true);
+
+        const outcome = await (harness.agent as any).handleNoToolDecision({
+            action,
+            currentStep: 4,
+            decision: {
+                verification: {
+                    goals_met: false,
+                    analysis: 'Loop detected (4x repeated response). No message sent to user yet — agent must deliver available results before terminating.'
+                },
+                tools: []
+            },
+            isChannelTask: true,
+            messagesSent: 0,
+            substantiveDeliveriesSent: 0,
+            maxSteps: 15,
+            maxNoToolsRetries: 3,
+            noToolsRetryCount: 1,
+        });
+
+        expect(harness.agent.sendNoResponseFallback).toHaveBeenCalledWith(action, 'loop-exhausted');
+        expect(outcome.forcedDeliverySent).toBe(true);
+        expect(outcome.outcome).toBe('break');
+    });
+
+    it('forces grounded delivery for looping continuation actions after status-only messages', async () => {
+        const action = createAction('continuation-loop-status-only');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: '8077489121',
+            description: 'CONTINUATION: The user asked on telegram "any new updates" about the earlier task.',
+            continuationIntent: 'resume_prior_commitment'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [],
+            executeSkill: async () => ({ success: true })
+        });
+
+        harness.agent.buildGroundedNoResponseMessage = vi.fn(() => 'Quick grounded update: not done yet. I checked the real work state and I still only have environment progress, not the deliverable.');
+        harness.agent.sendNoResponseFallback = vi.fn(async () => true);
+
+        const outcome = await (harness.agent as any).handleNoToolDecision({
+            action,
+            currentStep: 5,
+            decision: {
+                verification: {
+                    goals_met: false,
+                    analysis: 'Loop detected (4x repeated response). Only status messages sent — agent must deliver a substantive answer or explain what went wrong.'
+                },
+                tools: []
+            },
+            isChannelTask: true,
+            messagesSent: 1,
+            substantiveDeliveriesSent: 0,
+            maxSteps: 15,
+            maxNoToolsRetries: 3,
+            noToolsRetryCount: 1,
+        });
+
+        expect(harness.agent.sendNoResponseFallback).toHaveBeenCalledWith(action, 'loop-exhausted');
+        expect(outcome.forcedDeliverySent).toBe(true);
+        expect(outcome.outcome).toBe('break');
+    });
+
+    it('continues draining pending work after finishing the current action', async () => {
+        vi.useFakeTimers();
+        try {
+            const first = createAction('queued-first');
+            const second = createAction('queued-second');
+            const harness = createAgentHarness({
+                actions: [first, second],
+                decisions: [
+                    {
+                        reasoning: 'First action is already complete.',
+                        verification: { goals_met: true, analysis: 'Done.' },
+                        tools: []
+                    },
+                    {
+                        reasoning: 'Second action is already complete.',
+                        verification: { goals_met: true, analysis: 'Done.' },
+                        tools: []
+                    }
+                ],
+                executeSkill: async () => ({ success: true }),
+                taskComplexity: 'trivial'
+            });
+
+            await (harness.agent as any).processNextAction();
+            await vi.runAllTimersAsync();
+
+            expect(harness.decisionMock).toHaveBeenCalledTimes(2);
+            expect(harness.updateStatusMock).toHaveBeenCalledWith(first.id, 'completed');
+            expect(harness.updateStatusMock).toHaveBeenCalledWith(second.id, 'completed');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not send a premature start status before real deep work is planned', async () => {
+        const action = createAction('truthful-progress-action');
+        action.payload.source = 'telegram';
+        action.payload.sourceId = 'chat-1';
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Begin with real tool work.',
+                    verification: { goals_met: false, analysis: 'Need deep work first' },
+                    tools: [{ name: 'alpha', metadata: { command: 'real-work' } }]
+                },
+                {
+                    reasoning: 'The work is complete.',
+                    verification: { goals_met: true, analysis: 'Done.' },
+                    tools: []
+                }
+            ],
+            executeSkill: async () => ({ success: true }),
+            taskComplexity: 'standard',
+            configOverrides: {
+                progressFeedbackEnabled: true,
+                progressFeedbackTypingOnly: false,
+                progressFeedbackForceInitial: true
+            }
+        });
+        harness.agent.sendProgressFeedback = vi.fn(async () => true);
+
+        await (harness.agent as any).processNextAction();
+
+        const progressCalls = harness.agent.sendProgressFeedback.mock.calls;
+        expect(progressCalls.some((call: any[]) => call[1] === 'start')).toBe(false);
+        expect(progressCalls[0]?.[1]).toBe('working');
+        expect(progressCalls[0]?.[2]).toContain('Started your task');
+    });
+
     it('replans immediately after a serial tool failure and skips later tools in that batch', async () => {
         const action = createAction('serial-action');
         const decisions = [
@@ -220,6 +423,11 @@ describe('Agent runtime recovery supervision', () => {
                     { name: 'alpha', metadata: { command: 'slow-op' } },
                     { name: 'beta', metadata: { command: 'should-not-run' } }
                 ]
+            },
+            {
+                reasoning: 'Try a recovery path after the failure.',
+                verification: { goals_met: false, analysis: 'Need one real recovery step' },
+                tools: [{ name: 'recover_alpha', metadata: { command: 'fallback-op' } }]
             },
             {
                 reasoning: 'Recovered after failure.',
@@ -239,9 +447,10 @@ describe('Agent runtime recovery supervision', () => {
 
         await (harness.agent as any).processNextAction();
 
-        expect(harness.decisionMock).toHaveBeenCalledTimes(2);
+        expect(harness.decisionMock).toHaveBeenCalledTimes(3);
         const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
         expect(executedToolNames[0]).toBe('alpha');
+        expect(executedToolNames).toContain('recover_alpha');
         expect(executedToolNames).not.toContain('beta');
 
         const workflowSignal = harness.savedMemories.find(entry => entry.content.includes('WORKFLOW_SIGNAL'));
@@ -476,13 +685,54 @@ describe('Agent runtime recovery supervision', () => {
         });
 
         await (harness.agent as any).processNextAction();
-
         const sendCalls = harness.executeSkillMock.mock.calls
             .filter(call => call[0] === 'send_reply')
             .map(call => call[1]?.message);
 
         expect(sendCalls).toEqual(['First reply']);
         expect(action.status).toBe('completed');
+    });
+
+    it('reuses an earlier user-facing question instead of sending request_supporting_data later in the same action', async () => {
+        const action = createAction('clarification-dedup-action');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: 'chat-1',
+            description: 'Help the user continue setup and ask for the missing store URL if needed.'
+        };
+
+        const decisions = [
+            {
+                reasoning: 'Ask the user for the missing detail in the normal reply.',
+                verification: { goals_met: false, analysis: 'Need the user to answer first.' },
+                tools: [{ name: 'send_reply', metadata: { message: 'I can build it, but what is your store URL?', chatId: 'chat-1' } }]
+            },
+            {
+                reasoning: 'Ask for supporting data.',
+                verification: { goals_met: false, analysis: 'Need clarification before continuing.' },
+                tools: [{ name: 'request_supporting_data', metadata: { question: 'What is your store URL?' } }]
+            }
+        ];
+
+        const harness = createAgentHarness({
+            action,
+            decisions,
+            getSkill: (name: string) => {
+                if (name === 'send_reply') return { isSideEffect: true, isSend: true };
+                if (name === 'request_supporting_data') return { isSideEffect: true, isSend: true };
+                return { isSideEffect: false, isSend: false };
+            },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message || metadata?.question })
+        });
+
+        await (harness.agent as any).processNextAction();
+
+        const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
+        expect(executedToolNames).toEqual(['send_reply']);
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'waiting');
+        expect(harness.savedMemories.some(entry => entry.content.includes('CLARIFICATION ALREADY ASKED'))).toBe(true);
+        expect(action.status).toBe('waiting');
     });
 
     it('passes metadata arguments through the shared parallel executor', async () => {
@@ -554,5 +804,307 @@ describe('Agent runtime recovery supervision', () => {
         const executedToolNames = harness.executeSkillMock.mock.calls.map(call => call[0]);
         expect(executedToolNames).toEqual(['send_voice_note']);
         expect(action.status).toBe('completed');
+    });
+
+    it('does not count automatic progress updates against the delivery message budget', async () => {
+        const action = createAction('progress-budget-action');
+        action.payload = {
+            ...action.payload,
+            source: 'telegram',
+            sourceId: 'chat-1',
+            description: 'Investigate a long-running issue and send the final answer when complete.'
+        };
+
+        const decisions = [
+            ...Array.from({ length: 13 }, (_, index) => ({
+                reasoning: `Continue deep work step ${index + 1}.`,
+                verification: { goals_met: false, analysis: 'Still working through the task.' },
+                tools: [{ name: `deep_work_${index + 1}`, metadata: { query: `step-${index + 1}` } }]
+            })),
+            {
+                reasoning: 'Deliver the final answer now that the work is complete.',
+                verification: { goals_met: true, analysis: 'Final answer is ready.' },
+                tools: [{ name: 'send_reply', metadata: { message: 'The issue is fixed. I found the bad config and corrected it.', chatId: 'chat-1' } }]
+            }
+        ];
+
+        const harness = createAgentHarness({
+            action,
+            decisions,
+            taskComplexity: 'standard',
+            configOverrides: {
+                progressFeedbackForceInitial: true,
+                progressFeedbackStepInterval: 2,
+                maxToolRepeats: 50,
+            },
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false, isDeep: true },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message || 'ok' })
+        });
+        harness.agent.sendProgressFeedback = vi.fn(async () => true);
+
+        await (harness.agent as any).processNextAction();
+
+        const budgetReviewCalls = harness.agent.reviewForcedTermination.mock.calls
+            .filter((call: any[]) => call[1] === 'message_budget');
+        expect(budgetReviewCalls).toHaveLength(0);
+        expect(harness.agent.sendProgressFeedback).toHaveBeenCalled();
+        expect(harness.executeSkillMock.mock.calls.at(-1)?.[0]).toBe('send_reply');
+        expect(action.status).toBe('completed');
+    });
+
+    it('does not treat optional follow-up offers as blocking clarification questions', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+
+        expect(agent.messageContainsQuestion('I found the issue and fixed it. Let me know if you want me to package the patch too.')).toBe(false);
+        expect(agent.messageContainsQuestion('The service is back up. If you would like, I can also add a regression test.')).toBe(false);
+        expect(await agent.isBlockingClarificationQuestion('I fixed the issue. Want me to also add a regression test?')).toBe(false);
+        expect(agent.messageContainsQuestion('I can continue, but what is your store URL?')).toBe(true);
+        expect(await agent.isBlockingClarificationQuestion('I can continue, but what is your store URL?')).toBe(true);
+    });
+
+    it('uses the fast model to classify ambiguous clarification prompts before falling back to heuristics', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Want me to also add a regression test?')) {
+                    return '{"label":"non_blocking","confidence":0.96}';
+                }
+                return '{"label":"blocking","confidence":0.94}';
+            })
+        };
+
+        expect(await agent.isBlockingClarificationQuestion('I fixed the bug. Want me to also add a regression test?')).toBe(false);
+        expect(await agent.isBlockingClarificationQuestion('Before I continue, which environment should I use?')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(2);
+    });
+
+    it('uses the fast model to classify acknowledgement vs substantive delivery messages', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Still working on it')) {
+                    return '{"label":"acknowledgement","confidence":0.95}';
+                }
+                return '{"label":"substantive","confidence":0.93}';
+            })
+        };
+
+        expect(await agent.classifyDeliveryMessageQuality('Still working on it while I check the logs.')).toBe('acknowledgement');
+        expect(agent.isLikelyAcknowledgementMessage('Still working on it while I check the logs.')).toBe(true);
+
+        expect(await agent.classifyDeliveryMessageQuality('I fixed the config issue and restarted the service successfully.')).toBe('substantive');
+        expect(agent.isSubstantiveDeliveryMessage('I fixed the config issue and restarted the service successfully.')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(2);
+    });
+
+    it('primes acknowledgement classification for automatic progress updates', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.config = {
+            get: (key: string) => {
+                if (key === 'progressFeedbackEnabled') return true;
+                if (key === 'progressFeedbackTypingOnly') return false;
+                return undefined;
+            }
+        };
+        agent.memory = { saveMemory: vi.fn() };
+        agent.telegram = { sendMessage: vi.fn(async () => true) };
+        agent.llm = {
+            callFast: vi.fn(async () => '{"label":"acknowledgement","confidence":0.97}')
+        };
+
+        const sent = await agent.sendProgressFeedback({
+            id: 'progress-prime-action',
+            type: 'task',
+            priority: 1,
+            lane: 'user',
+            status: 'pending',
+            timestamp: new Date().toISOString(),
+            payload: { source: 'telegram', sourceId: 'chat-1', chatId: 'chat-1' }
+        }, 'working', 'Still working on your request (step 3)...');
+
+        expect(sent).toBe(true);
+        expect(agent.isLikelyAcknowledgementMessage('⚙️ Still working on your request (step 3)...')).toBe(true);
+        expect(agent.llm.callFast).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses the fast model to reject ambiguous final-state reconciliation', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"reconcile":"no","confidence":0.94,"reason":"The user only received an interim finding and still lacks a final completion answer."}')
+        };
+
+        const decision = await agent.reviewDeliveryReconciliation(createAction('reconcile-review'), {
+            deliveryAudit: {
+                delivered: true,
+                reason: 'Substantive delivery was sent',
+                summary: 'Deep work: 1 (1 ok, 0 failed)\nUser messages: 1 (1 delivered)',
+                unresolvedFailures: false,
+                onlySentStatusMessages: false,
+            },
+            messagesSent: 1,
+            substantiveDeliveriesSent: 1,
+            sentMessagesInAction: ['I found the issue in the logs.'],
+            stepLedger: {
+                summarize: () => 'Deep work succeeded, but the message delivered only an intermediate finding.',
+            }
+        });
+
+        expect(decision.shouldReconcile).toBe(false);
+        expect(decision.usedLlm).toBe(true);
+        expect(decision.reason).toContain('interim finding');
+    });
+
+    it('uses the fast model to clear ambiguous completion-audit issues when the user already has the result', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"block":"no","confidence":0.92,"reason":"The user already received the concrete final result, so the audit warning is misleading."}')
+        };
+
+        const review = await agent.reviewCompletionAuditIssues(createAction('completion-audit-review'), {
+            issues: ['Only acknowledgement/status-style messages were sent before completion.'],
+            messagesSent: 1,
+            substantiveDeliveriesSent: 1,
+            sentMessagesInAction: ['Done. I fixed the config issue and restarted the service successfully.'],
+            taskComplexity: 'complex',
+        });
+
+        expect(review.shouldBlock).toBe(false);
+        expect(review.usedLlm).toBe(true);
+    });
+
+    it('keeps silent termination as a hard completion-audit block without asking the model', async () => {
+        const agent = Object.create(Agent.prototype) as any;
+        agent.llm = {
+            callFast: vi.fn(async () => '{"block":"no","confidence":0.99,"reason":"Should not be called."}')
+        };
+
+        const review = await agent.reviewCompletionAuditIssues(createAction('completion-audit-silent'), {
+            issues: ['No user-visible message was sent for this channel task.'],
+            messagesSent: 0,
+            substantiveDeliveriesSent: 0,
+            sentMessagesInAction: [],
+            taskComplexity: 'complex',
+        });
+
+        expect(review.shouldBlock).toBe(true);
+        expect(review.usedLlm).toBe(false);
+        expect(agent.llm.callFast).not.toHaveBeenCalled();
+    });
+
+    it('does not auto-complete an ambiguous channel action when reconciliation review says no', async () => {
+        const action = createAction('ambiguous-reconcile-action');
+        action.payload = {
+            ...action.payload,
+            description: 'Investigate a runtime issue and give the user the actual resolution.',
+            source: 'telegram',
+            sourceId: 'chat-1',
+            chatId: 'chat-1'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Send the interim finding first.',
+                    verification: { goals_met: false, analysis: 'User has an update but not the final fix yet.' },
+                    tools: [{ name: 'send_reply', metadata: { message: 'I found the issue in the logs.', chatId: 'chat-1' } }]
+                },
+                {
+                    reasoning: 'No more tools to run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'Still no final result.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'Still no final result.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                }
+            ],
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message })
+        });
+        harness.agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Classify this message for delivery auditing.')) {
+                    return '{"label":"substantive","confidence":0.93}';
+                }
+                return '{"reconcile":"no","confidence":0.95,"reason":"The user only got an interim finding, not the actual resolution."}';
+            })
+        };
+        harness.agent.isSubstantiveDeliveryMessage = vi.fn((message: string) => message.includes('found the issue'));
+
+        await (harness.agent as any).processNextAction();
+
+        expect(harness.agent.pushTask).toHaveBeenCalled();
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'completed');
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-delivery-reconciled`)).toBe(false);
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-bounded-recovery-handoff`)).toBe(true);
+    });
+
+    it('queues a bounded recovery handoff for unfinished user-facing actions', async () => {
+        const action = createAction('bounded-recovery-action');
+        action.payload = {
+            ...action.payload,
+            description: 'Investigate the runtime issue and fully fix it for the user.',
+            source: 'telegram',
+            sourceId: 'chat-1',
+            chatId: 'chat-1'
+        };
+
+        const harness = createAgentHarness({
+            action,
+            decisions: [
+                {
+                    reasoning: 'Send a partial update first.',
+                    verification: { goals_met: false, analysis: 'Still investigating.' },
+                    tools: [{ name: 'send_reply', metadata: { message: 'I found part of the issue, still checking the rest.', chatId: 'chat-1' } }]
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                },
+                {
+                    reasoning: 'No more progress in this run.',
+                    verification: { goals_met: false, analysis: 'Stopping here for now.' },
+                    tools: []
+                }
+            ],
+            getSkill: (name: string) => name === 'send_reply'
+                ? { isSideEffect: true, isSend: true }
+                : { isSideEffect: false, isSend: false },
+            executeSkill: async (_name: string, metadata: any) => ({ success: true, delivered: metadata?.message })
+        });
+        harness.agent.llm = {
+            callFast: vi.fn(async (prompt: string) => {
+                if (prompt.includes('Classify this message for delivery auditing.')) {
+                    return '{"label":"substantive","confidence":0.91}';
+                }
+                if (prompt.includes('Should the original action be reconciled as COMPLETE right now?')) {
+                    return '{"reconcile":"no","confidence":0.96,"reason":"The user only got a partial update, not the final fix."}';
+                }
+                return '{"block":"yes","confidence":0.94,"reason":"The task is still incomplete and should continue via recovery."}';
+            })
+        };
+
+        await (harness.agent as any).processNextAction();
+
+        expect(harness.agent.pushTask).toHaveBeenCalled();
+        expect(harness.updateStatusMock).toHaveBeenCalledWith(action.id, 'completed');
+        expect(harness.savedMemories.some(entry => entry.id === `${action.id}-bounded-recovery-handoff`)).toBe(true);
     });
 });

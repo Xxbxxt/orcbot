@@ -1,9 +1,21 @@
 {
-  "name": "orcbot",
-  "version": "1.0.4",
+  "name": "@fredabila/orcbot",
+  "version": "1.0.7",
   "description": "Autonomous AI Agent Orchestrator with Puppeteer browsing, multi-channel messaging, and self-tuning capabilities.",
   "main": "./dist/core/Agent.js",
   "types": "./dist/core/Agent.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fredabila/orcbot.git"
+  },
+  "homepage": "https://github.com/fredabila/orcbot#readme",
+  "bugs": {
+    "url": "https://github.com/fredabila/orcbot/issues"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "bin": {
     "orcbot": "./dist/cli/index.js"
   },
@@ -19,9 +31,11 @@
     "LEARNING.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').mkdirSync('dist/skills/chrome-cdp', {recursive:true}); require('fs').copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs')\"",
     "build:fast": "node build.mjs",
+    "release:github": "node scripts/create-github-release.mjs",
     "prepublishOnly": "npm run build",
+    "publish:npmjs": "node scripts/publish-npmjs.mjs",
     "postinstall": "npx puppeteer browsers install chrome",
     "start": "node dist/cli/index.js",
     "dev": "ts-node src/cli/index.ts",
@@ -65,6 +79,7 @@
     "@lydell/node-pty": "^1.2.0-beta.3",
     "@mariozechner/pi-ai": "^0.53.0",
     "@mariozechner/pi-tui": "^0.53.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@mozilla/readability": "^0.6.0",
     "@slack/socket-mode": "^2.0.5",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",

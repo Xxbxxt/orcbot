@@ -30,20 +30,25 @@ export class WhatsAppChannel implements IChannel {
     private contactNames: Map<string, string> = new Map();
     // Cache of recent status metadata so replies can preserve WhatsApp quote preview context
     // Key: participant JID, Value: latest status metadata
-    private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
+    private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; cachedAtMs: number; contentType: string; hasMedia: boolean }> = new Map();
     // Cache of recent status metadata by status message ID for reactions and context propagation
-    private statusRepliesById: Map<string, { key: any; message: any; timestamp?: number; contentType: string; hasMedia: boolean }> = new Map();
+    private statusRepliesById: Map<string, { key: any; message: any; timestamp?: number; cachedAtMs: number; contentType: string; hasMedia: boolean }> = new Map();
     // Prefix used to identify agent-sent messages (for self-chat distinction)
     private readonly AGENT_MESSAGE_PREFIX = '🤖 ';
     // Cache config values to avoid repeated lookups
     private autoReplyEnabled: boolean = false;
     private statusReplyEnabled: boolean = false;
+    private statusMediaMode: 'off' | 'download_only' | 'download_and_analyze' = 'off';
     private autoReactEnabled: boolean = false;
     private profilingEnabled: boolean = false;
     // Track last user message timestamps for suppressing agent replies when user is active
     private lastUserMessageTimestamps: Map<string, number> = new Map();
     // Track last status task timestamps to avoid piling up status replies
     private lastStatusTaskTimestamps: Map<string, number> = new Map();
+    // Timestamp of when this channel starts, to filter old messages on initial sync
+    private channelStartedAt: number = 0;
+    // Track if we're still in the initial sync phase (first 30 seconds)
+    private isInitialSyncPhase: boolean = true;
 
     constructor(agent: Agent) {
         this.agent = agent;
@@ -68,9 +73,10 @@ export class WhatsAppChannel implements IChannel {
     private loadConfigSettings() {
         this.autoReplyEnabled = this.readBooleanConfig('whatsappAutoReplyEnabled', false);
         this.statusReplyEnabled = this.readBooleanConfig('whatsappStatusReplyEnabled', false);
+        this.statusMediaMode = String(this.agent.config.get('whatsappStatusMediaMode') || 'off') as any;
         this.autoReactEnabled = this.readBooleanConfig('whatsappAutoReactEnabled', false);
         this.profilingEnabled = this.readBooleanConfig('whatsappContextProfilingEnabled', false);
-        logger.info(`WhatsAppChannel: Settings loaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
+        logger.info(`WhatsAppChannel: Settings loaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, statusMediaMode=${this.statusMediaMode}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
     }
 
     private setupConfigListener() {
@@ -78,9 +84,10 @@ export class WhatsAppChannel implements IChannel {
             logger.info('WhatsAppChannel: Config changed, reloading settings...');
             this.autoReplyEnabled = this.readBooleanConfig('whatsappAutoReplyEnabled', false);
             this.statusReplyEnabled = this.readBooleanConfig('whatsappStatusReplyEnabled', false);
+            this.statusMediaMode = String(this.agent.config.get('whatsappStatusMediaMode') || 'off') as any;
             this.autoReactEnabled = this.readBooleanConfig('whatsappAutoReactEnabled', false);
             this.profilingEnabled = this.readBooleanConfig('whatsappContextProfilingEnabled', false);
-            logger.info(`WhatsAppChannel: Settings reloaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
+            logger.info(`WhatsAppChannel: Settings reloaded - autoReply=${this.autoReplyEnabled}, statusReply=${this.statusReplyEnabled}, statusMediaMode=${this.statusMediaMode}, autoReact=${this.autoReactEnabled}, profiling=${this.profilingEnabled}`);
         });
     }
 
@@ -101,8 +108,100 @@ export class WhatsAppChannel implements IChannel {
         return 'unknown';
     }
 
+    /**
+     * Normalize JIDs used for outbound operations.
+     * Some inbound threads can surface Linked-ID recipients (@lid), which may
+     * not have an established encryption session for direct sends.
+     * In those cases we fallback to the phone JID form when we can infer it.
+     */
+    private normalizeOutboundJid(raw: string): string {
+        let jid = String(raw || '').trim();
+        if (!jid) return jid;
+
+        if (!jid.includes('@')) {
+            return `${jid}@s.whatsapp.net`;
+        }
+
+        if (jid.endsWith('@lid')) {
+            const local = jid.split('@')[0] || '';
+            const digits = local.replace(/\D/g, '');
+            if (digits.length > 0) {
+                return `${digits}@s.whatsapp.net`;
+            }
+        }
+
+        return jid;
+    }
+
     private hasStatusMedia(message: any): boolean {
         return Boolean(message?.imageMessage || message?.videoMessage || message?.audioMessage || message?.documentMessage);
+    }
+
+    private isStatusMetadataFresh(metadata?: { timestamp?: number; cachedAtMs?: number }): boolean {
+        if (!metadata) return false;
+
+        // WhatsApp statuses expire after ~24h. We use a slightly tighter window to avoid borderline stale context.
+        const maxAgeMs = 23 * 60 * 60 * 1000;
+        const nowMs = Date.now();
+
+        if (typeof metadata.cachedAtMs === 'number' && metadata.cachedAtMs > 0) {
+            if (nowMs - metadata.cachedAtMs <= maxAgeMs) return true;
+            return false;
+        }
+
+        if (typeof metadata.timestamp === 'number' && metadata.timestamp > 0) {
+            const tsMs = metadata.timestamp > 1_000_000_000_000 ? metadata.timestamp : metadata.timestamp * 1000;
+            return nowMs - tsMs <= maxAgeMs;
+        }
+
+        // If timing info is absent, assume stale to avoid replying against wrong status context.
+        return false;
+    }
+
+    private pruneStaleStatusCache(): void {
+        for (const [participant, meta] of this.statusRepliesByParticipant.entries()) {
+            if (!this.isStatusMetadataFresh(meta)) {
+                this.statusRepliesByParticipant.delete(participant);
+            }
+        }
+
+        for (const [id, meta] of this.statusRepliesById.entries()) {
+            if (!this.isStatusMetadataFresh(meta)) {
+                this.statusRepliesById.delete(id);
+            }
+        }
+    }
+
+    private normalizePolicyJid(raw?: string): string {
+        let jid = String(raw || '').trim();
+        if (!jid) return '';
+        // Remove device suffixes like 12345:10@s.whatsapp.net -> 12345@s.whatsapp.net
+        jid = jid.replace(/:\d+@/, '@');
+        if (!jid.includes('@')) jid = `${jid}@s.whatsapp.net`;
+        return jid;
+    }
+
+    private canProcessContact(jid?: string): { allowed: boolean; reason?: string } {
+        const normalized = this.normalizePolicyJid(jid);
+        if (!normalized) return { allowed: false, reason: 'missing_jid' };
+
+        const mode = String(this.agent.config.get('whatsappContactAccessMode') || 'all').toLowerCase();
+        const allowlist = ((this.agent.config.get('whatsappAllowedContacts') || []) as string[])
+            .map((entry) => this.normalizePolicyJid(entry))
+            .filter(Boolean);
+        const blocklist = ((this.agent.config.get('whatsappBlockedContacts') || []) as string[])
+            .map((entry) => this.normalizePolicyJid(entry))
+            .filter(Boolean);
+
+        if (blocklist.includes(normalized)) {
+            return { allowed: false, reason: 'blocked_contact' };
+        }
+
+        if (mode === 'allowlist' && !allowlist.includes(normalized)) {
+            return { allowed: false, reason: 'not_in_allowlist' };
+        }
+
+        return { allowed: true };
     }
 
     private recordContacts(contacts: Array<any>) {
@@ -154,6 +253,10 @@ export class WhatsAppChannel implements IChannel {
     }
 
     public async start(): Promise<void> {
+        // Reset sync phase timer whenever we start
+        this.channelStartedAt = Date.now();
+        this.isInitialSyncPhase = true;
+
         logger.info('WhatsAppChannel: Starting...');
         if (this.sock) {
             try {
@@ -217,21 +320,38 @@ export class WhatsAppChannel implements IChannel {
                 }
                 logger.info(`WhatsApp: Connection opened successfully. Owner: ${ownerJid}`);
                 eventBus.emit('whatsapp:status', 'connected');
+                // Exit initial sync phase after 30 seconds
+                setTimeout(() => {
+                    this.isInitialSyncPhase = false;
+                    logger.info('WhatsApp: Exiting initial sync phase; now processing real-time messages.');
+                }, 30000);
             }
         });
 
         this.sock.ev.on('messages.upsert', async (m: any) => {
-            logger.info(`WhatsApp Upsert: type=${m.type}, messages=${m.messages.length}`);
+            logger.info(`WhatsApp Upsert: type=${m.type}, messages=${m.messages.length}, inInitialSync=${this.isInitialSyncPhase}`);
 
-            // Allow 'append' type as well for sync messages
+            // Allow 'append' type as well for sync messages, but be selective during initial sync
             if (m.type === 'notify' || m.type === 'append') {
+                // On initial sync (append), only process recent messages (last 5 minutes)
+                // This prevents responding to a backlog of old messages from re-connection
+                const messageAgeThresholdMs = this.isInitialSyncPhase ? 5 * 60 * 1000 : 0;
+                const now = Date.now();
                 for (const msg of m.messages) {
                     const senderId = msg.key.remoteJid;
                     const ownerJid = this.agent.config.get('whatsappOwnerJID');
                     const isFromMe = msg.key.fromMe;
                     const isSelfChat = senderId === ownerJid;
+                    const messageTimestamp = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp * 1000 : Date.now();
+                    const messageAge = now - messageTimestamp;
 
-                    logger.info(`WhatsApp Msg: ${senderId} | fromMe=${isFromMe} | owner=${ownerJid} | type=${Object.keys(msg.message || {})}`);
+                    logger.info(`WhatsApp Msg: ${senderId} | fromMe=${isFromMe} | owner=${ownerJid} | type=${Object.keys(msg.message || {})} | age=${Math.round(messageAge / 1000)}s`);
+
+                    // Skip messages older than threshold during initial sync
+                    if (messageAgeThresholdMs > 0 && messageAge > messageAgeThresholdMs && m.type === 'append') {
+                        logger.debug(`WhatsApp: Skipping old message (${Math.round(messageAge / 60000)}min old) during initial sync from ${senderId}`);
+                        continue;
+                    }
 
                     // For self-chat: We need to distinguish between:
                     // 1. Messages the AGENT sent (should skip) - identified by agent prefix
@@ -292,9 +412,10 @@ export class WhatsAppChannel implements IChannel {
                             replyContext = `[Replying to ${quotedName}'s message: \"${quotedText.substring(0, 200)}${quotedText.length > 200 ? '...' : ''}\"]`;
                         }
 
-                        // Download Media if present - BUT skip status media unless explicitly enabled
+                        // Download media if present. Status media behavior is controlled separately.
                         let mediaPath = '';
-                        const shouldDownloadMedia = !isStatus || this.statusReplyEnabled;
+                        const shouldDownloadStatusMedia = this.statusReplyEnabled && this.statusMediaMode !== 'off';
+                        const shouldDownloadMedia = !isStatus || shouldDownloadStatusMedia;
                         if (shouldDownloadMedia && (imageMsg || audioMsg || docMsg || videoMsg)) {
                             try {
                                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
@@ -309,21 +430,91 @@ export class WhatsAppChannel implements IChannel {
                                 logger.error(`Failed to download media: ${e}`);
                             }
                         } else if (isStatus && (imageMsg || audioMsg || docMsg || videoMsg)) {
-                            logger.info(`WhatsApp: Skipping status media download (statusReplyEnabled=${this.statusReplyEnabled})`);
+                            logger.info(`WhatsApp: Skipping status media download (statusReplyEnabled=${this.statusReplyEnabled}, statusMediaMode=${this.statusMediaMode})`);
                         }
 
-                        // Skip group chats for now unless mentioned or requested (simpler for now)
-                        if (!isGroup) this.recordContactJid(senderId);
-                        if (isGroup) continue;
+                        // Group chat handling — configurable policy
+                        if (isGroup) {
+                            const groupsEnabled = this.readBooleanConfig('whatsappGroupsEnabled', false);
+                            if (!groupsEnabled) continue;
+
+                            const groupPolicy = String(this.agent.config.get('whatsappGroupPolicy') || 'mention_only');
+                            const allowedGroups = ((this.agent.config.get('whatsappAllowedGroups') || []) as string[])
+                                .map(g => this.normalizePolicyJid(g)).filter(Boolean);
+                            const blockedGroups = ((this.agent.config.get('whatsappBlockedGroups') || []) as string[])
+                                .map(g => this.normalizePolicyJid(g)).filter(Boolean);
+                            const normalizedGroupJid = this.normalizePolicyJid(senderId);
+
+                            // Blocked groups always skip
+                            if (normalizedGroupJid && blockedGroups.includes(normalizedGroupJid)) {
+                                logger.info(`WhatsApp: Skipping message from blocked group ${normalizedGroupJid}`);
+                                continue;
+                            }
+
+                            // Allowlist mode: only process listed groups
+                            if (groupPolicy === 'allowlist' && (!normalizedGroupJid || !allowedGroups.includes(normalizedGroupJid))) {
+                                logger.debug(`WhatsApp: Skipping group ${normalizedGroupJid} not in allowlist (policy=allowlist)`);
+                                continue;
+                            }
+
+                            // mention_only: only process if bot name or JID is mentioned
+                            if (groupPolicy === 'mention_only') {
+                                const botName = String(this.agent.config.get('agentName') || '').toLowerCase();
+                                const botJid = this.sock?.user?.id
+                                    ? (this.sock.user.id.split(':')[0] + '@s.whatsapp.net')
+                                    : '';
+                                const mentionedJids: string[] = contextInfo?.mentionedJid || [];
+                                const textLower = text.toLowerCase();
+                                const isMentioned =
+                                    (botName && textLower.includes(botName)) ||
+                                    (botJid && mentionedJids.includes(botJid));
+                                if (!isMentioned) {
+                                    logger.debug(`WhatsApp: Skipping group message (policy=mention_only, not mentioned)`);
+                                    continue;
+                                }
+                            }
+
+                            // owner_only: only process messages from the configured owner JID
+                            if (groupPolicy === 'owner_only') {
+                                const ownerJid = this.normalizePolicyJid(String(this.agent.config.get('whatsappOwnerJID') || ''));
+                                const participantJid = this.normalizePolicyJid(msg.key.participant);
+                                if (!ownerJid || participantJid !== ownerJid) {
+                                    logger.debug(`WhatsApp: Skipping group message from non-owner ${participantJid} (policy=owner_only)`);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            this.recordContactJid(senderId);
+                        }
+
+                        // Contact access policy: allowlist/blocklist enforcement
+                        if (isStatus) {
+                            const participant = this.normalizePolicyJid(msg.key.participant || msg.participant);
+                            const policy = this.canProcessContact(participant);
+                            if (!policy.allowed) {
+                                logger.info(`WhatsApp: Skipping status from ${participant || 'unknown'} due to contact policy (${policy.reason})`);
+                                continue;
+                            }
+                        } else {
+                            const policy = this.canProcessContact(senderId);
+                            if (!policy.allowed) {
+                                logger.info(`WhatsApp: Skipping message from ${senderId} due to contact policy (${policy.reason})`);
+                                continue;
+                            }
+                        }
 
                         // Skip if no text AND no media (e.g. some system msg)
                         // Auto-transcribe voice/audio messages so the agent can "hear" them
                         let transcription = '';
-                        if (mediaPath && audioMsg) {
+                        const shouldAnalyzeStatusMedia = !isStatus || this.statusMediaMode === 'download_and_analyze';
+                        if (mediaPath && audioMsg && shouldAnalyzeStatusMedia) {
                             try {
                                 logger.info(`WhatsApp: Auto-transcribing audio from ${senderName}...`);
                                 const result = await this.agent.llm.analyzeMedia(mediaPath, 'Transcribe this audio message exactly. Return only the transcription text.');
                                 transcription = result.replace(/^Transcription result:\n/i, '').trim();
+                                if (transcription.startsWith('Media analysis skipped:')) {
+                                    transcription = '';
+                                }
                                 if (transcription) {
                                     logger.info(`WhatsApp: Transcribed voice from ${senderName}: "${transcription.substring(0, 100)}..."`);
                                 }
@@ -334,7 +525,7 @@ export class WhatsAppChannel implements IChannel {
 
                         // Auto-analyze images/video/documents so agent sees media context immediately
                         let mediaAnalysis = '';
-                        if (mediaPath && !transcription && (imageMsg || docMsg || videoMsg)) {
+                        if (mediaPath && !transcription && (imageMsg || docMsg || videoMsg) && shouldAnalyzeStatusMedia) {
                             try {
                                 const mediaType = imageMsg ? 'image' : videoMsg ? 'video' : 'document';
                                 logger.info(`WhatsApp: Auto-analyzing ${mediaType} from ${senderName}...`);
@@ -342,6 +533,9 @@ export class WhatsAppChannel implements IChannel {
                                     ? `The user sent this ${mediaType} with the message: "${text}". Describe what you see in detail.`
                                     : `Describe the content of this ${mediaType} in detail.`;
                                 mediaAnalysis = await this.agent.llm.analyzeMedia(mediaPath, prompt);
+                                if (mediaAnalysis.startsWith('Media analysis skipped:')) {
+                                    mediaAnalysis = '';
+                                }
                                 if (mediaAnalysis) {
                                     logger.info(`WhatsApp: Analyzed ${mediaType} from ${senderName}: "${mediaAnalysis.substring(0, 100)}..."`);
                                 }
@@ -352,7 +546,7 @@ export class WhatsAppChannel implements IChannel {
 
                         // Special handling for Status Updates
                         if (isStatus) {
-                            const participant = msg.key.participant || msg.participant;
+                            const participant = this.normalizePolicyJid(msg.key.participant || msg.participant);
                             if (!participant) {
                                 logger.warn(`WhatsApp: Received status ${messageId} without participant JID; skipping.`);
                                 continue;
@@ -367,16 +561,19 @@ export class WhatsAppChannel implements IChannel {
                                 key: msg.key,
                                 message: msg.message,
                                 timestamp: typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : undefined,
+                                cachedAtMs: receivedAt,
                                 contentType: this.detectStatusContentType(msg.message),
                                 hasMedia: this.hasStatusMedia(msg.message)
                             };
                             this.statusRepliesByParticipant.set(participant, statusMetadata);
                             this.statusRepliesById.set(messageId, statusMetadata);
 
-                            const minIntervalHrs = Number(this.agent.config.get('whatsappStatusTaskMinIntervalHours') || 12);
+                            // Aggressive cooldown during initial sync (1 hour), then allow normal interval
+                            const baseMinIntervalHrs = Number(this.agent.config.get('whatsappStatusTaskMinIntervalHours') || 12);
+                            const minIntervalHrs = this.isInitialSyncPhase ? 1 : baseMinIntervalHrs;
                             const lastTaskAt = this.lastStatusTaskTimestamps.get(participant) || 0;
                             if (receivedAt - lastTaskAt < minIntervalHrs * 60 * 60 * 1000) {
-                                logger.debug(`WhatsApp: Skipping status task for ${participant} (cooldown active)`);
+                                logger.debug(`WhatsApp: Skipping status task for ${participant} (cooldown active for another ${Math.round((minIntervalHrs * 60 * 60 * 1000 - (receivedAt - lastTaskAt)) / 60000)}min)`);
                                 continue;
                             }
 
@@ -429,25 +626,55 @@ export class WhatsAppChannel implements IChannel {
                             }
                         }
 
-                        // Dispatch via unified MessageBus
-                        await this.agent.messageBus.dispatch({
-                            source: 'whatsapp',
-                            sourceId: senderId,
-                            senderName,
-                            content: text || transcription || (mediaPath ? `[Media: ${path.basename(mediaPath)}]` : ''),
-                            messageId,
-                            replyContext,
-                            mediaPaths: mediaPath ? [mediaPath] : [],
-                            mediaAnalysis,
-                            isOwner: isSelfChat,
-                            isExternal: !isSelfChat && !isGroup,
-                            metadata: {
-                                quotedMessageId,
-                                isSelfChat,
-                                autoReact: this.autoReactEnabled,
-                                profiling: this.profilingEnabled
-                            }
-                        });
+                        // During initial sync, only process messages if auto-reply is explicitly enabled
+                        // This prevents the agent from going crazy with responses to old messages
+                        if (this.isInitialSyncPhase && m.type === 'append' && !this.autoReplyEnabled) {
+                            logger.info(`WhatsApp: Skipping auto-reply during initial sync (autoReplyEnabled=${this.autoReplyEnabled}); recording message in memory only`);
+                            // Still save to memory so the agent knows about the message, just don't task it
+                            await this.agent.messageBus.dispatch({
+                                source: 'whatsapp',
+                                sourceId: senderId,
+                                senderName,
+                                content: text || transcription || (mediaPath ? `[Media: ${path.basename(mediaPath)}]` : ''),
+                                messageId,
+                                replyContext,
+                                mediaPaths: mediaPath ? [mediaPath] : [],
+                                mediaAnalysis,
+                                isOwner: isSelfChat,
+                                isExternal: !isSelfChat && !isGroup,
+                                metadata: {
+                                    quotedMessageId,
+                                    isSelfChat,
+                                    isGroup,
+                                    groupParticipant: isGroup ? this.normalizePolicyJid(msg.key.participant) : undefined,
+                                    suppressReply: true, // Suppress auto-reply during initial sync
+                                    autoReact: this.autoReactEnabled,
+                                    profiling: this.profilingEnabled
+                                }
+                            });
+                        } else {
+                            // Dispatch via unified MessageBus
+                            await this.agent.messageBus.dispatch({
+                                source: 'whatsapp',
+                                sourceId: senderId,
+                                senderName,
+                                content: text || transcription || (mediaPath ? `[Media: ${path.basename(mediaPath)}]` : ''),
+                                messageId,
+                                replyContext,
+                                mediaPaths: mediaPath ? [mediaPath] : [],
+                                mediaAnalysis,
+                                isOwner: isSelfChat,
+                                isExternal: !isSelfChat && !isGroup,
+                                metadata: {
+                                    quotedMessageId,
+                                    isSelfChat,
+                                    isGroup,
+                                    groupParticipant: isGroup ? this.normalizePolicyJid(msg.key.participant) : undefined,
+                                    autoReact: this.autoReactEnabled,
+                                    profiling: this.profilingEnabled
+                                }
+                            });
+                        }
                         if (senderId && !isFromMe) this.lastUserMessageTimestamps.set(senderId, receivedAt);
                     }
                 }
@@ -465,10 +692,7 @@ export class WhatsAppChannel implements IChannel {
     public async sendMessage(to: string, message: string): Promise<void> {
         try {
             // Ensure JID is properly formatted
-            let jid = to;
-            if (!jid.includes('@')) {
-                jid = `${jid}@s.whatsapp.net`;
-            }
+            let jid = this.normalizeOutboundJid(to);
             // If it's a group, ensure it ends with @g.us
             // (Basic check, user should usually provide correct ID for groups)
 
@@ -487,10 +711,7 @@ export class WhatsAppChannel implements IChannel {
     public async react(jid: string, messageId: string, emoji: string): Promise<void> {
         try {
             // Ensure JID is properly formatted
-            let targetJid = jid;
-            if (!targetJid.includes('@')) {
-                targetJid = `${targetJid}@s.whatsapp.net`;
-            }
+            let targetJid = this.normalizeOutboundJid(jid);
 
             // If this is a reaction to a status message, we need to handle it specially
             const statusMetadata = this.statusRepliesById.get(messageId);
@@ -514,10 +735,11 @@ export class WhatsAppChannel implements IChannel {
 
     public async sendTypingIndicator(to: string): Promise<void> {
         try {
-            await this.sock.sendPresenceUpdate('composing', to);
+            const targetJid = this.normalizeOutboundJid(to);
+            await this.sock.sendPresenceUpdate('composing', targetJid);
             // WhatsApp typing indicators are usually transient, we might want to delay stopping it
             setTimeout(async () => {
-                await this.sock.sendPresenceUpdate('paused', to);
+                await this.sock.sendPresenceUpdate('paused', targetJid);
             }, 5000);
         } catch (error) {
             // Ignore
@@ -531,7 +753,7 @@ export class WhatsAppChannel implements IChannel {
      */
     public async sendPresenceComposing(to: string): Promise<void> {
         try {
-            await this.sock.sendPresenceUpdate('composing', to);
+            await this.sock.sendPresenceUpdate('composing', this.normalizeOutboundJid(to));
         } catch {
             // non-critical
         }
@@ -543,7 +765,7 @@ export class WhatsAppChannel implements IChannel {
      */
     public async stopTypingIndicator(to: string): Promise<void> {
         try {
-            await this.sock.sendPresenceUpdate('paused', to);
+            await this.sock.sendPresenceUpdate('paused', this.normalizeOutboundJid(to));
         } catch {
             // non-critical
         }
@@ -586,10 +808,7 @@ export class WhatsAppChannel implements IChannel {
 
         try {
             // Ensure JID formatting
-            let targetJid = jid;
-            if (!targetJid.includes('@')) {
-                targetJid = `${targetJid}@s.whatsapp.net`;
-            }
+            let targetJid = this.normalizeOutboundJid(jid);
 
             logger.info(`WhatsApp: Fetching ${count} messages of history for ${targetJid}...`);
 
@@ -618,59 +837,82 @@ export class WhatsAppChannel implements IChannel {
     }
 
     /**
-     * Reply to a WhatsApp status update properly.
-     * 
-     * A proper status reply must be sent to 'status@broadcast' with the original
-     * status message quoted. This makes the reply appear in the contact's status
-     * thread, NOT as a standalone DM in their regular chat.
+     * Reply to a WhatsApp status update with explicit delivery mode reporting.
      *
-     * @param participantJid - The JID of the person whose status you're replying to
-     * @param message - The reply text
+     * Primary path: send a native status-thread reply using quoted status context
+     * and statusJidList so WhatsApp can render it like an in-status response.
+     *
+     * Fallback path: send a regular DM if native status-thread delivery fails.
+     *
+     * @param participantJid - JID of the person whose status is being replied to
+     * @param message - Reply text
+     * @param statusMessageId - Optional explicit status message ID for precise targeting
      */
-    public async sendStatusReply(participantJid: string, message: string): Promise<void> {
+    public async sendStatusReply(
+        participantJid: string,
+        message: string,
+        statusMessageId?: string
+    ): Promise<{ success: boolean; mode: 'status_thread' | 'dm_fallback' | 'not_sent'; reason?: string }> {
         if (!this.sock) {
-            throw new Error('WhatsApp socket not connected');
+            return { success: false, mode: 'not_sent', reason: 'socket_not_connected' };
         }
 
-        // Ensure JID is properly formatted
-        let jid = participantJid;
-        if (!jid.includes('@')) {
-            jid = `${jid}@s.whatsapp.net`;
+        const jid = this.normalizePolicyJid(participantJid);
+        if (!jid) {
+            return { success: false, mode: 'not_sent', reason: 'invalid_participant_jid' };
         }
 
-        // Look up the cached message key for this participant's latest status
-        const statusMetadata = this.statusRepliesByParticipant.get(jid);
+        this.pruneStaleStatusCache();
+
+        // Prefer explicit status ID when available, otherwise fall back to latest status by participant.
+        let statusMetadata = statusMessageId ? this.statusRepliesById.get(statusMessageId) : undefined;
         if (!statusMetadata) {
-            logger.warn(`WhatsAppChannel: No cached status key for ${jid}. Falling back to regular DM.`);
-            // Graceful degradation: send as a DM with context prefix so user knows it's related to their status
-            await this.sendMessage(jid, `[Re: your status] ${message}`);
-            return;
+            statusMetadata = this.statusRepliesByParticipant.get(jid);
+        }
+
+        if (statusMetadata && !this.isStatusMetadataFresh(statusMetadata)) {
+            statusMetadata = undefined;
+        }
+
+        if (!statusMetadata) {
+            logger.warn(`WhatsAppChannel: No cached status key for ${jid}. Cannot send native status reply.`);
+            return { success: false, mode: 'not_sent', reason: 'status_context_not_found' };
         }
 
         try {
-            // Convert markdown to WhatsApp-native formatting
             const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
-            // Add agent prefix
             const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}${formatted}`;
 
-            // The correct Baileys method to reply to a status so it appears as a DM reply:
-            // - Send to the participantJid (the DM thread)
-            // - Provide `quoted` pointing to the original status message
+            // Important: include statusJidList so WhatsApp treats this as a status-thread response
+            // instead of an ordinary DM in cases where quoted context alone is insufficient.
             await this.sock.sendMessage(
                 jid,
                 {
                     text: prefixedMessage,
-                    // `quoted` creates the contextual reply bubble referencing the original status
                     quoted: {
                         key: statusMetadata.key,
                         message: statusMetadata.message
                     }
+                },
+                {
+                    statusJidList: [jid]
                 }
             );
-            logger.info(`WhatsAppChannel: Sent status reply to ${jid}'s status`);
+
+            logger.info(`WhatsAppChannel: Sent native status-thread reply to ${jid}`);
+            return { success: true, mode: 'status_thread' };
         } catch (error) {
-            logger.error(`WhatsAppChannel: Error sending status reply to ${jid}: ${error}`);
-            throw error;
+            logger.warn(`WhatsAppChannel: Native status reply send failed for ${jid}, attempting DM fallback: ${error}`);
+            try {
+                const formatted = hasMarkdown(message) ? renderMarkdown(message, 'whatsapp') : message;
+                const prefixedMessage = `${this.AGENT_MESSAGE_PREFIX}[Re: your status] ${formatted}`;
+                await this.sock.sendMessage(jid, { text: prefixedMessage });
+                logger.info(`WhatsAppChannel: Sent DM fallback for status reply to ${jid}`);
+                return { success: true, mode: 'dm_fallback', reason: 'native_send_failed' };
+            } catch (fallbackError) {
+                logger.error(`WhatsAppChannel: Error sending status reply to ${jid}: ${fallbackError}`);
+                return { success: false, mode: 'not_sent', reason: 'native_and_fallback_failed' };
+            }
         }
     }
 
