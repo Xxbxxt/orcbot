@@ -18,6 +18,11 @@ action-queue.json
 .env.*
 *.md
 !README.md
+!AGENTS.md
+!.AI.md
+!JOURNAL.md
+!LEARNING.md
+!USER.md
 
 # IDE
 .vscode/
