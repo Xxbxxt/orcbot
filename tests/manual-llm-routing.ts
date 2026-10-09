@@ -1,6 +1,6 @@
 
-import { PromptRouter, RouterLLM } from './src/core/prompts/PromptRouter';
-import { PromptHelperContext } from './src/core/prompts/PromptHelper';
+import { PromptRouter, RouterLLM } from '../src/core/prompts/PromptRouter';
+import { PromptHelperContext } from '../src/core/prompts/PromptHelper';
 
 async function test() {
     const mockLLM: RouterLLM = {

@@ -447,4 +447,4 @@ Use it whenever you need to wait for a condition instead of repeatedly checking 
 
 ---
 
-*For more information, see: BROWSER_IDENTITY_IMPROVEMENTS.md*
+*For more information, see: ../notes/BROWSER_IDENTITY_IMPROVEMENTS.md*

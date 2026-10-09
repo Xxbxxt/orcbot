@@ -11,3 +11,6 @@ orcbot.config.yaml
 .venv
 .npmrc
 .claude
+.agents
+.reasonix
+skills-lock.json
