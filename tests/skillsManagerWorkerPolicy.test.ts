@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
+import os from 'os';
 import { SkillsManager } from '../src/core/SkillsManager';
 
 function makeManager(profile?: { enforced: boolean; capabilities: string[]; allowChannels?: boolean }) {
-    return new SkillsManager(undefined as any, undefined, {
-        browser: {},
-        config: { get: (key: string) => key === 'skillExecutionTimeoutMs' ? 1000 : undefined },
-        agent: {},
-        logger: console,
-        workerCapabilityProfile: profile
-    } as any);
+    const config = {
+        get: (key: string) => key === 'skillExecutionTimeoutMs' ? 1000 : undefined,
+        getDataHome: () => os.tmpdir(),
+    };
+    const manager = new SkillsManager(undefined as any, undefined, () => ({
+        memory: {} as any,
+        config: config as any,
+        actionQueue: {} as any,
+    }));
+    manager.setWorkerCapabilityPolicy(profile, os.tmpdir());
+    manager.setHost({ config: config as any, pushTask: async () => undefined });
+    return manager;
 }
 
 describe('SkillsManager worker capability policy', () => {

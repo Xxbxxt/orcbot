@@ -30,7 +30,7 @@
  */
 
 import { execSync, exec } from 'child_process';
-import type { AgentContext } from '../core/SkillsManager';
+import type { SkillContext } from '../core/SkillsManager';
 
 // ─── Shared CLI runner ────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ export const firecrawl_scrape = {
         'Handles bot-protection, JavaScript rendering, and returns markdown by default. ' +
         'Use this instead of browser_navigate when the page is JS-heavy or bot-protected.',
     usage: 'firecrawl_scrape(url, format?, options?)',
-    handler: async (args: any, _ctx?: AgentContext) => {
+    handler: async (args: any, _ctx?: SkillContext) => {
         if (!checkFirecrawlInstalled()) return NOT_INSTALLED_MSG;
 
         const url = args.url || args.source;
@@ -121,7 +121,7 @@ export const firecrawl_search = {
         'Search the web using Firecrawl and optionally scrape content from results. ' +
         'Supports time filters, location targeting, and news/image sources.',
     usage: 'firecrawl_search(query, limit?, sources?, scrape?, tbs?)',
-    handler: async (args: any, _ctx?: AgentContext) => {
+    handler: async (args: any, _ctx?: SkillContext) => {
         if (!checkFirecrawlInstalled()) return NOT_INSTALLED_MSG;
 
         const query = args.query || args.q;
@@ -170,7 +170,7 @@ export const firecrawl_browser = {
         'This is a CLOUD browser — separate from OrcBot\'s local Playwright browser. ' +
         'Use for agent-driven browsing on bot-protected or resource-heavy pages.',
     usage: 'firecrawl_browser(command, session_id?)',
-    handler: async (args: any, _ctx?: AgentContext) => {
+    handler: async (args: any, _ctx?: SkillContext) => {
         if (!checkFirecrawlInstalled()) return NOT_INSTALLED_MSG;
 
         const command = args.command || args.cmd;
@@ -204,7 +204,7 @@ export const firecrawl_crawl = {
         'Crawl an entire website using Firecrawl. Returns a job ID immediately; ' +
         'pass wait=true to block until complete. Use for bulk content extraction.',
     usage: 'firecrawl_crawl(url, limit?, max_depth?, wait?, output?)',
-    handler: async (args: any, _ctx?: AgentContext) => {
+    handler: async (args: any, _ctx?: SkillContext) => {
         if (!checkFirecrawlInstalled()) return NOT_INSTALLED_MSG;
 
         const url = args.url;
@@ -239,7 +239,7 @@ export const firecrawl_agent = {
         'structured data based on a natural language prompt. Useful for competitive research, ' +
         'price monitoring, and any structured data that requires navigating multiple pages.',
     usage: 'firecrawl_agent(prompt, urls?, schema?, wait?)',
-    handler: async (args: any, _ctx?: AgentContext) => {
+    handler: async (args: any, _ctx?: SkillContext) => {
         if (!checkFirecrawlInstalled()) return NOT_INSTALLED_MSG;
 
         const prompt = args.prompt || args.task;
@@ -260,3 +260,12 @@ export const firecrawl_agent = {
         return result.stdout || 'Agent extraction complete (no output).';
     },
 };
+
+/** All firecrawl skills, so a caller can register them without knowing each name. */
+export const firecrawlSkills = [
+    firecrawl_scrape,
+    firecrawl_search,
+    firecrawl_browser,
+    firecrawl_crawl,
+    firecrawl_agent,
+];

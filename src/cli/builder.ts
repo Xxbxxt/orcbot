@@ -50,12 +50,12 @@ RULES for the generated code:
      name: string,
      description: string,
      usage: string,
-     handler: async (args: any, context: AgentContext) => Promise<any>
+     handler: async (args: any, ctx: SkillContext) => Promise<any>
    }
 2. The code MUST be self-contained. Import necessary Node.js modules (fs, path, child_process, etc.).
-3. The 'context' object contains: browser, config, agent, memory, and a 'logger' object.
-4. IMPORTANT: Use 'context.logger' for all logging. DO NOT attempt to import the internal OrcBot logger.
-5. IMPORTANT: Use 'context.config.get("KEY_NAME")' to retrieve API keys or settings. DO NOT use direct property access (e.g., context.config.KEY_NAME is wrong).
+3. 'ctx' exposes exactly three handles and nothing else: 'ctx.memory', 'ctx.config' and 'ctx.actionQueue'. There is no agent, no browser and no logger on it.
+4. IMPORTANT: Log with 'console'. The context carries no logger and the internal logger is not importable from a plugin.
+5. IMPORTANT: Use 'ctx.config.get("KEY_NAME")' to retrieve API keys or settings. DO NOT use direct property access (e.g., context.config.KEY_NAME is wrong).
 6. NO EXTERNAL DEPENDENCIES besides what is already in the project (playwright, telegraf, croner, etc.).
 7. Output ONLY the raw TypeScript code, no markdown blocks.
 

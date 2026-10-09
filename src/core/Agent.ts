@@ -27,7 +27,8 @@ import { SystemProfiler } from './SystemProfiler';
 import { GoogleIdentityManager } from './GoogleIdentityManager';
 import { GoogleWorkspaceCli } from './GoogleWorkspaceCli';
 import { GitHubCli } from './GitHubCli';
-import { memoryToolsSkills } from '../skills/memoryTools';
+import { memoryToolsSkills, registerMemorySkills, memoryContextSkills } from '../skills/memoryTools';
+import { firecrawlSkills } from '../skills/firecrawl';
 import { pythonToolsSkills } from '../skills/pythonTools';
 import { canvasToolsSkills } from '../skills/canvasTools';
 import { ToolsManager } from './ToolsManager';
@@ -289,17 +290,25 @@ export class Agent {
         this.skills = new SkillsManager(
             this.config.get('skillsPath') || './SKILLS.md',
             this.config.get('pluginsPath') || './plugins',
-            {
-                browser: this.browser,
+            // A factory, not a context: the subsystems below are not all constructed yet, and
+            // a fresh context per invocation cannot go stale when one is replaced.
+            () => ({
+                memory: this.memory,
                 config: this.config,
-                agent: this,
-                logger: logger,
-                workerCapabilityProfile: this.isWorker ? {
-                    enforced: this.config.get('workerCapabilityEnforcement') !== false,
-                    capabilities: Array.isArray(this.config.get('workerCapabilities')) ? this.config.get('workerCapabilities') : [],
-                    allowChannels: this.config.get('allowWorkerChannels') === true
-                } : undefined
-            }
+                actionQueue: this.actionQueue,
+            })
+        );
+        this.skills.setHost({
+            config: this.config,
+            pushTask: (task: string, priority: number, options?: any) => this.pushTask(task, priority, options),
+        });
+        this.skills.setWorkerCapabilityPolicy(
+            this.isWorker ? {
+                enforced: this.config.get('workerCapabilityEnforcement') !== false,
+                capabilities: Array.isArray(this.config.get('workerCapabilities')) ? this.config.get('workerCapabilities') : [],
+                allowChannels: this.config.get('allowWorkerChannels') === true
+            } : undefined,
+            this.config.getDataHome()
         );
 
         this.bookLog = new BookLogManager(this.config.getDataHome());
@@ -421,20 +430,15 @@ export class Agent {
         this.knownUsersPath = path.join(this.config.getDataHome(), 'known_users.json');
         if (!this.isWorker) this.loadKnownUsers();
 
-        // Ensure context is up to date (supports reconfiguration)
-        this.skills.setContext({
-            browser: this.browser,
-            config: this.config,
-            agent: this,
-            logger: logger,
-            workerProfile: this.workerProfile,
-            orchestrator: this.orchestrator,
-            workerCapabilityProfile: this.isWorker ? {
+        // Keep the worker capability policy current (supports reconfiguration)
+        this.skills.setWorkerCapabilityPolicy(
+            this.isWorker ? {
                 enforced: this.config.get('workerCapabilityEnforcement') !== false,
                 capabilities: Array.isArray(this.config.get('workerCapabilities')) ? this.config.get('workerCapabilities') : [],
                 allowChannels: this.config.get('allowWorkerChannels') === true
-            } : undefined
-        });
+            } : undefined,
+            this.config.getDataHome()
+        );
 
         // Initialize RAG Knowledge Store
         this.knowledgeStore = new KnowledgeStore(this.config.getDataHome(), {
@@ -2050,30 +2054,6 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
                 }
             });
 
-            // Skill: React WhatsApp
-            this.skills.registerSkill({
-                name: 'react_whatsapp',
-                description: 'React to a WhatsApp message with an emoji. Use semantic names ("thumbs_up", "love", "fire") or raw emoji.',
-                usage: 'react_whatsapp(jid, message_id, emoji)',
-                handler: async (args: any) => {
-                    const jid = args.jid || args.to || args.chat_id;
-                    const messageId = args.message_id || args.messageId || args.id;
-                    const emojiInput = args.emoji || args.reaction || 'thumbs_up';
-
-                    if (!jid) return 'Error: Missing jid (WhatsApp ID).';
-                    if (!messageId) return 'Error: Missing message_id.';
-
-                    if (!this.whatsapp) return 'WhatsApp channel not available';
-
-                    const emoji = resolveEmoji(emojiInput);
-                    try {
-                        await this.whatsapp.react(jid, messageId, emoji);
-                        return `Reacted with ${emoji} to WhatsApp message ${messageId}`;
-                    } catch (e) {
-                        return `Error: ${e}`;
-                    }
-                }
-            });
 
             // Skill: React Discord
             this.skills.registerSkill({
@@ -4088,103 +4068,11 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             }
         });
 
-        // Skill: Update Contact Profile
-        this.skills.registerSkill({
-            name: 'update_contact_profile',
-            description: 'Update the autonomous profile/memory of a specific WhatsApp contact. Use this to store traits, facts, and relationship context.',
-            usage: 'update_contact_profile(jid, profile_json)',
-            handler: async (args: any) => {
-                const jid = args.jid || args.to;
-                const profileJson = args.profile_json || args.profile || args.content;
 
-                if (!jid) return 'Error: Missing jid.';
-                if (!profileJson) return 'Error: Missing profile_json.';
 
-                try {
-                    // Validate JSON if it's a string, or just save it
-                    const data = typeof profileJson === 'string' ? profileJson : JSON.stringify(profileJson, null, 2);
-                    this.memory.saveContactProfile(jid, data);
-                    return `Profile for ${jid} updated successfully.`;
-                } catch (e) {
-                    return `Error updating profile: ${e}`;
-                }
-            }
-        });
 
-        // Skill: Get Contact Profile
-        this.skills.registerSkill({
-            name: 'get_contact_profile',
-            description: 'Retrieve the stored profile/context for a specific WhatsApp contact.',
-            usage: 'get_contact_profile(jid)',
-            isParallelSafe: true,
-            handler: async (args: any) => {
-                const jid = args.jid || args.to || args.id;
 
-                if (!jid) return 'Error: Missing jid.';
 
-                try {
-                    const profile = this.memory.getContactProfile(jid);
-                    if (!profile) {
-                        return `No profile found for ${jid}. You can create one using 'update_contact_profile'.`;
-                    }
-                    return `Profile for ${jid}:\n${profile}`;
-                } catch (e) {
-                    return `Error retrieving profile: ${e}`;
-                }
-            }
-        });
-
-        // Skill: List WhatsApp Contacts
-        this.skills.registerSkill({
-            name: 'list_whatsapp_contacts',
-            description: 'List recent WhatsApp contacts that have interacted with the bot. Returns contact JIDs from recent memory.',
-            usage: 'list_whatsapp_contacts(limit?)',
-            handler: async (args: any) => {
-                const limit = parseInt(args.limit || '20', 10);
-
-                try {
-                    // Get recent WhatsApp messages from memory
-                    const memories = this.memory.searchMemory('short');
-                    const whatsappMessages = memories.filter((m: any) =>
-                        m.metadata?.source === 'whatsapp' &&
-                        m.metadata?.senderId &&
-                        m.metadata?.senderId !== 'status@broadcast'
-                    );
-
-                    // Extract unique contacts with their last interaction
-                    const contactMap = new Map<string, { jid: string; name: string; lastMessage: string; timestamp: string }>();
-
-                    for (const msg of whatsappMessages) {
-                        const jid = msg.metadata.senderId;
-                        const name = msg.metadata.senderName || jid;
-                        if (!contactMap.has(jid)) {
-                            contactMap.set(jid, {
-                                jid,
-                                name,
-                                lastMessage: msg.content.substring(0, 100),
-                                timestamp: msg.timestamp
-                            });
-                        }
-                    }
-
-                    const contacts = Array.from(contactMap.values())
-                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-                        .slice(0, limit);
-
-                    if (contacts.length === 0) {
-                        return 'No recent WhatsApp contacts found in memory.';
-                    }
-
-                    const formatted = contacts.map((c, i) =>
-                        `${i + 1}. ${c.name} (${c.jid})\n   Last: ${c.lastMessage.substring(0, 60)}...\n   Time: ${c.timestamp}`
-                    ).join('\n\n');
-
-                    return `Recent WhatsApp Contacts (${contacts.length}):\n\n${formatted}`;
-                } catch (e) {
-                    return `Error listing contacts: ${e}`;
-                }
-            }
-        });
 
         // Skill: Search WhatsApp Contacts
         this.skills.registerSkill({
@@ -4216,286 +4104,17 @@ Organize the report with clear headings, bullet points, and a summary. Focus on 
             }
         });
 
-        // Skill: Search Chat History
-        this.skills.registerSkill({
-            name: 'search_chat_history',
-            description: 'Search chat history with a specific contact. Supports semantic search (meaning-based) when vector memory is enabled, falling back to keyword/recency search across ALL memories (short and episodic). Works across WhatsApp, Telegram, and Discord.',
-            usage: 'search_chat_history(jid, query?, limit?, source?)',
-            handler: async (args: any) => {
-                const jid = args.jid || args.to || args.id;
-                const query = args.query || args.search || args.q || '';
-                const limit = parseInt(args.limit || '10', 10);
-                const source = args.source || 'whatsapp'; // Default to whatsapp for backward compat
 
-                if (!jid) return 'Error: Missing jid/contact identifier.';
 
-                try {
-                    // 1. Try semantic search with metadata filtering first (highest precision)
-                    if (query && this.memory.vectorMemory?.isEnabled()) {
-                        // Search for the query, but allow any field to match the jid
-                        // We use limit*3 and post-filter because jid might be in senderId OR chatId OR sourceId
-                        const semanticHits = await this.memory.semanticSearch(query, limit * 3, { source });
-                        const contactHits = semanticHits.filter((h: any) => {
-                            const md = h.metadata || {};
-                            return md.senderId === jid || md.sourceId === jid || md.chatId === jid || md.userId === jid;
-                        }).slice(0, limit);
 
-                        if (contactHits.length > 0) {
-                            const formatted = contactHits.map((m: any, i: number) =>
-                                `[${m.timestamp}] (relevance: ${(m.score * 100).toFixed(0)}%) ${m.content}`
-                            ).join('\n\n');
-                            return `Found ${contactHits.length} relevant messages for ${jid} via semantic search:\n\n${formatted}`;
-                        }
-                    }
 
-                    // 2. Fallback: search ALL memory types (short + episodic) for keywords + jid
-                    const queryLower = query.toLowerCase();
-                    const allMemories = [
-                        ...this.memory.searchMemory('short'),
-                        ...this.memory.searchMemory('episodic'),
-                    ];
 
-                    const chatHistory = allMemories.filter((m: any) => {
-                        const md = m.metadata || {};
-                        // Match source/platform
-                        if (md.source !== source) return false;
-                        // Match contact JID across possible fields
-                        const isMatchJid = md.senderId === jid || md.sourceId === jid || md.chatId === jid || md.userId === jid;
-                        if (!isMatchJid) return false;
-                        // Match query if provided
-                        if (queryLower && !(m.content || '').toLowerCase().includes(queryLower)) return false;
-                        return true;
-                    });
 
-                    // Sort by timestamp (most recent first)
-                    const sortedHistory = chatHistory.sort((a, b) => {
-                        const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-                        const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-                        return tb - ta;
-                    }).slice(0, limit);
 
-                    if (sortedHistory.length === 0) {
-                        return `No chat history found for ${jid}${query ? ` matching "${query}"` : ''} on ${source}. Note: older history might be in Daily Memory files or episodic summaries.`;
-                    }
 
-                    const formatted = sortedHistory.map((m: any, i: number) =>
-                        `[${m.timestamp}] (${m.type}) ${m.content}`
-                    ).join('\n\n').slice(0, 15000); // Prevent wall of text
 
-                    return `Found ${sortedHistory.length} messages for ${jid} on ${source}:\n\n${formatted}`;
-                } catch (e) {
-                    return `Error searching chat history: ${e}`;
-                }
-            }
-        });
 
-        // Skill: Get WhatsApp Chat Context
-        this.skills.registerSkill({
-            name: 'get_whatsapp_context',
-            description: 'Get comprehensive context about a WhatsApp contact including their profile, recent chat history, and relationship notes.',
-            usage: 'get_whatsapp_context(jid)',
-            handler: async (args: any) => {
-                const jid = args.jid || args.to || args.id;
 
-                if (!jid) return 'Error: Missing jid.';
-
-                try {
-                    // Get profile
-                    const profile = this.memory.getContactProfile(jid);
-
-                    // Get recent chat history
-                    const memories = this.memory.searchMemory('short');
-                    const chatHistory = memories
-                        .filter((m: any) =>
-                            m.metadata?.source === 'whatsapp' &&
-                            m.metadata?.senderId === jid
-                        )
-                        .slice(-5);
-
-                    let context = `=== WhatsApp Context for ${jid} ===\n\n`;
-
-                    if (profile) {
-                        context += `📋 PROFILE:\n${profile}\n\n`;
-                    } else {
-                        context += `📋 PROFILE: No profile stored yet.\n\n`;
-                    }
-
-                    if (chatHistory.length > 0) {
-                        context += `💬 RECENT MESSAGES (${chatHistory.length}):\n`;
-                        chatHistory.forEach((m: any) => {
-                            context += `[${m.timestamp}] ${m.content}\n`;
-                        });
-                    } else {
-                        context += `💬 RECENT MESSAGES: No recent messages found.\n`;
-                    }
-
-                    return context;
-                } catch (e) {
-                    return `Error getting context: ${e}`;
-                }
-            }
-        });
-
-        // Skill: Recall Memory (Semantic Search)
-        this.skills.registerSkill({
-            name: 'recall_memory',
-            description: 'Search your entire memory semantically — finds relevant memories across ALL channels, time periods, and memory types (short, episodic, long-term). Use this when you need to remember something from a past conversation, find context about a topic, or recall what happened with a specific person/project. Much more powerful than keyword search.',
-            usage: 'recall_memory(query, limit?)',
-            isParallelSafe: true,
-            handler: async (args: any) => {
-                const query = args.query || args.search || args.text || args.q;
-                const limit = parseInt(args.limit || '10', 10);
-
-                if (!query) return 'Error: Missing query. Provide a natural language description of what you want to recall.';
-
-                try {
-                    // Try semantic search first (best quality)
-                    if (this.memory.vectorMemory?.isEnabled()) {
-                        const results = await this.memory.semanticRecall(query, limit);
-                        if (results.length > 0) {
-                            const formatted = results.map((r, i) => {
-                                const src = r.metadata?.source ? ` [${r.metadata.source}]` : '';
-                                const type = r.type || 'unknown';
-                                return `${i + 1}. [${r.timestamp}] (${type}${src}, relevance: ${(r.score * 100).toFixed(0)}%) ${r.content}`;
-                            }).join('\n\n');
-                            return `Found ${results.length} relevant memories:\n\n${formatted}`;
-                        }
-                    }
-
-                    // Fallback: keyword search across all memory types
-                    const queryLower = query.toLowerCase();
-                    const allMemories = [
-                        ...this.memory.searchMemory('short'),
-                        ...this.memory.searchMemory('episodic'),
-                    ];
-                    const matches = allMemories
-                        .filter(m => (m.content || '').toLowerCase().includes(queryLower))
-                        .sort((a, b) => {
-                            const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-                            const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-                            return tb - ta;
-                        })
-                        .slice(0, limit);
-
-                    if (matches.length === 0) {
-                        return `No memories found matching "${query}". The search covers all conversations and past actions.`;
-                    }
-
-                    const formatted = matches.map((m, i) => {
-                        const src = m.metadata?.source ? ` [${m.metadata.source}]` : '';
-                        return `${i + 1}. [${m.timestamp}] (${m.type}${src}) ${m.content}`;
-                    }).join('\n\n');
-                    return `Found ${matches.length} memories (keyword match):\n\n${formatted}`;
-                } catch (e) {
-                    return `Error recalling memory: ${e}`;
-                }
-            }
-        });
-
-        // Skill: Search Memory Logs (Literal File Search)
-        this.skills.registerSkill({
-            name: 'search_memory_logs',
-            description: 'Literal search across all daily memory log files, JOURNAL.md, and LEARNING.md. Use this for "deep" history search when semantic recall fails, or when you need to find exact technical details, dates, or specific names mentioned in the past. This is a very robust fallback.',
-            usage: 'search_memory_logs(query, limit?)',
-            isParallelSafe: true,
-            handler: async (args: any) => {
-                const query = args.query || args.q || args.text;
-                const limit = parseInt(args.limit || '10', 10);
-
-                if (!query) return 'Error: Missing query string.';
-
-                try {
-                    const dailyMemory = this.memory.getDailyMemory();
-                    const logFiles = dailyMemory.listDailyMemories();
-                    const results: string[] = [];
-                    const queryLower = query.toLowerCase();
-
-                    // 1. Search daily logs (most recent first)
-                    for (const date of logFiles) {
-                        if (results.length >= limit) break;
-                        const content = dailyMemory.readDailyMemory(date);
-                        if (content && content.toLowerCase().includes(queryLower)) {
-                            // Extract snippet around the match
-                            const idx = content.toLowerCase().indexOf(queryLower);
-                            const start = Math.max(0, idx - 150);
-                            const end = Math.min(content.length, idx + queryLower.length + 250);
-                            results.push(`--- Log: ${date} ---\n...${content.slice(start, end)}...`);
-                        }
-                    }
-
-                    // 2. Search main identity files
-                    const identityFiles = ['JOURNAL.md', 'LEARNING.md', 'USER.md'];
-                    const dataHome = this.config.getDataHome();
-                    for (const file of identityFiles) {
-                        if (results.length >= limit) break;
-                        const filePath = path.join(dataHome, file);
-                        if (fs.existsSync(filePath)) {
-                            const content = fs.readFileSync(filePath, 'utf-8');
-                            if (content.toLowerCase().includes(queryLower)) {
-                                const idx = content.toLowerCase().indexOf(queryLower);
-                                const start = Math.max(0, idx - 150);
-                                const end = Math.min(content.length, idx + queryLower.length + 250);
-                                results.push(`--- File: ${file} ---\n...${content.slice(start, end)}...`);
-                            }
-                        }
-                    }
-
-                    if (results.length === 0) {
-                        return `No literal matches for "${query}" found in daily logs or identity files.`;
-                    }
-
-                    return `Found ${results.length} matches in memory logs:\n\n${results.join('\n\n')}`;
-                } catch (e) {
-                    return `Error searching memory logs: ${e}`;
-                }
-            }
-        });
-
-        // Skill: List Memory Logs
-        this.skills.registerSkill({
-            name: 'list_memory_logs',
-            description: 'List all available daily memory log dates. Useful to see how far back your history goes or to identify specific days to search.',
-            usage: 'list_memory_logs()',
-            isParallelSafe: true,
-            handler: async () => {
-                try {
-                    const dailyMemory = this.memory.getDailyMemory();
-                    const logFiles = dailyMemory.listDailyMemories();
-                    if (logFiles.length === 0) return 'No daily memory logs found.';
-                    
-                    const stats = dailyMemory.getStats();
-                    return `Available memory logs (${logFiles.length} days):\n- Range: ${logFiles[logFiles.length - 1]} to ${logFiles[0]}\n- Data Dir: ${stats.memoryDir}\n\nRecent logs:\n${logFiles.slice(0, 15).join('\n')}${logFiles.length > 15 ? '\n...' : ''}`;
-                } catch (e) {
-                    return `Error listing memory logs: ${e}`;
-                }
-            }
-        });
-
-        // Skill: Read Memory Log
-        this.skills.registerSkill({
-            name: 'read_memory_log',
-            description: 'Read the full content of a specific daily memory log. Use list_memory_logs to see available dates and search_memory_logs to find relevant ones. Date format: YYYY-MM-DD.',
-            usage: 'read_memory_log(date)',
-            isParallelSafe: true,
-            handler: async (args: any) => {
-                const date = args.date || args.text;
-                if (!date) return 'Error: Missing date string (YYYY-MM-DD).';
-
-                try {
-                    const dailyMemory = this.memory.getDailyMemory();
-                    const content = dailyMemory.readDailyMemory(date);
-                    if (!content) return `Error: No memory log found for date: ${date}`;
-
-                    const MAX_CHARS = 15000;
-                    if (content.length > MAX_CHARS) {
-                        return content.substring(0, MAX_CHARS) + `\n\n[...truncated. ${content.length} chars total. Use search_memory_logs to find specific snippets if needed.]`;
-                    }
-                    return `=== Memory Log: ${date} ===\n\n${content}`;
-                } catch (e) {
-                    return `Error reading memory log: ${e}`;
-                }
-            }
-        });
 
         // Skill: Run Shell Command
         this.skills.registerSkill({
@@ -6606,14 +6225,6 @@ Respond with: "VERIFIED: <reason>" or "FAILED: <reason>"`;
                     }
                 );
 
-                // Update skills context
-                this.skills.setContext({
-                    browser: this.browser,
-                    config: this.config,
-                    agent: this,
-                    logger: logger,
-                });
-
                 if (engine === 'lightpanda') {
                     const ep = this.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
                     return `Switched to Lightpanda browser engine. CDP endpoint: ${ep}. Make sure Lightpanda is running: ./lightpanda serve --host 127.0.0.1 --port 9222`;
@@ -7708,28 +7319,7 @@ Be thorough and academic.`;
             }
         });
 
-        // Skill: Learn User Info
-        this.skills.registerSkill({
-            name: 'update_user_profile',
-            description: 'Save permanent information learned about the user (name, preferences, habits, goals). Use this PROACTIVELY whenever you learn something new about the user.',
-            usage: 'update_user_profile(info_text)',
-            handler: async (args: any) => {
-                const info_text = args.info_text || args.info || args.text || args.data;
-                if (!info_text) return 'Error: Missing info_text.';
 
-                const userPath = this.config.get('userProfilePath');
-                try {
-                    // Prepend date for chronological history
-                    const entry = `\n- [${new Date().toLocaleDateString()}] ${info_text}`;
-                    fs.appendFileSync(userPath, entry);
-                    this.memory.refreshUserContext(userPath);
-                    logger.info(`User Profile Updated: ${info_text}`);
-                    return `Successfully updated user profile with: "${info_text}"`;
-                } catch (e) {
-                    return `Failed to update profile at ${userPath}: ${e}`;
-                }
-            }
-        });
 
         // Skill: Evolve Identity (legacy .AI.md compatibility)
         this.skills.registerSkill({
@@ -8482,97 +8072,9 @@ Be thorough and academic.`;
                 }
             });
 
-            // Skill: Await Subtask — polls until a delegated task finishes, returns its conclusion.
-            this.skills.registerSkill({
-                name: 'await_subtask',
-                description: 'Wait for a previously delegated task to finish and return its result. Polls every 3 seconds up to timeoutSeconds (default 120). Use after delegate_task() when you need the result before continuing.',
-                usage: 'await_subtask(task_id, timeoutSeconds?)',
-                isDeep: true,
-                handler: async (args: any) => {
-                    const taskId = args.task_id || args.id || args.taskId;
-                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
-                    if (!taskId) return 'Error: Missing task_id.';
 
-                    const pollMs = 3000;
-                    const deadline = Date.now() + timeout * 1000;
 
-                    while (Date.now() < deadline) {
-                        const action = this.actionQueue.getAction(taskId);
-                        if (!action) return `Error: Task "${taskId}" not found.`;
 
-                        if (action.status === 'completed' || action.status === 'failed') {
-                            // Retrieve the conclusion from episodic memory
-                            const conclusionId = `${taskId}-conclusion`;
-                            const conclusion = this.memory.getMemory(conclusionId);
-                            const resultText = conclusion?.content || `Task ${action.status} (no conclusion stored).`;
-                            return `Subtask "${taskId}" ${action.status}. Result: ${resultText}`;
-                        }
-
-                        await new Promise(resolve => setTimeout(resolve, pollMs));
-                    }
-                    return `Subtask "${taskId}" did not complete within ${timeout}s (still ${this.actionQueue.getAction(taskId)?.status || 'unknown'}).`;
-                }
-            });
-
-            // Skill: Run Subtask — create + await in one call (inline synchronous subtask pattern).
-            this.skills.registerSkill({
-                name: 'run_subtask',
-                description: 'Create a subtask, wait for it to complete, and return its result — all in one step. Ideal for parallel research, file processing, or breaking a complex task into focused sub-problems. timeoutSeconds defaults to 120, max 300.',
-                usage: 'run_subtask(description, timeoutSeconds?, priority?)',
-                isDeep: true,
-                handler: async (args: any) => {
-                    const description = args.description || args.task;
-                    const timeout = Math.min(parseInt(args.timeoutSeconds || args.timeout || '120'), 300);
-                    const priority = parseInt(args.priority || '5');
-                    if (!description) return 'Error: Missing task description.';
-
-                    // Enforce max spawn depth (workers cannot spawn further sub-tasks)
-                    const depth = (args._spawnDepth || 0) as number;
-                    const MAX_DEPTH = 2;
-                    if (depth >= MAX_DEPTH) {
-                        return `Error: Spawn depth limit (${MAX_DEPTH}) reached. Execute this work directly instead of delegating further.`;
-                    }
-
-                    try {
-                        const subtaskId = `subtask-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-                        this.actionQueue.push({
-                            id: subtaskId,
-                            type: 'message',
-                            status: 'pending',
-                            priority,
-                            payload: {
-                                description,
-                                isSubtask: true,
-                                parentActionId: args._parentActionId,
-                                spawnDepth: depth + 1,
-                            },
-                            timestamp: new Date().toISOString(),
-                            updatedAt: new Date().toISOString(),
-                        });
-
-                        const pollMs = 3000;
-                        const deadline = Date.now() + timeout * 1000;
-
-                        while (Date.now() < deadline) {
-                            const action = this.actionQueue.getAction(subtaskId);
-                            if (!action) return `Error: Subtask "${subtaskId}" disappeared from queue.`;
-
-                            if (action.status === 'completed' || action.status === 'failed') {
-                                const conclusionId = `${subtaskId}-conclusion`;
-                                const conclusion = this.memory.getMemory(conclusionId);
-                                const resultText = conclusion?.content || `Subtask ${action.status} (no conclusion stored).`;
-                                return `[Subtask result] ${resultText}`;
-                            }
-
-                            await new Promise(resolve => setTimeout(resolve, pollMs));
-                        }
-
-                        return `Subtask "${subtaskId}" did not complete within ${timeout}s — it will continue running in background. Check await_subtask("${subtaskId}") later.`;
-                    } catch (e) {
-                        return `Error creating subtask: ${e}`;
-                    }
-                }
-            });
 
             // Skill: Distribute Tasks
             this.skills.registerSkill({
@@ -9287,6 +8789,16 @@ Be thorough and academic.`;
         for (const skill of memoryToolsSkills) {
             this.skills.registerSkill(skill);
             logger.info(`Registered memory tool: ${skill.name}`);
+        }
+
+        // Skills migrated onto the narrow SkillContext seam
+        registerMemorySkills(this.skills);
+        logger.info(`Registered ${memoryContextSkills.length} relocated memory skill(s)`);
+
+        // Firecrawl Tools
+        for (const skill of firecrawlSkills) {
+            this.skills.registerSkill(skill);
+            logger.info(`Registered firecrawl skill: ${skill.name}`);
         }
 
         // OrcCanvas Tools (A2UI)
