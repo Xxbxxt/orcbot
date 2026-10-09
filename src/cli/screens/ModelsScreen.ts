@@ -918,7 +918,7 @@ export async function showOpenAIConfig(context?: CliContext): Promise<void> {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenAI API Key:' }]);
         agent.config.set('openaiApiKey', val);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gpt-5.4, gpt-5.4-mini):', default: DEFAULT_MODEL_IDS.openaiMain }]);
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gpt-6.1-sol, gpt-6-luna):', default: DEFAULT_MODEL_IDS.openaiMain }]);
         agent.config.set('modelName', val);
     }
 
@@ -958,8 +958,27 @@ export async function showGeminiConfig(context?: CliContext): Promise<void> {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Google API Key:' }]);
         agent.config.set('googleApiKey', val);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gemini-2.5-flash, gemini-3.5-flash):', default: DEFAULT_MODEL_IDS.googleFast }]);
-        agent.config.set('modelName', val);
+        const { val } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'val',
+                message: 'Select Gemini Model:',
+                choices: [
+                    { name: 'Gemini 3.8 Flash      — Most intelligent Flash (agents, long-horizon coding)', value: 'gemini-3.8-flash' },
+                    { name: 'Gemini 3.6 Flash      — Previous-generation Flash (balanced)', value: 'gemini-3.6-flash' },
+                    { name: 'Gemini 3.5 Flash-Lite — Fastest, most cost-effective', value: 'gemini-3.5-flash-lite' },
+                    { name: 'Gemini 3.1 Pro        — Advanced reasoning (preview)', value: 'gemini-3.1-pro-preview' },
+                    { name: 'Gemini 2.5 Flash      — Legacy: limited access, migrate when you can', value: 'gemini-2.5-flash' },
+                    { name: 'Custom model ID...', value: 'custom' }
+                ]
+            }
+        ]);
+        if (val === 'custom') {
+            const { custom } = await inquirer.prompt([{ type: 'input', name: 'custom', message: 'Enter Gemini Model ID:', default: currentModel }]);
+            agent.config.set('modelName', custom);
+        } else {
+            agent.config.set('modelName', val);
+        }
     }
 
     console.log('Gemini settings updated!');
@@ -1036,9 +1055,10 @@ export async function showAnthropicConfig(context?: CliContext): Promise<void> {
                 name: 'val',
                 message: 'Select Claude Model:',
                 choices: [
-                    { name: 'Claude Opus 4.6   — Most intelligent (agents, complex coding)', value: 'claude-opus-4-6' },
-                    { name: 'Claude Sonnet 4.5 — Best speed + intelligence balance', value: 'claude-sonnet-4-5' },
-                    { name: 'Claude Haiku 4.5  — Fastest, near-frontier intelligence', value: 'claude-haiku-4-5' },
+                    { name: 'Claude Fable 5.1  — Demanding reasoning, long-horizon agentic work', value: 'claude-fable-5-1' },
+                    { name: 'Claude Opus 5.5   — Most capable (agentic coding, knowledge work)', value: 'claude-opus-5-5' },
+                    { name: 'Claude Sonnet 5.5 — Best speed + intelligence balance', value: 'claude-sonnet-5-5' },
+                    { name: 'Claude Haiku 5.5  — Fastest, high-volume and latency-sensitive', value: 'claude-haiku-5-5' },
                     { name: 'Custom model ID...', value: 'custom' }
                 ]
             }
@@ -1072,7 +1092,7 @@ export async function showBedrockConfig(context?: CliContext): Promise<void> {
             choices: [
                 { name: `Set Region (current: ${region})`, value: 'region' },
                 { name: accessKey === 'Not Set' ? 'Set Access Keys' : 'Update Access Keys', value: 'keys' },
-                { name: 'Set Model Name (e.g., bedrock/anthropic.claude-3-sonnet-20240229-v1:0)', value: 'model' },
+                { name: 'Set Model Name (e.g., bedrock:anthropic.claude-sonnet-5-5)', value: 'model' },
                 { name: 'Back', value: 'back' }
             ]
         }
@@ -1093,7 +1113,7 @@ export async function showBedrockConfig(context?: CliContext): Promise<void> {
         if (answers.secretAccessKey) agent.config.set('bedrockSecretAccessKey', answers.secretAccessKey);
         if (answers.sessionToken) agent.config.set('bedrockSessionToken', answers.sessionToken);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Bedrock Model ID:', default: currentModel || 'bedrock/anthropic.claude-3-sonnet-20240229-v1:0' }]);
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Bedrock Model ID:', default: currentModel || 'bedrock:anthropic.claude-sonnet-5-5' }]);
         agent.config.set('modelName', val);
     }
 

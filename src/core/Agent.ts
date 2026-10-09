@@ -8,6 +8,7 @@ import { ActionQueue, Action } from '../memory/ActionQueue';
 import { Scheduler } from './Scheduler';
 import { PollingManager } from './PollingManager';
 import { ConfigManager } from '../config/ConfigManager';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 import { TelegramChannel } from '../channels/TelegramChannel';
 import { WhatsAppChannel } from '../channels/WhatsAppChannel';
 import { DiscordChannel } from '../channels/DiscordChannel';
@@ -618,7 +619,7 @@ export class Agent {
     }
 
     private getGoogleComputerUseModel(): string {
-        return this.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
+        return this.config.get('googleComputerUseModel') || DEFAULT_MODEL_IDS.googleComputerUse;
     }
 
     public async setupChannels() {

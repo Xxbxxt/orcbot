@@ -130,7 +130,7 @@ export const AgentConfigSchema = z.object({
     browserTraceScreenshots: coerceBool.default(true),
     browserTraceSnapshots: coerceBool.default(true),
     googleComputerUseEnabled: coerceBool.default(false),
-    googleComputerUseModel: z.string().default('gemini-2.5-computer-use-preview-10-2025'),
+    googleComputerUseModel: z.string().default(DEFAULT_MODEL_IDS.googleComputerUse),
     tokenUsagePath: z.string().optional(),
     tokenLogPath: z.string().optional(),
     discordToken: z.string().optional(),

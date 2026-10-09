@@ -301,8 +301,8 @@ export class MultiLLM {
             case 'openai': return DEFAULT_MODEL_IDS.openaiFast;
             case 'google': return DEFAULT_MODEL_IDS.googleFast;
             case 'anthropic': return DEFAULT_MODEL_IDS.anthropicFast;
-            case 'nvidia': return 'meta/llama-3.3-70b-instruct';
-            case 'openrouter': return 'openai/gpt-oss-120b:free';
+            case 'nvidia': return 'nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4';
+            case 'openrouter': return 'google/gemma-4-26b-a4b-it:free';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
         }
@@ -492,7 +492,7 @@ export class MultiLLM {
             if (elapsed < 180) {
                 logger.info(`MultiLLM: Ollama ("${resolvedModel}") is still deliberating tools... [Elapsed: ${elapsed}s]`);
                 if (elapsed === 60) {
-                    logger.warn(`MultiLLM: Local tool-calling is slow. Ensure you are using a model that natively supports tools (e.g. llama3.1, qwen2.5).`);
+                    logger.warn(`MultiLLM: Local tool-calling is slow. Ensure you are using a model that natively supports tools (e.g. qwen3.8, granite4.1).`);
                 }
             }
         }, 15000);
@@ -902,8 +902,8 @@ export class MultiLLM {
             case 'google': return DEFAULT_MODEL_IDS.googleFast;
             case 'nvidia': return 'moonshotai/kimi-k2.5';
             case 'openrouter': return DEFAULT_MODEL_IDS.openRouter;
-            case 'anthropic': return 'claude-sonnet-4-5';
-            case 'ollama': return 'llama3';
+            case 'anthropic': return 'claude-sonnet-5-5';
+            case 'ollama': return 'qwen3.8';
             case 'bedrock': return this.modelName;
             default: return this.modelName;
         }
@@ -1407,7 +1407,7 @@ export class MultiLLM {
 
     private async analyzeMediaGoogle(filePath: string, prompt: string, modelOverride?: string): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
-        const model = modelOverride || 'gemini-2.5-flash';
+        const model = modelOverride || DEFAULT_MODEL_IDS.googleMedia;
         const body = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: getAudioHelperMimeType(filePath), data: fs.readFileSync(filePath).toString('base64') } }] }], ...(model.includes('computer-use') ? { tools: [{ computer_use: {} }] } : {}) };
         try {
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

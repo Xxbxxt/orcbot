@@ -76,6 +76,14 @@ import {
     showLatencyMenu,
     runLatencyBenchmark,
 } from './screens/LatencyScreen';
+import {
+    showBrowserMenu,
+    showToolingMenu,
+    showGoogleIdentityMenu,
+    showGoogleWorkspaceCliMenu,
+    showGitHubCliMenu,
+    showGatewayMenu,
+} from './screens/ToolingScreen';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
