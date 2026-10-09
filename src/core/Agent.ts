@@ -9508,8 +9508,11 @@ The plugin handles all logic internally. See the plugin source for implementatio
                 }
             }
 
-            // Generic error pattern outside SYSTEM blocks
-            if (!lowered.includes('[system:')) {
+            // Generic error pattern. Unlike the result-snippet capture below, this must also
+            // scan SYSTEM-tagged lines: the tag closes at ']' and the diagnostic text follows
+            // it, e.g. "[SYSTEM: WORKFLOW_SIGNAL] browser_vision failed: Error: ...", which the
+            // bracketed pattern above cannot reach.
+            {
                 const errMatch = content.match(/(?:Error|Exception|failed|timed out)[:\s]+([^\n]{10,120})/i);
                 if (errMatch) {
                     const snippet = errMatch[1].trim();
@@ -9550,11 +9553,15 @@ The plugin handles all logic internally. See the plugin source for implementatio
             lines.push(`What I tried: ${Array.from(toolsAttempted).slice(0, 5).join(', ')}`);
         }
 
+        // Report where the work actually got to before failing, then what stopped it. Showing
+        // only the blocker discards the grounded progress the user needs in order to unblock.
+        if (resultSnippets.length > 0) {
+            lines.push(`Last observation: ${resultSnippets[0]}`);
+        }
+
         const blocker = lastBlocker || errorSnippets[0] || '';
         if (blocker) {
             lines.push(`Blocker: ${blocker.slice(0, 150)}`);
-        } else if (resultSnippets.length > 0) {
-            lines.push(`Last observation: ${resultSnippets[0]}`);
         }
 
         lines.push(reason === 'action-failed'
@@ -16658,6 +16665,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                         content: `[SYSTEM: You have used all ${MAX_STEPS} steps. You are getting a FEW BONUS STEPS to wrap up. IMMEDIATELY compile everything you have gathered and send a FINAL comprehensive message to the user. Do NOT start new research — deliver what you have NOW.]`,
                         metadata: { actionId: action.id, step: currentStep }
                     });
+                    // The main loop can exit with forceBreak already set by the pattern-loop or
+                    // skill-overuse guard. That guard has served its purpose, and leaving the flag
+                    // set makes the first bonus batch abort the mini-loop before the replan path
+                    // runs, silently skipping the wrap-up budget the review layer just granted.
+                    forceBreak = false;
                     // Adaptive bonus steps for wrapping up
                     const bonusSteps = Math.min(adaptiveBonus, Math.max(3, MAX_STEPS));
                     let bonusMessageSent = false;

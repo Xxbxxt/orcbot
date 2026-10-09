@@ -14,6 +14,7 @@ import os from 'os';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 import { DaemonManager } from '../utils/daemon';
 import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import { TokenTracker } from '../core/TokenTracker';
@@ -1975,7 +1976,7 @@ async function runLatencyBenchmark(opts: { includeLLM?: boolean; interactive?: b
             const t0 = performance.now();
             await agent.llm.callFast('Respond with the single word: pong');
             const dt = performance.now() - t0;
-            const fastModel = agent.config.get('fastModelName') || 'gpt-4o-mini';
+            const fastModel = agent.config.get('fastModelName') || DEFAULT_MODEL_IDS.openaiFast;
             results.push({ name: `LLM ping (${fastModel})`, latencyMs: dt });
             console.log(`  ${latencyColor(dt)(formatMs(dt))}`);
         } catch (e: any) {
@@ -3054,7 +3055,7 @@ async function showMainMenu() {
     banner();
 
     // ── Dashboard Panel ──────────────────────────────────────────────
-    const model = agent.config.get('modelName') || 'gpt-4o';
+    const model = agent.config.get('modelName') || DEFAULT_MODEL_IDS.openaiMain;
     const provider = agent.config.get('llmProvider') || 'auto';
     const queueItems = agent.actionQueue.getQueue();
     const queueLen = queueItems.length;
@@ -5591,7 +5592,7 @@ async function showPiAIConfig() {
     const catalogue = await agent.llm.getPiAICatalogue();
 
     const piAiEnabled = agent.config.get('usePiAI') !== false;
-    const currentModel = agent.config.get('modelName') || 'gpt-4o';
+    const currentModel = agent.config.get('modelName') || DEFAULT_MODEL_IDS.openaiMain;
 
     // Key lookup per catalogue provider
     const piKeyMap: Record<string, () => string | undefined> = {
@@ -5984,7 +5985,7 @@ async function showOpenAIConfig() {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter OpenAI API Key:' }]);
         agent.config.set('openaiApiKey', val);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gpt-4o, gpt-3.5-turbo):', default: 'gpt-4o' }]);
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gpt-5.4, gpt-5.4-mini):', default: DEFAULT_MODEL_IDS.openaiMain }]);
         agent.config.set('modelName', val);
     }
 
@@ -6023,7 +6024,7 @@ async function showGeminiConfig() {
         const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Google API Key:' }]);
         agent.config.set('googleApiKey', val);
     } else if (action === 'model') {
-        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gemini-pro, gemini-1.5-flash):', default: 'gemini-pro' }]);
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Enter Model (e.g., gemini-2.5-flash, gemini-3.5-flash):', default: DEFAULT_MODEL_IDS.googleFast }]);
         agent.config.set('modelName', val);
     }
 
@@ -9359,7 +9360,7 @@ function showStatus() {
     const hasWhatsapp = !!agent.whatsapp;
     const hasDiscord = !!agent.discord;
     const hasSlack = !!agent.slack;
-    const model = agent.config.get('modelName') || 'gpt-4o';
+    const model = agent.config.get('modelName') || DEFAULT_MODEL_IDS.openaiMain;
     const provider = agent.config.get('llmProvider') || 'auto';
     const agentName = agent.config.get('agentName') || 'OrcBot';
     const safeMode = agent.config.get('safeMode');

@@ -1,6 +1,7 @@
 import { EdgeTTS } from 'node-edge-tts';
 import { logger } from '../utils/logger';
 import { ErrorHandler } from '../utils/ErrorHandler';
+import { estimateTokens as estimateTextTokens } from '../utils/tokenEstimate';
 import fs from 'fs';
 import path from 'path';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
@@ -8,6 +9,7 @@ import { TokenTracker } from './TokenTracker';
 import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, isPiAiLinked, type PiAIAdapterOptions } from './PiAIAdapter';
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
 import { eventBus } from './EventBus';
+import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
 
@@ -24,10 +26,26 @@ export interface LLMToolDefinition {
         description: string;
         parameters: {
             type: 'object';
-            properties: Record<string, { type: string; description?: string }>;
+            properties: Record<string, {
+                type: string;
+                description?: string;
+                enum?: string[];
+                items?: { type: string };
+            }>;
             required?: string[];
+            additionalProperties?: boolean;
         };
     };
+}
+
+/**
+ * Optional per-call behaviour. `jsonMode` asks the provider for a native JSON response
+ * (OpenAI-style `response_format`, Gemini's `responseMimeType`) so a caller that parses a
+ * JSON contract does not have to scrape it out of prose. Providers with no equivalent
+ * ignore it, and a provider that rejects it is retried without it.
+ */
+export interface LLMCallOptions {
+    jsonMode?: boolean;
 }
 
 /** Structured tool call returned by native tool calling APIs */
@@ -98,7 +116,7 @@ export class MultiLLM {
         this.googleKey = config?.googleApiKey || process.env.GOOGLE_API_KEY;
         this.nvidiaKey = config?.nvidiaApiKey || process.env.NVIDIA_API_KEY;
         this.anthropicKey = config?.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
-        this.modelName = config?.modelName || 'gpt-4o';
+        this.modelName = config?.modelName || DEFAULT_MODEL_IDS.openaiMain;
         this.bedrockRegion = config?.bedrockRegion || process.env.BEDROCK_REGION || process.env.AWS_REGION;
         this.bedrockAccessKeyId = config?.bedrockAccessKeyId || process.env.BEDROCK_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID;
         this.bedrockSecretAccessKey = config?.bedrockSecretAccessKey || process.env.BEDROCK_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY;
@@ -280,9 +298,9 @@ export class MultiLLM {
         }
 
         switch (provider) {
-            case 'openai': return 'gpt-4o-mini';
-            case 'google': return 'gemini-flash-lite-latest';
-            case 'anthropic': return 'claude-3-5-haiku-latest';
+            case 'openai': return DEFAULT_MODEL_IDS.openaiFast;
+            case 'google': return DEFAULT_MODEL_IDS.googleFast;
+            case 'anthropic': return DEFAULT_MODEL_IDS.anthropicFast;
             case 'nvidia': return 'meta/llama-3.3-70b-instruct';
             case 'openrouter': return 'openai/gpt-oss-120b:free';
             case 'bedrock': return this.modelName;
@@ -290,7 +308,7 @@ export class MultiLLM {
         }
     }
 
-    public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string): Promise<string> {
+    public async call(prompt: string, systemMessage?: string, provider?: LLMProvider, modelOverride?: string, options?: LLMCallOptions): Promise<string> {
         const primaryModel = modelOverride || this.modelName;
         const primaryProvider = this.resolveProviderForModel(provider || this.preferredProvider, primaryModel);
         let piAiError: Error | undefined;
@@ -305,19 +323,33 @@ export class MultiLLM {
         }
         
         const fallbackProvider = this.getFallbackProvider(primaryProvider);
-        const executeCall = async (p: LLMProvider, m?: string) => {
-            if (p === 'openai') return this.callOpenAI(prompt, systemMessage, m);
-            if (p === 'google') return this.callGoogle(prompt, systemMessage, m);
+        const executeCall = async (p: LLMProvider, m?: string, opts?: LLMCallOptions) => {
+            const jsonMode = opts?.jsonMode === true;
+            if (p === 'openai') return this.callOpenAI(prompt, systemMessage, m, jsonMode);
+            if (p === 'google') return this.callGoogle(prompt, systemMessage, m, jsonMode);
             if (p === 'bedrock') return this.callBedrock(prompt, systemMessage, m);
-            if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m);
-            if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m);
+            if (p === 'openrouter') return this.callOpenRouter(prompt, systemMessage, m, jsonMode);
+            if (p === 'nvidia') return this.callNvidia(prompt, systemMessage, m, jsonMode);
             if (p === 'anthropic') return this.callAnthropic(prompt, systemMessage, m);
-            if (p === 'ollama') return this.callOllama(prompt, systemMessage, m);
+            if (p === 'ollama') return this.callOllama(prompt, systemMessage, m, jsonMode);
             
             try {
                 return await piAiCall(prompt, systemMessage, this.getPiAIOptions(m, p));
             } catch (e) {
                 throw new Error(`Provider ${p} not supported by core MultiLLM and pi-ai routing failed: ${(e as Error).message}`);
+            }
+        };
+
+        // Native JSON mode is a hint, not a contract: a backend or proxy that does not implement
+        // it answers 400. Degrade to plain text and let the parser tiers handle it rather than
+        // failing the whole call.
+        const executeCallWithJsonFallback = async (p: LLMProvider, m?: string) => {
+            try {
+                return await executeCall(p, m, options);
+            } catch (e) {
+                if (!options?.jsonMode || !MultiLLM.isStructuredOutputRejection(e)) throw e;
+                logger.warn(`MultiLLM: ${p} rejected the native JSON response mode; retrying without it.`);
+                return await executeCall(p, m, { jsonMode: false });
             }
         };
 
@@ -330,7 +362,7 @@ export class MultiLLM {
                 if (!this.hasKeyForProvider(primaryProviderResolved)) {
                     throw new Error(`Primary provider (${primaryProviderResolved}) failed: API key not configured.`);
                 }
-                return ErrorHandler.withRetry(() => executeCall(primaryProviderResolved, primaryModel), { maxRetries: 2 });
+                return ErrorHandler.withRetry(() => executeCallWithJsonFallback(primaryProviderResolved, primaryModel), { maxRetries: 2 });
             },
             async () => {
                 if (!fallbackProvider) throw new Error(`Primary provider (${primaryProvider}) failed and no fallback available.`);
@@ -339,7 +371,7 @@ export class MultiLLM {
                     throw new Error(`Primary provider (${primaryProvider}) failed and fallback provider (${fallbackProvider}) is not configured.`);
                 }
                 logger.info(`MultiLLM: Falling back from ${primaryProvider} to ${fallbackProvider} (Using model: ${fallbackModel})`);
-                return ErrorHandler.withRetry(() => executeCall(fallbackProvider, fallbackModel), { maxRetries: 1 });
+                return ErrorHandler.withRetry(() => executeCallWithJsonFallback(fallbackProvider, fallbackModel), { maxRetries: 1 });
             }
         );
     }
@@ -636,6 +668,58 @@ export class MultiLLM {
         }
     }
 
+    /**
+     * Include the provider's response body in the thrown error. Without it a rejected request
+     * is indistinguishable from an outage, which also makes the structured-output degradation
+     * below impossible to detect.
+     */
+    private static async providerError(
+        label: string,
+        response: { status: number; text: () => Promise<string> }
+    ): Promise<Error> {
+        let detail = '';
+        try {
+            detail = (await response.text()).slice(0, 500).replace(/\s+/g, ' ').trim();
+        } catch {
+            // Body already consumed or unavailable - the status alone still identifies the call.
+        }
+        return new Error(`${label} API Error: ${response.status}${detail ? ` - ${detail}` : ''}`);
+    }
+
+    /**
+     * True when a provider error looks like a rejection of the requested JSON response mode
+     * rather than a genuine failure, so the call can be retried once without it.
+     */
+    private static isStructuredOutputRejection(error: unknown): boolean {
+        const message = error instanceof Error ? error.message : String(error);
+        return /response_format|responseMimeType|response_mime_type|json_object|json mode|structured output|generationConfig|responseSchema/i.test(message);
+    }
+
+    /**
+     * Gemini's function-declaration schema is an OpenAPI subset, not full JSON Schema.
+     * Keywords we emit for other providers — notably `additionalProperties` — are not part
+     * of that subset and can make the whole request fail. Strip them recursively so the
+     * declaration is accepted; Gemini does not enforce strict schemas anyway.
+     */
+    private static toGeminiSchema(schema: any): any {
+        if (Array.isArray(schema)) return schema.map(item => MultiLLM.toGeminiSchema(item));
+        if (!schema || typeof schema !== 'object') return schema;
+
+        const out: Record<string, any> = {};
+        for (const [key, value] of Object.entries(schema)) {
+            if (key === 'additionalProperties' || key === '$schema') continue;
+            if (key === 'properties' && value && typeof value === 'object') {
+                out[key] = Object.fromEntries(
+                    Object.entries(value as Record<string, any>)
+                        .map(([propName, propSchema]) => [propName, MultiLLM.toGeminiSchema(propSchema)])
+                );
+                continue;
+            }
+            out[key] = MultiLLM.toGeminiSchema(value);
+        }
+        return out;
+    }
+
     private async callGoogleWithTools(
         prompt: string,
         systemMessage: string,
@@ -648,7 +732,7 @@ export class MultiLLM {
             functionDeclarations: tools.map(t => ({
                 name: t.function.name,
                 description: t.function.description,
-                parameters: t.function.parameters,
+                parameters: MultiLLM.toGeminiSchema(t.function.parameters),
             }))
         }];
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.googleKey}`;
@@ -686,6 +770,15 @@ export class MultiLLM {
         }
     }
 
+    /**
+     * OpenRouter needs an explicit cache breakpoint only for Anthropic-family models; every
+     * other provider it routes to caches implicitly. Sending the field to a provider that does
+     * not understand it can fail the request, hence the model check.
+     */
+    private static openRouterCacheControl(model: string): Record<string, any> {
+        return /claude|anthropic/i.test(model) ? { cache_control: { type: 'ephemeral' } } : {};
+    }
+
     private async callOpenRouterWithTools(
         prompt: string,
         systemMessage: string,
@@ -715,6 +808,7 @@ export class MultiLLM {
                     temperature: 0.7,
                     tools,
                     provider: { require: ['tools'] },
+                    ...MultiLLM.openRouterCacheControl(resolvedModel),
                 }),
             });
             if (!response.ok) {
@@ -772,10 +866,10 @@ export class MultiLLM {
         const configuredFallback = this.fallbackModelNames?.[provider];
         if (configuredFallback) return configuredFallback;
         switch (provider) {
-            case 'openai': return 'gpt-4o';
-            case 'google': return 'gemini-flash-lite-latest';
+            case 'openai': return DEFAULT_MODEL_IDS.openaiMain;
+            case 'google': return DEFAULT_MODEL_IDS.googleFast;
             case 'nvidia': return 'moonshotai/kimi-k2.5';
-            case 'openrouter': return 'google/gemini-2.0-flash-exp:free';
+            case 'openrouter': return DEFAULT_MODEL_IDS.openRouter;
             case 'anthropic': return 'claude-sonnet-4-5';
             case 'ollama': return 'llama3';
             case 'bedrock': return this.modelName;
@@ -859,7 +953,7 @@ export class MultiLLM {
         return requestedProvider;
     }
 
-    private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callOpenAI(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
         if (!this.openaiKey) throw new Error('OpenAI API key not configured');
         const messages: LLMMessage[] = [];
         if (systemMessage) messages.push({ role: 'system', content: systemMessage });
@@ -872,13 +966,21 @@ export class MultiLLM {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.openaiKey}`,
                 },
-                body: JSON.stringify({ model, messages, temperature: 0.7, stream: true }),
+                body: JSON.stringify({
+                    model, messages, temperature: 0.7, stream: true,
+                    // Ask for a trailing usage chunk. Without it a streamed call reports no usage
+                    // at all, so every OpenAI text call fell back to the character heuristic even
+                    // though the real counts were available.
+                    stream_options: { include_usage: true },
+                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                }),
             });
-            if (!response.ok) throw new Error(`OpenAI API Error: ${response.status}`);
+            if (!response.ok) throw await MultiLLM.providerError('OpenAI', response);
 
             const reader = response.body?.getReader();
             const decoder = new TextDecoder();
             let content = '';
+            let streamUsage: any;
 
             if (reader) {
                 while (true) {
@@ -890,6 +992,7 @@ export class MultiLLM {
                         if (!line.trim() || line.startsWith(':') || line === 'data: [DONE]') continue;
                         try {
                             const json = JSON.parse(line.replace(/^data: /, ''));
+                            if (json.usage) streamUsage = json.usage;
                             const token = json.choices?.[0]?.delta?.content;
                             if (token) {
                                 content += token;
@@ -899,7 +1002,7 @@ export class MultiLLM {
                     }
                 }
             }
-            this.recordUsage('openai', model, prompt, { choices: [{ message: { content } }] }, content);
+            this.recordUsage('openai', model, prompt, { usage: streamUsage }, content);
             return content;
         } catch (error) {
             throw error;
@@ -961,7 +1064,7 @@ export class MultiLLM {
         }
     }
 
-    private async callOllama(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callOllama(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
         const rawModel = modelOverride || this.modelName;
         const model = this.normalizeOllamaModel(rawModel);
         const baseUrl = (this.ollamaUrl || 'http://localhost:11434').replace(/\/+$/, '');
@@ -973,9 +1076,12 @@ export class MultiLLM {
             const response = await fetch(`${baseUrl}/v1/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model, messages, temperature: 0.7, stream: true }),
+                body: JSON.stringify({
+                    model, messages, temperature: 0.7, stream: true,
+                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                }),
             });
-            if (!response.ok) throw new Error(`Ollama API Error: ${response.status}`);
+            if (!response.ok) throw await MultiLLM.providerError('Ollama', response);
 
             const reader = response.body?.getReader();
             const decoder = new TextDecoder();
@@ -1007,7 +1113,7 @@ export class MultiLLM {
         }
     }
 
-    private async callGoogle(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callGoogle(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
         if (!this.googleKey) throw new Error('Google API key not configured');
         const fullPrompt = systemMessage ? `System: ${systemMessage}\n\nUser: ${prompt}` : prompt;
         const model = modelOverride || this.modelName;
@@ -1016,9 +1122,12 @@ export class MultiLLM {
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] })
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    ...(jsonMode ? { generationConfig: { responseMimeType: 'application/json' } } : {}),
+                })
             });
-            if (!response.ok) throw new Error(`Google API Error: ${response.status}`);
+            if (!response.ok) throw await MultiLLM.providerError('Google', response);
             const data = await response.json() as any;
             const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
             this.recordUsage('google', model, fullPrompt, data, textOut);
@@ -1028,7 +1137,7 @@ export class MultiLLM {
         }
     }
 
-    private async callNvidia(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callNvidia(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
         if (!this.nvidiaKey) throw new Error('NVIDIA API key not configured');
         const model = this.normalizeNvidiaModel(modelOverride || this.modelName);
         const messages: LLMMessage[] = [];
@@ -1042,9 +1151,12 @@ export class MultiLLM {
                     'Authorization': `Bearer ${this.nvidiaKey}`,
                     'Accept': 'application/json',
                 },
-                body: JSON.stringify({ model, messages, max_tokens: 16384, temperature: 0.7, stream: false }),
+                body: JSON.stringify({
+                    model, messages, max_tokens: 16384, temperature: 0.7, stream: false,
+                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                }),
             });
-            if (!response.ok) throw new Error(`NVIDIA API Error: ${response.status}`);
+            if (!response.ok) throw await MultiLLM.providerError('NVIDIA', response);
             const data = await response.json() as any;
             const content = data?.choices?.[0]?.message?.content || '';
             this.recordUsage('nvidia', model, prompt, data, content);
@@ -1054,7 +1166,7 @@ export class MultiLLM {
         }
     }
 
-    private async callOpenRouter(prompt: string, systemMessage?: string, modelOverride?: string): Promise<string> {
+    private async callOpenRouter(prompt: string, systemMessage?: string, modelOverride?: string, jsonMode = false): Promise<string> {
         if (!this.openrouterKey) throw new Error('OpenRouter API key not configured');
         const model = this.normalizeOpenRouterModel(modelOverride || this.modelName);
         const base = this.openrouterBaseUrl.replace(/\/+$/, '');
@@ -1066,9 +1178,13 @@ export class MultiLLM {
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openrouterKey}` },
-                body: JSON.stringify({ model, messages, temperature: 0.7 })
+                body: JSON.stringify({
+                    model, messages, temperature: 0.7,
+                    ...MultiLLM.openRouterCacheControl(model),
+                    ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
+                })
             });
-            if (!response.ok) throw new Error(`OpenRouter API Error: ${response.status}`);
+            if (!response.ok) throw await MultiLLM.providerError('OpenRouter', response);
             const data = await response.json() as any;
             const content = data?.choices?.[0]?.message?.content || '';
             this.recordUsage('openrouter', model, prompt, data, content);
@@ -1101,30 +1217,28 @@ export class MultiLLM {
 
     private recordUsage(provider: LLMProvider, model: string, prompt: string, data: any, completionText?: string) {
         if (!this.tokenTracker) return;
-        let pt = 0, ct = 0, tt = 0, est = true;
+        let pt = 0, ct = 0, tt = 0, cached = 0, est = true;
         if ((provider === 'openai' || provider === 'openrouter' || provider === 'nvidia') && data?.usage) {
             pt = data.usage.prompt_tokens; ct = data.usage.completion_tokens || 0; tt = data.usage.total_tokens || (pt + ct); est = false;
+            // OpenAI, OpenRouter and their downstream providers report prompt-cache hits here.
+            cached = data.usage.prompt_tokens_details?.cached_tokens || 0;
         } else if (provider === 'google' && data?.usageMetadata) {
             pt = data.usageMetadata.promptTokenCount; ct = data.usageMetadata.candidatesTokenCount || 0; tt = data.usageMetadata.totalTokenCount || (pt + ct); est = false;
+            // Gemini's implicit cache reports hits here (older revisions used cachedContentTokenCount).
+            cached = data.usageMetadata.total_cached_tokens || data.usageMetadata.cachedContentTokenCount || 0;
         } else if (provider === 'anthropic' && data?.usage) {
             pt = data.usage.input_tokens; ct = data.usage.output_tokens || 0; tt = pt + ct; est = false;
+            cached = data.usage.cache_read_input_tokens || 0;
         }
         if (est) {
             pt = this.estimateTokens(prompt); ct = this.estimateTokens(completionText || ''); tt = pt + ct;
         }
-        this.tokenTracker.record({ ts: new Date().toISOString(), provider, model, promptTokens: pt, completionTokens: ct, totalTokens: tt, metadata: { estimated: est } });
+        this.tokenTracker.record({ ts: new Date().toISOString(), provider, model, promptTokens: pt, completionTokens: ct, totalTokens: tt, cachedTokens: cached, metadata: { estimated: est } });
     }
 
     private estimateTokens(text: string): number {
         if (!text) return 0;
-        let tokens = 0;
-        const chunks = text.split(/\s+/).filter(c => c.length > 0);
-        for (const chunk of chunks) {
-            if (chunk.length <= 4) tokens += 1;
-            else if (chunk.length <= 10) tokens += Math.ceil(chunk.length / 5);
-            else tokens += Math.ceil(chunk.length / 4.5);
-        }
-        return Math.max(1, Math.ceil(tokens + (text.match(/\n/g) || []).length));
+        return estimateTextTokens(text);
     }
 
     public async textToSpeech(text: string, outputPath: string, voice?: string, speed: number = 1.0): Promise<string> {
@@ -1277,7 +1391,7 @@ export class MultiLLM {
         if (!this.openaiKey) throw new Error('OpenAI API key not configured');
         const ext = path.extname(filePath).toLowerCase().substring(1);
         if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
-            const response = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openaiKey}` }, body: JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: `data:image/${ext};base64,${fs.readFileSync(filePath).toString('base64')}` } }] }] }) });
+            const response = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.openaiKey}` }, body: JSON.stringify({ model: DEFAULT_MODEL_IDS.openaiMain, messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: `data:image/${ext};base64,${fs.readFileSync(filePath).toString('base64')}` } }] }] }) });
             const data = await response.json() as any; return data.choices[0].message.content;
         } else if (isAudioFile(filePath)) {
             const compatiblePath = await convertToWhisperCompatible(filePath);
