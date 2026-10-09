@@ -118,7 +118,7 @@ Both features leverage event-driven architecture:
 **Result:** ✅ All 9 tests passing
 
 ### Integration Tests
-**File:** `verify-integration.js`
+**File:** `scripts/verify-integration.js`
 
 Verification script testing:
 1. PollingManager instantiation and job execution
@@ -219,7 +219,7 @@ All feedback addressed:
 2. `src/channels/DiscordChannel.ts` - Discord channel implementation
 3. `tests/polling.test.ts` - Unit tests
 4. `POLLING_AND_DISCORD.md` - User documentation
-5. `verify-integration.js` - Integration verification script
+5. `scripts/verify-integration.js` - Integration verification script
 6. `package-lock.json` - Updated with discord.js
 
 ### Modified Files (3)
@@ -313,7 +313,7 @@ All code follows OrcBot's existing patterns, is thoroughly tested, properly docu
 For issues or questions:
 - Check `POLLING_AND_DISCORD.md` for usage details
 - Review logs in `~/.orcbot/logs/`
-- Run `node verify-integration.js` to test setup
+- Run `node scripts/verify-integration.js` to test setup
 - Submit issues on GitHub repository
 
 ---

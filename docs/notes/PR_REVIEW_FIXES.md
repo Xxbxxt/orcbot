@@ -133,7 +133,7 @@ After checking that the channel is text-based with `isTextBased()`, the code cas
 
 ### 6. Unused DiscordChannel Variable ✅
 **Comment ID**: 2763384806  
-**File**: `verify-integration.js:16`  
+**File**: `scripts/verify-integration.js:16`
 **Reviewer**: @copilot-pull-request-reviewer[bot]
 
 **Issue**: 
@@ -172,7 +172,7 @@ Added comprehensive documentation for the condition registry:
 1. `src/core/PollingManager.ts` - Fixed attempts counter closure
 2. `src/core/Agent.ts` - Implemented condition registry
 3. `src/channels/DiscordChannel.ts` - Removed type casts and unused imports
-4. `verify-integration.js` - Removed unused import
+4. `scripts/verify-integration.js` - Removed unused import
 5. `orcbot.config.yaml` - Reverted to original state
 6. `POLLING_AND_DISCORD.md` - Updated with condition examples
 
@@ -193,7 +193,7 @@ Added comprehensive documentation for the condition registry:
 - DiscordChannel: 14 tests (new, comprehensive coverage)
 
 ### Integration Tests
-- verify-integration.js: All checks passing
+- scripts/verify-integration.js: All checks passing
 - Agent integration: Skills registered correctly
 - Configuration system: Works with new condition types
 

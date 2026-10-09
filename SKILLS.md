@@ -289,7 +289,7 @@ Skills use a three-level loading strategy to minimize token usage:
 Custom plugin skills (.ts/.js files) are loaded from ~/.orcbot/plugins. If you add new plugins there, they will appear in the agent's live skill registry.
 
 ## Configuration Management
-Agent-driven configuration management with policy-based security. See [docs/CONFIG_MANAGEMENT.md](docs/CONFIG_MANAGEMENT.md) for complete documentation.
+Agent-driven configuration management with policy-based security. See [docs/guides/CONFIG_MANAGEMENT.md](docs/guides/CONFIG_MANAGEMENT.md) for complete documentation.
 
 - **manage_config({ action: "get", key })**: [CONFIG MANAGEMENT] Get current value of a configuration setting.
 - **manage_config({ action: "set", key, value, reason? })**: [CONFIG MANAGEMENT] Set a configuration value (respects policy: SAFE, APPROVAL, or LOCKED).

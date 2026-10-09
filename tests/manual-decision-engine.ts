@@ -3,12 +3,12 @@
  * Tests retry logic, validation, and error handling
  */
 
-import { DecisionEngine } from './src/core/DecisionEngine';
-import { MemoryManager } from './src/memory/MemoryManager';
-import { MultiLLM } from './src/core/MultiLLM';
-import { SkillsManager } from './src/core/SkillsManager';
-import { ConfigManager } from './src/config/ConfigManager';
-import { logger } from './src/utils/logger';
+import { DecisionEngine } from '../src/core/DecisionEngine';
+import { MemoryManager } from '../src/memory/MemoryManager';
+import { MultiLLM } from '../src/core/MultiLLM';
+import { SkillsManager } from '../src/core/SkillsManager';
+import { ConfigManager } from '../src/config/ConfigManager';
+import { logger } from '../src/utils/logger';
 
 async function testRetryLogic() {
     console.log('\n=== Testing Retry Logic ===\n');
