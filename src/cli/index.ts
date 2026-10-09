@@ -30,6 +30,13 @@ import {
     isSplashShown,
     clearScreen,
 } from './ui/Header';
+import {
+    promptSelect,
+    promptText,
+    promptConfirm,
+    withSpinner,
+} from './ui/Prompts';
+import { agentStreamRenderer } from './ui/AgentStreamRenderer';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
@@ -124,25 +131,20 @@ async function showToolsManagerMenu() {
     box(summaryLines, { title: 'TOOL INVENTORY', width: 40 });
     console.log('');
 
-    const { action } = await inquirer.prompt([
-        {
-            type: 'list',
-            name: 'action',
-            message: cyan('Tools Options:'),
-            choices: [
-                { name: `   ${bold('Install Tool')}`, value: 'install' },
-                { name: `   ${bold('Approve Tool')}`, value: 'approve' },
-                { name: `   ${bold('Activate / Deactivate Tool')}`, value: 'activate' },
-                { name: `  ▶  ${bold('Run Tool Command')}`, value: 'run' },
-                { name: `   ${bold('Read Tool README')}`, value: 'readme' },
-                { name: `    ${bold('Uninstall Tool')}`, value: 'uninstall' },
-                new inquirer.Separator(dim('  ──────────────────────────────────')),
-                { name: dim('  ← Back'), value: 'back' }
-            ]
-        }
-    ]);
+    const action = await promptSelect<string>(
+        cyan('Tools Options:'),
+        [
+            { label: 'Install Tool', value: 'install' },
+            { label: 'Approve Tool', value: 'approve' },
+            { label: 'Activate / Deactivate Tool', value: 'activate' },
+            { label: 'Run Tool Command', value: 'run' },
+            { label: 'Read Tool README', value: 'readme' },
+            { label: 'Uninstall Tool', value: 'uninstall' },
+            { label: 'Back', value: 'back', hint: 'return to main menu' }
+        ]
+    );
 
-    if (action === 'back') return showMainMenu();
+    if (!action || action === 'back') return showMainMenu();
 
     const pickToolName = async (label: string): Promise<string> => {
         if (tools.length > 0) {
@@ -786,7 +788,12 @@ program
             console.log('Agent loop starting... (Press Ctrl+C to stop)');
             setupEventSubscriptions();
             await startGatewayIfNeeded();
-            await agent.start();
+            agentStreamRenderer.attach();
+            try {
+                await agent.start();
+            } finally {
+                agentStreamRenderer.detach();
+            }
         }
     });
 
@@ -3114,7 +3121,12 @@ async function showMainMenu() {
     switch (action) {
         case 'start':
             console.log('Starting agent loop... (Ctrl+C to stop)');
-            await agent.start();
+            agentStreamRenderer.attach();
+            try {
+                await agent.start();
+            } finally {
+                agentStreamRenderer.detach();
+            }
             break;
         case 'push':
             await showPushTaskMenu();

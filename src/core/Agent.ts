@@ -11314,6 +11314,12 @@ REFLECTION: <1-2 sentences>`;
             let toolResult;
             let executionError;
             const activeToolToken = this.beginActiveToolExecution(action.id, toolCall.name);
+            eventBus.emit('tool:call' as any, {
+                actionId: action.id,
+                toolName: toolCall.name,
+                parameters: toolCall.metadata,
+                step: currentStep,
+            });
             try {
                 toolResult = await this.skills.executeSkill(toolCall.name, toolCall.metadata || {});
             } catch (e) {
@@ -11332,6 +11338,14 @@ REFLECTION: <1-2 sentences>`;
             }
 
             const toolDurationMs = Date.now() - toolStartedAt;
+            eventBus.emit('tool:result' as any, {
+                actionId: action.id,
+                toolName: toolCall.name,
+                success: !executionError,
+                durationMs: toolDurationMs,
+                result: typeof toolResult === 'string' ? toolResult : undefined,
+                error: executionError ? String(executionError) : undefined,
+            });
             const isInternalTool = ['update_journal', 'update_user_profile', 'update_learning', 'book_log_add', 'update_world'].includes(toolCall.name);
             const assessed = await this.assessToolExecutionOutcome({
                 action,
@@ -16116,6 +16130,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 currentStep++;
                 stepsSinceLastMessage++;
                 logger.info(`Agent: Step ${currentStep} for action ${action.id}`);
+                eventBus.emit('task:step:start' as any, {
+                    step: currentStep,
+                    maxSteps: limits.steps,
+                    actionId: action.id,
+                });
 
                 if (this.cancelledActions.has(action.id)) {
                     logger.warn(`Agent: Action ${action.id} cancelled by user`);
@@ -16243,6 +16262,10 @@ Respond with a single actionable task description (one sentence). Be specific ab
 
                 if (decision.reasoning) {
                     logger.info(`Agent Reasoning: ${decision.reasoning}`);
+                    eventBus.emit('llm:thought' as any, {
+                        thought: decision.reasoning,
+                        actionId: action.id,
+                    });
                 }
 
                 const pipelineNotes = decision.metadata?.pipelineNotes;
@@ -17114,6 +17137,12 @@ Respond with a single actionable task description (one sentence). Be specific ab
             });
 
             this.actionQueue.updateStatus(action.id, actionStatus);
+            eventBus.emit('task:complete' as any, {
+                actionId: action.id,
+                summary: action.payload?.description || 'Task finished',
+                steps: currentStep,
+                status: actionStatus,
+            });
 
             try {
                 const capture = this.selfTraining.captureCompletedAction({
