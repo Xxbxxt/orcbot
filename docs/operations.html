@@ -12,7 +12,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="index.html" class="sidebar-logo">
-          <div class="sidebar-logo-icon">🤖</div>
+          <div class="sidebar-logo-icon">OB</div>
           OrcBot
         </a>
         <span class="sidebar-version">v1.0.0</span>
@@ -22,35 +22,35 @@
         <div class="nav-section">
           <div class="nav-section-title">Getting Started</div>
           <ul class="nav-links">
-            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
-            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
-            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+            <li><a href="index.html" class="nav-link">Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link">Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link">Configuration</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Core Concepts</div>
           <ul class="nav-links">
-            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
-            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
-            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
-            <li><a href="local-models.html" class="nav-link"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+            <li><a href="architecture.html" class="nav-link">Architecture</a></li>
+            <li><a href="skills.html" class="nav-link">Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link">Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link">Local Models</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Deployment</div>
           <ul class="nav-links">
-            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
-            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
-            <li><a href="operations.html" class="nav-link active"><span class="nav-link-icon">📊</span> Operations</a></li>
+            <li><a href="docker.html" class="nav-link">Docker</a></li>
+            <li><a href="gateway.html" class="nav-link">Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link active">Operations</a></li>
           </ul>
         </div>
       </nav>
       
       <div class="sidebar-footer">
-        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
-        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+        <a href="https://github.com/fredabila/orcbot" target="_blank">GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">Community</a>
       </div>
     </aside>
 
@@ -64,19 +64,19 @@
           <span>Operations</span>
         </div>
         <div class="header-actions">
-          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">Star</a>
         </div>
       </header>
 
       <div class="page-content">
         <div class="page-header">
-          <span class="page-badge">📊 Features</span>
+          <span class="page-badge"> Features</span>
           <h1 class="page-title">Operations</h1>
           <p class="page-description">Observability, logging, troubleshooting, and production tips.</p>
         </div>
 
         <div class="card">
-          <h2>📝 Logging</h2>
+          <h2> Logging</h2>
           <p>OrcBot uses Winston for structured logging:</p>
           <pre><code># Log location
 ~/.orcbot/logs/orcbot.log
@@ -88,7 +88,7 @@
         </div>
 
         <div class="card">
-          <h2>🔍 Troubleshooting</h2>
+          <h2> Troubleshooting</h2>
           
           <h4>WhatsApp Won't Connect</h4>
           <ul>
@@ -120,7 +120,7 @@
         </div>
 
         <div class="card">
-          <h2>🖥️ CLI Commands Reference</h2>
+          <h2> CLI Commands Reference</h2>
           <table>
             <tr><th>Command</th><th>Description</th></tr>
             <tr><td><code>orcbot run</code></td><td>Start the agent heartbeat loop</td></tr>
@@ -135,10 +135,10 @@
         </div>
 
         <div class="card">
-          <h2>🚀 Production Tips</h2>
+          <h2> Production Tips</h2>
           
           <div class="callout callout-warning">
-            <strong>⚠️ Security</strong>
+            <strong> Security</strong>
             <p>Never commit API keys. Use environment variables or the encrypted config store.</p>
           </div>
 
@@ -166,7 +166,7 @@ pm2 start "orcbot run" --name orcbot
         </div>
 
         <div class="card">
-          <h2>📁 Data Locations</h2>
+          <h2> Data Locations</h2>
           <div class="key-grid">
             <div class="key-item">
               <div class="key-name">~/.orcbot/</div>
@@ -204,7 +204,7 @@ pm2 start "orcbot run" --name orcbot
         </div>
 
         <div class="card">
-          <h2>🔄 Backup & Restore</h2>
+          <h2> Backup & Restore</h2>
           <pre><code># Backup entire data directory
 tar -czvf orcbot-backup.tar.gz ~/.orcbot
 

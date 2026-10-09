@@ -7,13 +7,8 @@ import './Deploy.css';
 
 type Provider = 'digitalocean' | 'docker' | 'aws' | 'railway' | 'hetzner' | 'local';
 
-const providers: { id: Provider; name: string; icon: string; available: boolean }[] = [
-  { id: 'docker', name: 'Docker', icon: '🐳', available: true },
-  { id: 'digitalocean', name: 'DigitalOcean', icon: '🌊', available: true },
-  { id: 'aws', name: 'AWS EC2', icon: '☁️', available: false },
-  { id: 'railway', name: 'Railway', icon: '🚂', available: false },
-  { id: 'hetzner', name: 'Hetzner', icon: '🖥️', available: false },
-  { id: 'local', name: 'Local Server', icon: '💻', available: false },
+const providers: { id: Provider; name: string; available: boolean }[] = [
+  { id: 'docker', name: 'Docker', available: true }, { id: 'digitalocean', name: 'DigitalOcean', available: true }, { id: 'aws', name: 'AWS EC2', available: false }, { id: 'railway', name: 'Railway', available: false }, { id: 'hetzner', name: 'Hetzner', available: false }, { id: 'local', name: 'Local Server', available: false },
 ];
 
 function Deploy() {
@@ -28,51 +23,20 @@ function Deploy() {
 
   const digitalOceanSteps = [
     {
-      title: 'Create a Droplet',
-      description: 'Log into DigitalOcean and create a new Droplet with these recommended specs:',
-      details: [
-        '**OS**: Ubuntu 22.04 LTS (recommended)',
-        '**Plan**: Basic - $6/mo (1GB RAM, 1 vCPU) with Lightpanda, or $12/mo (2GB RAM) with Chrome',
-        '**Datacenter**: Choose closest to your users',
-        '**Authentication**: SSH Keys (recommended) or Password',
-      ],
-      code: null,
-    },
-    {
-      title: 'Connect to your Droplet',
-      description: 'SSH into your new server using the IP address from DigitalOcean dashboard:',
-      code: 'ssh root@YOUR_DROPLET_IP',
-    },
-    {
-      title: 'Update system packages',
-      description: 'Always start with a fresh system update:',
-      code: `apt update && apt upgrade -y`,
-    },
-    {
-      title: 'Install Node.js 20 LTS',
-      description: 'OrcBot requires Node.js 18+ (we recommend 20 LTS):',
-      code: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      title: 'Create a Droplet', description: 'Log into DigitalOcean and create a new Droplet with these recommended specs:', details: [
+        '**OS**: Ubuntu 22.04 LTS (recommended)', '**Plan**: Basic - $6/mo (1GB RAM, 1 vCPU) with Lightpanda, or $12/mo (2GB RAM) with Chrome', '**Datacenter**: Choose closest to your users', '**Authentication**: SSH Keys (recommended) or Password', ], code: null, }, {
+      title: 'Connect to your Droplet', description: 'SSH into your new server using the IP address from DigitalOcean dashboard:', code: 'ssh root@YOUR_DROPLET_IP', }, {
+      title: 'Update system packages', description: 'Always start with a fresh system update:', code: `apt update && apt upgrade -y`, }, {
+      title: 'Install Node.js 20 LTS', description: 'OrcBot requires Node.js 18+ (we recommend 20 LTS):', code: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 apt install -y nodejs
-node --version`,
-    },
-    {
-      title: 'Install OrcBot globally',
-      description: 'Clone the repo and install OrcBot as a global CLI tool:',
-      code: `git clone https://github.com/fredabila/orcbot.git
+node --version`, }, {
+      title: 'Install OrcBot globally', description: 'Clone the repo and install OrcBot as a global CLI tool:', code: `git clone https://github.com/fredabila/orcbot.git
 cd orcbot
 npm install
 npm run build
-npm install -g .`,
-    },
-    {
-      title: 'Run the setup wizard',
-      description: 'Configure your API keys and preferences:',
-      code: `orcbot setup`,
-    },
-    {
-      title: 'Install Lightpanda (recommended for low-memory VPS)',
-      description: 'Lightpanda is a lightweight browser using 9x less RAM than Chrome — perfect for $6/mo droplets:',
-      code: `# Install Lightpanda
+npm install -g .`, }, {
+      title: 'Run the setup wizard', description: 'Configure your API keys and preferences:', code: `orcbot setup`, }, {
+      title: 'Install Lightpanda (recommended for low-memory VPS)', description: 'Lightpanda is a lightweight browser using 9x less RAM than Chrome, perfect for $6/mo droplets:', code: `# Install Lightpanda
 orcbot lightpanda install
 
 # Start in background
@@ -82,31 +46,19 @@ orcbot lightpanda start -b
 orcbot lightpanda enable
 
 # Check status
-orcbot lightpanda status`,
-    },
-    {
-      title: 'Alternative: Install Chrome dependencies',
-      description: 'Skip this if using Lightpanda. Only needed for Playwright/Chrome browser automation:',
-      code: `apt install -y wget gnupg ca-certificates fonts-liberation \\
+orcbot lightpanda status`, }, {
+      title: 'Alternative: Install Chrome dependencies', description: 'Skip this if using Lightpanda. Only needed for Playwright/Chrome browser automation:', code: `apt install -y wget gnupg ca-certificates fonts-liberation \\
   libappindicator3-1 libasound2t64 libatk-bridge2.0-0 libatk1.0-0 \\
   libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 \\
-  libnss3 libxcomposite1 libxdamage1 libxrandr2 xdg-utils`,
-    },
-    {
-      title: 'Run in background (simple option)',
-      description: 'Start OrcBot in the background without systemd:',
-      code: `orcbot run --background
+  libnss3 libxcomposite1 libxdamage1 libxrandr2 xdg-utils`, }, {
+      title: 'Run in background (simple option)', description: 'Start OrcBot in the background without systemd:', code: `orcbot run --background
 
 # View logs
 tail -f ~/.orcbot/foreground.log
 
 # Stop all OrcBot processes
-orcbot stop`,
-    },
-    {
-      title: 'Create a systemd service (optional but recommended)',
-      description: 'For auto-restart and running OrcBot as a background service:',
-      code: `cat > /etc/systemd/system/orcbot.service << 'EOF'
+orcbot stop`, }, {
+      title: 'Create a systemd service (optional but recommended)', description: 'For auto-restart and running OrcBot as a background service:', code: `cat > /etc/systemd/system/orcbot.service << 'EOF'
 [Unit]
 Description=OrcBot Autonomous Agent
 After=network.target
@@ -126,12 +78,8 @@ EOF
 
 systemctl daemon-reload
 systemctl enable orcbot
-systemctl start orcbot`,
-    },
-    {
-      title: 'Create Lightpanda systemd service (if using Lightpanda)',
-      description: 'Auto-start Lightpanda browser on boot:',
-      code: `cat > /etc/systemd/system/lightpanda.service << 'EOF'
+systemctl start orcbot`, }, {
+      title: 'Create Lightpanda systemd service (if using Lightpanda)', description: 'Auto-start Lightpanda browser on boot:', code: `cat > /etc/systemd/system/lightpanda.service << 'EOF'
 [Unit]
 Description=Lightpanda Browser Server
 Before=orcbot.service
@@ -149,27 +97,17 @@ EOF
 
 systemctl daemon-reload
 systemctl enable lightpanda
-systemctl start lightpanda`,
-    },
-    {
-      title: 'Check status and logs',
-      description: 'Verify OrcBot is running correctly:',
-      code: `# Check service status
+systemctl start lightpanda`, }, {
+      title: 'Check status and logs', description: 'Verify OrcBot is running correctly:', code: `# Check service status
 systemctl status orcbot
 
 # View live logs
 journalctl -u orcbot -f
 
 # Or run interactively
-orcbot run`,
-    },
-    {
-      title: 'Configure firewall (optional)',
-      description: 'If you plan to expose any ports (not required for basic operation):',
-      code: `ufw allow OpenSSH
-ufw enable`,
-    },
-  ];
+orcbot run`, }, {
+      title: 'Configure firewall (optional)', description: 'If you plan to expose any ports (not required for basic operation):', code: `ufw allow OpenSSH
+ufw enable`, }, ];
 
   return (
     <div className="app deploy-page">
@@ -237,7 +175,6 @@ ufw enable`,
                 onClick={() => provider.available && setSelectedProvider(provider.id)}
                 disabled={!provider.available}
               >
-                <span className="provider-icon">{provider.icon}</span>
                 <span className="provider-name">{provider.name}</span>
                 {!provider.available && <span className="coming-soon-badge">Soon</span>}
               </button>
@@ -249,8 +186,8 @@ ufw enable`,
           <section className="deployment-guide">
             <div className="guide-header">
               <div>
-                <h2>🐳 Docker Deployment Guide</h2>
-                <p>Run OrcBot anywhere with Docker — the fastest way to deploy.</p>
+                <h2> Docker Deployment Guide</h2>
+                <p>Run OrcBot anywhere with Docker, the fastest way to deploy.</p>
               </div>
               <div className="requirements">
                 <h4>Requirements</h4>
@@ -265,53 +202,32 @@ ufw enable`,
             <div className="steps-container">
               {[
                 {
-                  title: 'Install Docker',
-                  description: 'Install Docker on your system if you haven\'t already:',
-                  details: [
-                    '**Windows/Mac**: Download <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a>',
-                    '**Linux**: Run the install script below',
-                  ],
-                  code: `# Linux only — install Docker Engine
+                  title: 'Install Docker', description: 'Install Docker on your system if you haven\'t already:', details: [
+                    '**Windows/Mac**: Download <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a>', '**Linux**: Run the install script below', ], code: `# Linux only, install Docker Engine
 curl -fsSL https://get.docker.com | sh
 
 # Verify installation
 docker --version
-docker compose version`,
-                },
-                {
-                  title: 'Clone & configure',
-                  description: 'Clone the repo and set up your environment variables:',
-                  code: `git clone https://github.com/fredabila/orcbot.git
+docker compose version`, }, {
+                  title: 'Clone & configure', description: 'Clone the repo and set up your environment variables:', code: `git clone https://github.com/fredabila/orcbot.git
 cd orcbot
 
 # Copy the example env and edit with your API keys
 cp .env.example .env
-nano .env   # or use any text editor`,
-                },
-                {
-                  title: 'Option A: Minimal (recommended)',
-                  description: 'Uses Alpine Linux + Lightpanda browser. Smallest footprint (~150MB):',
-                  code: `# Start OrcBot + Lightpanda browser
+nano .env   # or use any text editor`, }, {
+                  title: 'Option A: Minimal (recommended)', description: 'Uses Alpine Linux + Lightpanda browser. Smallest footprint (~150MB):', code: `# Start OrcBot + Lightpanda browser
 docker compose -f docker-compose.minimal.yml up -d
 
 # View logs
 docker logs -f orcbot
 
-# Dashboard available at http://localhost:3100`,
-                },
-                {
-                  title: 'Option B: Full (with Playwright/Chrome)',
-                  description: 'Includes Playwright browser for full web automation (~500MB):',
-                  code: `# Start OrcBot with Playwright
+# Dashboard available at http://localhost:3100`, }, {
+                  title: 'Option B: Full (with Playwright/Chrome)', description: 'Includes Playwright browser for full web automation (~500MB):', code: `# Start OrcBot with Playwright
 docker compose up -d
 
 # Optionally add Lightpanda too
-docker compose --profile lightpanda up -d`,
-                },
-                {
-                  title: 'Managing containers',
-                  description: 'Common Docker commands for day-to-day management:',
-                  code: `# View logs
+docker compose --profile lightpanda up -d`, }, {
+                  title: 'Managing containers', description: 'Common Docker commands for day-to-day management:', code: `# View logs
 docker logs -f orcbot
 
 # Stop containers
@@ -323,23 +239,15 @@ docker compose restart
 # Rebuild after updates
 git pull
 docker compose build --no-cache
-docker compose up -d`,
-                },
-                {
-                  title: 'Persistent data & backups',
-                  description: 'All OrcBot data lives in a Docker volume that survives container restarts:',
-                  code: `# Backup your data
+docker compose up -d`, }, {
+                  title: 'Persistent data & backups', description: 'All OrcBot data lives in a Docker volume that survives container restarts:', code: `# Backup your data
 docker run --rm -v orcbot-data:/data -v $(pwd):/backup \\
   alpine tar czf /backup/orcbot-backup.tar.gz /data
 
 # Restore from backup
 docker run --rm -v orcbot-data:/data -v $(pwd):/backup \\
-  alpine tar xzf /backup/orcbot-backup.tar.gz -C /`,
-                },
-                {
-                  title: 'Custom configuration',
-                  description: 'Mount a local config file for advanced settings:',
-                  code: `# Create a config file
+  alpine tar xzf /backup/orcbot-backup.tar.gz -C /`, }, {
+                  title: 'Custom configuration', description: 'Mount a local config file for advanced settings:', code: `# Create a config file
 cat > my-config.yaml << 'EOF'
 agentName: MyBot
 modelName: gpt-4o
@@ -351,9 +259,7 @@ EOF
 # Mount it when running
 docker compose -f docker-compose.minimal.yml \\
   -v ./my-config.yaml:/root/.orcbot/orcbot.config.yaml:ro \\
-  up -d`,
-                },
-              ].map((step, index) => (
+  up -d`, }, ].map((step, index) => (
                 <div key={index} className="step-card">
                   <div className="step-number">{String(index + 1).padStart(2, '0')}</div>
                   <div className="step-content">
@@ -431,7 +337,7 @@ docker compose -f docker-compose.minimal.yml \\
           <section className="deployment-guide">
             <div className="guide-header">
               <div>
-                <h2>🌊 DigitalOcean Deployment Guide</h2>
+                <h2> DigitalOcean Deployment Guide</h2>
                 <p>Deploy OrcBot to a DigitalOcean Droplet in about 15 minutes.</p>
               </div>
               <div className="requirements">

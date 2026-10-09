@@ -7,7 +7,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -16,24 +15,23 @@
             <div class="brand-block">
                 <div class="brand-mark">OB</div>
                 <div>
-                    <div class="eyebrow">Gateway Control</div>
                     <h1>OrcBot Ops</h1>
                 </div>
             </div>
 
             <nav class="nav-stack scroll-region">
-                <button class="nav-item active" data-view="overview"><i class="fas fa-grid-2"></i><span>Overview</span></button>
-                <button class="nav-item" data-view="canvas"><i class="fas fa-object-group"></i><span>Canvas</span></button>
-                <button class="nav-item" data-view="chat"><i class="fas fa-comments"></i><span>Gateway Chat</span></button>
-                <button class="nav-item" data-view="tasks"><i class="fas fa-list-check"></i><span>Queue</span></button>
-                <button class="nav-item" data-view="skills"><i class="fas fa-wand-magic-sparkles"></i><span>Skills</span></button>
-                <button class="nav-item" data-view="services"><i class="fas fa-cubes"></i><span>Services</span></button>
-                <button class="nav-item" data-view="data-home"><i class="fas fa-folder-tree"></i><span>Data Home</span></button>
-                <button class="nav-item" data-view="memory"><i class="fas fa-brain"></i><span>Memory</span></button>
-                <button class="nav-item" data-view="logs"><i class="fas fa-wave-square"></i><span>Logs</span></button>
-                <button class="nav-item" data-view="api"><i class="fas fa-flask"></i><span>API Lab</span></button>
-                <button class="nav-item" data-view="security"><i class="fas fa-shield-halved"></i><span>Security</span></button>
-                <button class="nav-item" data-view="config"><i class="fas fa-sliders"></i><span>Config</span></button>
+                <button class="nav-item active" data-view="overview"><span>Overview</span></button>
+                <button class="nav-item" data-view="canvas"><span>Canvas</span></button>
+                <button class="nav-item" data-view="chat"><span>Gateway Chat</span></button>
+                <button class="nav-item" data-view="tasks"><span>Queue</span></button>
+                <button class="nav-item" data-view="skills"><span>Skills</span></button>
+                <button class="nav-item" data-view="services"><span>Services</span></button>
+                <button class="nav-item" data-view="data-home"><span>Data Home</span></button>
+                <button class="nav-item" data-view="memory"><span>Memory</span></button>
+                <button class="nav-item" data-view="logs"><span>Logs</span></button>
+                <button class="nav-item" data-view="api"><span>API Lab</span></button>
+                <button class="nav-item" data-view="security"><span>Security</span></button>
+                <button class="nav-item" data-view="config"><span>Config</span></button>
             </nav>
 
             <div class="sidebar-footer">
@@ -66,8 +64,8 @@
                     <span class="meta-chip">Provider <strong id="activeProvider">-</strong></span>
                 </div>
                 <div class="topbar-actions">
-                    <button class="btn ghost" id="refreshBtn"><i class="fas fa-rotate"></i> Refresh</button>
-                    <button class="btn primary" id="newTaskBtn"><i class="fas fa-plus"></i> Push Task</button>
+                    <button class="btn ghost" id="refreshBtn">Refresh</button>
+                    <button class="btn primary" id="newTaskBtn">Push Task</button>
                 </div>
             </header>
 
@@ -79,8 +77,8 @@
                         <p id="modeDescription">Loading gateway status...</p>
                     </div>
                     <div class="hero-actions">
-                        <button class="btn primary" data-jump="canvas"><i class="fas fa-object-group"></i> Open Canvas</button>
-                        <button class="btn ghost" data-jump="api"><i class="fas fa-flask"></i> API Lab</button>
+                        <button class="btn primary" data-jump="canvas">Open Canvas</button>
+                        <button class="btn ghost" data-jump="api">API Lab</button>
                     </div>
                 </div>
 
@@ -93,7 +91,7 @@
                                 <div class="eyebrow">Live Feed</div>
                                 <h3>Recent runtime events</h3>
                             </div>
-                            <button class="icon-btn" id="clearEventsBtn"><i class="fas fa-broom"></i></button>
+                            <button class="icon-btn" id="clearEventsBtn">Clear</button>
                         </div>
                         <div class="event-feed" id="eventFeed"></div>
                     </article>
@@ -122,7 +120,7 @@
                                     <input id="quickTaskSource" class="field-input" value="gateway-chat">
                                 </label>
                             </div>
-                            <button class="btn primary" id="quickTaskSend"><i class="fas fa-paper-plane"></i> Submit Task</button>
+                            <button class="btn primary" id="quickTaskSend">Submit Task</button>
                         </div>
                     </article>
                 </div>
@@ -173,36 +171,36 @@
                 </div>
                 <div class="ops-canvas" id="opsCanvas">
                     <section class="canvas-panel emphasis" data-panel="command">
-                        <div class="canvas-panel-head"><span>Command Deck</span><button class="icon-btn" data-canvas-action="focus-chat"><i class="fas fa-arrow-up-right-from-square"></i></button></div>
+                        <div class="canvas-panel-head"><span>Command Deck</span><button class="icon-btn" data-canvas-action="focus-chat">Focus</button></div>
                         <div class="canvas-panel-body">
                             <p>Use this as the operator entry point. It is exposed through <code>window.a2uiGatewayBridge</code> so external UIs can push tasks, events, and service state into the same workspace.</p>
                             <div class="canvas-command-grid">
-                                <button class="btn primary" data-jump="chat"><i class="fas fa-comments"></i> Open Chat</button>
-                                <button class="btn ghost" data-jump="tasks"><i class="fas fa-list-check"></i> Review Queue</button>
-                                <button class="btn ghost" data-jump="skills"><i class="fas fa-wand-magic-sparkles"></i> Use Skills</button>
-                                <button class="btn ghost" data-jump="api"><i class="fas fa-flask"></i> Probe API</button>
+                                <button class="btn primary" data-jump="chat">Open Chat</button>
+                                <button class="btn ghost" data-jump="tasks">Review Queue</button>
+                                <button class="btn ghost" data-jump="skills">Use Skills</button>
+                                <button class="btn ghost" data-jump="api">Probe API</button>
                             </div>
                             <pre class="code-surface" id="bridgePreview">window.a2uiGatewayBridge.ready = true</pre>
                         </div>
                     </section>
                     <section class="canvas-panel" data-panel="services">
-                        <div class="canvas-panel-head"><span>Service Graph</span><button class="icon-btn" data-jump="services"><i class="fas fa-cubes"></i></button></div>
+                        <div class="canvas-panel-head"><span>Service Graph</span><button class="icon-btn" data-jump="services">Services</button></div>
                         <div class="canvas-panel-body" id="canvasServices"></div>
                     </section>
                     <section class="canvas-panel" data-panel="events">
-                        <div class="canvas-panel-head"><span>Event Lane</span><button class="icon-btn" id="canvasEventClear"><i class="fas fa-broom"></i></button></div>
+                        <div class="canvas-panel-head"><span>Event Lane</span><button class="icon-btn" id="canvasEventClear">Clear</button></div>
                         <div class="canvas-panel-body lane" id="canvasEvents"></div>
                     </section>
                     <section class="canvas-panel" data-panel="queue">
-                        <div class="canvas-panel-head"><span>Queue Radar</span><button class="icon-btn" data-jump="tasks"><i class="fas fa-radar"></i></button></div>
+                        <div class="canvas-panel-head"><span>Queue Radar</span><button class="icon-btn" data-jump="tasks">Queue</button></div>
                         <div class="canvas-panel-body" id="canvasQueue"></div>
                     </section>
                     <section class="canvas-panel" data-panel="chat">
-                        <div class="canvas-panel-head"><span>Conversation Window</span><button class="icon-btn" data-jump="chat"><i class="fas fa-comments"></i></button></div>
+                        <div class="canvas-panel-head"><span>Conversation Window</span><button class="icon-btn" data-jump="chat">Chat</button></div>
                         <div class="canvas-panel-body lane" id="canvasChat"></div>
                     </section>
                     <section class="canvas-panel" data-panel="inspector">
-                        <div class="canvas-panel-head"><span>Inspector</span><button class="icon-btn" data-jump="api"><i class="fas fa-code"></i></button></div>
+                        <div class="canvas-panel-head"><span>Inspector</span><button class="icon-btn" data-jump="api">API</button></div>
                         <div class="canvas-panel-body">
                             <pre class="code-surface" id="canvasInspector">Select a service or run an API call to inspect payloads here.</pre>
                         </div>
@@ -238,7 +236,7 @@
                             <textarea id="chatInput" class="text-area" rows="3" placeholder="Send a message to OrcBot through the gateway..."></textarea>
                             <div class="inline-actions">
                                 <input id="chatClientId" class="field-input" value="gateway-web" placeholder="client id">
-                                <button class="btn primary" id="chatSendBtn"><i class="fas fa-paper-plane"></i> Send</button>
+                                <button class="btn primary" id="chatSendBtn">Send</button>
                             </div>
                         </div>
                     </article>

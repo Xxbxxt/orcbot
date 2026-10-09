@@ -10,43 +10,11 @@
   overflow: hidden;
 }
 
-.robotics-hero-bg {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: radial-gradient(ellipse at 60% 0%, rgba(255, 179, 71, 0.1), transparent 60%),
-    radial-gradient(ellipse at 10% 80%, rgba(92, 201, 255, 0.08), transparent 50%);
-}
-
 .robotics-hero-content {
   position: relative;
   z-index: 2;
   max-width: 780px;
   padding-top: 40px;
-}
-
-.robotics-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 14px;
-  border-radius: var(--radius-pill);
-  background: rgba(255, 179, 71, 0.12);
-  border: 1px solid rgba(255, 179, 71, 0.3);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--accent-warm);
-  margin-bottom: 16px;
-}
-
-.robotics-badge-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent-warm);
-  box-shadow: 0 0 12px rgba(255, 179, 71, 0.8);
 }
 
 .robotics-title {
@@ -58,10 +26,7 @@
 
 .robotics-title em {
   font-style: normal;
-  color: transparent;
-  background: linear-gradient(120deg, var(--accent-warm), var(--accent));
-  -webkit-background-clip: text;
-  background-clip: text;
+  color: var(--accent);
 }
 
 .robotics-subtitle {
@@ -84,10 +49,6 @@
   gap: 8px;
   font-size: 0.82rem;
   color: var(--text-soft);
-}
-
-.robotics-meta-item .meta-icon {
-  font-size: 1rem;
 }
 
 /* ===== Table of Contents ===== */
@@ -293,11 +254,6 @@
   border-radius: var(--radius-sm);
 }
 
-.tool-card-icon {
-  font-size: 1.4rem;
-  flex-shrink: 0;
-}
-
 .tool-card h5 {
   font-size: 0.88rem;
   margin-bottom: 4px;
@@ -478,10 +434,6 @@
   color: var(--accent);
 }
 
-.callout-icon {
-  margin-right: 8px;
-}
-
 /* ===== Phase Steps ===== */
 .phase-steps {
   display: flex;
@@ -628,7 +580,7 @@
   margin-top: 60px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
-  background: linear-gradient(120deg, rgba(255, 179, 71, 0.12), rgba(92, 255, 179, 0.12));
+  background: rgba(255, 179, 71, 0.07);
   padding: 40px;
   text-align: center;
 }
@@ -660,10 +612,6 @@
   border: 1px solid var(--border-subtle);
   font-size: 0.82rem;
   color: var(--text-muted);
-}
-
-.summary-chip .chip-icon {
-  margin-right: 6px;
 }
 
 /* ===== Guide Tabs ===== */
@@ -710,11 +658,6 @@
   border-color: var(--accent);
   color: var(--text-main);
   background: rgba(92, 255, 179, 0.08);
-  box-shadow: 0 6px 20px rgba(92, 255, 179, 0.12);
-}
-
-.guide-tab-icon {
-  font-size: 1.2rem;
 }
 
 .guide-tab-info {
