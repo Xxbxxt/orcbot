@@ -261,11 +261,16 @@ export class TokenTracker {
      * How much of the tracked prompt traffic was served from a provider prompt cache.
      * Worth surfacing because OpenAI and Gemini cache automatically and silently: without
      * this the operator cannot tell whether the cache is actually being hit.
+     *
+     * The rate is computed against API-reported prompt tokens only. A cache hit can only be
+     * observed on a call that returned a usage block, so estimated calls - which report zero
+     * cache hits by construction - would drag the rate down and make caching look worse than it is.
      */
-    public getCacheReport(): { cachedTokens: number; promptTokens: number; hitRatePct: number; byProvider: Record<string, number> } {
+    public getCacheReport(): { cachedTokens: number; promptTokens: number; reportedPromptTokens: number; hitRatePct: number; byProvider: Record<string, number> } {
         const summary = this.loadSummary();
         const promptTokens = summary.totals?.promptTokens || 0;
         const cachedTokens = summary.totals?.cachedTokens || 0;
+        const reportedPromptTokens = summary.realTotals?.promptTokens || 0;
         const byProvider: Record<string, number> = {};
         for (const [provider, bucket] of Object.entries(summary.byProvider || {})) {
             if (bucket.cachedTokens) byProvider[provider] = bucket.cachedTokens;
@@ -273,7 +278,8 @@ export class TokenTracker {
         return {
             cachedTokens,
             promptTokens,
-            hitRatePct: promptTokens > 0 ? Math.round((cachedTokens / promptTokens) * 100) : 0,
+            reportedPromptTokens,
+            hitRatePct: reportedPromptTokens > 0 ? Math.round((cachedTokens / reportedPromptTokens) * 100) : 0,
             byProvider
         };
     }

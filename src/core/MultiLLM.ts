@@ -670,8 +670,13 @@ export class MultiLLM {
 
     /**
      * Include the provider's response body in the thrown error. Without it a rejected request
-     * is indistinguishable from an outage, which also makes the structured-output degradation
-     * below impossible to detect.
+     * is indistinguishable from an outage, and the structured-output degradation below has
+     * nothing to detect.
+     *
+     * The detail is capped and scrubbed because these strings do not stay local: they reach
+     * winston logs, the decision engine's recorded attempt state and sometimes `[SYSTEM: ...]`
+     * short memories, which are replayed into later prompts. A provider body is normally just
+     * a validation message, but some echo back the offending request field.
      */
     private static async providerError(
         label: string,
@@ -679,11 +684,26 @@ export class MultiLLM {
     ): Promise<Error> {
         let detail = '';
         try {
-            detail = (await response.text()).slice(0, 500).replace(/\s+/g, ' ').trim();
+            detail = MultiLLM.redactSecrets((await response.text()).slice(0, 500))
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 200);
         } catch {
             // Body already consumed or unavailable - the status alone still identifies the call.
         }
         return new Error(`${label} API Error: ${response.status}${detail ? ` - ${detail}` : ''}`);
+    }
+
+    /**
+     * Strip anything credential-shaped out of text destined for logs, memory or a user-facing
+     * message. Defence in depth: the Authorization header never appears in a provider body, but
+     * error text is persisted and replayed, so nothing key-shaped should ride along with it.
+     */
+    private static redactSecrets(text: string): string {
+        return text
+            .replace(/\b(sk-[A-Za-z0-9_-]{6,}|AIza[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, '[redacted-key]')
+            .replace(/(bearer\s+)[A-Za-z0-9._~+/-]{8,}=*/gi, '$1[redacted]')
+            .replace(/("?(?:api[_-]?key|apikey|authorization|access[_-]?token|token|secret|password)"?\s*[:=]\s*"?)[^"\s,}&]{6,}/gi, '$1[redacted]');
     }
 
     /**
@@ -696,10 +716,22 @@ export class MultiLLM {
     }
 
     /**
-     * Gemini's function-declaration schema is an OpenAPI subset, not full JSON Schema.
-     * Keywords we emit for other providers — notably `additionalProperties` — are not part
-     * of that subset and can make the whole request fail. Strip them recursively so the
-     * declaration is accepted; Gemini does not enforce strict schemas anyway.
+     * JSON-Schema keywords that are not part of Gemini's function-declaration schema (an
+     * OpenAPI subset). Forwarding any of them can fail the whole request, and unlike the text
+     * JSON-mode hint there is no second chance for a tool declaration, so they are stripped.
+     * `anyOf`, `enum`, `default`, `format`, `nullable` and the length/number bounds ARE part of
+     * the subset and are preserved.
+     */
+    private static readonly GEMINI_UNSUPPORTED_SCHEMA_KEYS = new Set([
+        '$schema', '$ref', '$defs', 'definitions', 'additionalProperties',
+        'patternProperties', 'dependencies', 'dependentSchemas', 'dependentRequired',
+        'oneOf', 'allOf', 'not', 'const', 'examples', 'if', 'then', 'else',
+        'multipleOf', 'exclusiveMinimum', 'exclusiveMaximum',
+    ]);
+
+    /**
+     * Gemini's function-declaration schema is an OpenAPI subset, not full JSON Schema. Strip
+     * everything outside that subset, recursively, so the declaration is accepted.
      */
     private static toGeminiSchema(schema: any): any {
         if (Array.isArray(schema)) return schema.map(item => MultiLLM.toGeminiSchema(item));
@@ -707,7 +739,7 @@ export class MultiLLM {
 
         const out: Record<string, any> = {};
         for (const [key, value] of Object.entries(schema)) {
-            if (key === 'additionalProperties' || key === '$schema') continue;
+            if (MultiLLM.GEMINI_UNSUPPORTED_SCHEMA_KEYS.has(key)) continue;
             if (key === 'properties' && value && typeof value === 'object') {
                 out[key] = Object.fromEntries(
                     Object.entries(value as Record<string, any>)

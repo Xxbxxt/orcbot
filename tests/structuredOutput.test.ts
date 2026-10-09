@@ -138,6 +138,30 @@ describe('MultiLLM structured output', () => {
         expect(error.message).toContain('rate limit exceeded');
     });
 
+    it('redacts credential-shaped text out of the provider error body', async () => {
+        // These strings reach logs and memory, so nothing key-shaped should ride along.
+        const body = JSON.stringify({
+            error: {
+                message: 'invalid api_key sk-abcdefghijklmnopqrstuvwxyz provided',
+                authorization: 'Bearer ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
+                apiKey: 'AIzaSyA1234567890abcdefghijklmnop',
+            },
+        });
+
+        const error = await (MultiLLM as any).providerError('OpenAI', errorResponse(401, body));
+
+        expect(error.message).not.toContain('sk-abcdefghijklmnopqrstuvwxyz');
+        expect(error.message).not.toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
+        expect(error.message).not.toContain('AIzaSyA1234567890abcdefghijklmnop');
+        expect(error.message).toContain('OpenAI API Error: 401');
+    });
+
+    it('caps the embedded provider detail so a large body cannot flood logs', async () => {
+        const error = await (MultiLLM as any).providerError('OpenAI', errorResponse(400, 'x'.repeat(5000)));
+
+        expect(error.message.length).toBeLessThan(300);
+    });
+
     it('only treats genuine JSON-mode rejections as degradable', () => {
         const isRejection = (MultiLLM as any).isStructuredOutputRejection.bind(MultiLLM);
 

@@ -22,6 +22,14 @@ import { OllamaHelper } from '../utils/OllamaHelper';
 import { aggregateWorldEvents, fetchWorldEvents, summarizeWorldEvents, WorldEvent, WorldEventSource, getRootCodeLabel } from '../tools/WorldEvents';
 import { piBox, isPiTuiAvailable } from '../core/PiTuiRenderer';
 import { collectDoctorReport, collectLLMCompatibilityReport } from './Doctor';
+import {
+    banner,
+    renderScreenHeader,
+    renderSplash,
+    renderCompactHeader,
+    isSplashShown,
+    clearScreen,
+} from './ui/Header';
 
 dotenv.config(); // Local .env
 dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
@@ -101,9 +109,7 @@ function box(lines: string[], opts: { title?: string; width?: number; color?: st
 }
 
 async function showToolsManagerMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Tools Manager');
+    renderScreenHeader('Tools Manager');
 
     const tools = agent.tools.listTools();
     const activeCount = tools.filter(t => t.active).length;
@@ -317,34 +323,6 @@ function sparkline(values: number[]): string {
     }).join('');
 }
 
-/** Big block-letter OrcBot logo */
-function renderLogo() {
-    const logoLines = [
-        '  ██████╗ ██████╗  ██████╗██████╗  ██████╗ ████████╗',
-        ' ██╔═══██╗██╔══██╗██╔════╝██╔══██╗██╔═══██╗╚══██╔══╝',
-        ' ██║   ██║██████╔╝██║     ██████╔╝██║   ██║   ██║   ',
-        ' ██║   ██║██╔══██╗██║     ██╔══██╗██║   ██║   ██║   ',
-        ' ╚██████╔╝██║  ██║╚██████╗██████╔╝╚██████╔╝   ██║   ',
-        '  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═════╝  ╚═════╝    ╚═╝   ',
-    ];
-    // The wordmark is the single accent on this screen. A uniform color keeps
-    // it an identity motif; the cyan-to-magenta rainbow it used to carry did not.
-    for (const line of logoLines) {
-        console.log(`  ${c.brightCyan}${line}${c.reset}`);
-    }
-}
-
-function banner() {
-    console.log('');
-    renderLogo();
-    // Use white for the tagline so it's clearly legible (not dim)
-    const pkg = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')); } catch { return { version: '2.1.0' }; } })();
-    const ver = pkg.version || '2.1.0';
-    console.log(`  ${c.white}Autonomous AI Agent Framework${c.reset}  ${c.gray}│${c.reset}  ${c.brightCyan}v${ver}${c.reset}`);
-    console.log(`  ${c.white}by${c.reset} ${c.bold}${c.white}Frederick Abila${c.reset}  ${c.gray}│${c.reset}  ${c.gray}github.com/fredabila/orcbot${c.reset}`);
-    console.log(`  ${c.gray}${'─'.repeat(54)}${c.reset}`);
-    console.log('');
-}
 
 function sectionHeader(title: string) {
     // One accent on the title (the screen's focal element) and a dim rule under
@@ -2287,9 +2265,7 @@ function renderWorldView(
     globeCommand?: string,
     globeArgs?: string[]
 ): void {
-    console.clear();
-    banner();
-    sectionHeader('World Events');
+    renderScreenHeader('World Events');
 
     if (error) {
         box([
@@ -2818,9 +2794,7 @@ Rules:
     }
 
     async function showAiTunerMenu() {
-        console.clear();
-        banner();
-        sectionHeader('AI Tuner');
+        renderScreenHeader('AI Tuner');
 
         const profilesDir = tunerProfilesDir();
         if (!fs.existsSync(profilesDir)) fs.mkdirSync(profilesDir, { recursive: true });
@@ -3051,8 +3025,12 @@ Rules:
     }
 
 async function showMainMenu() {
-    console.clear();
-    banner();
+    if (!isSplashShown()) {
+        clearScreen();
+        renderSplash();
+    } else {
+        renderScreenHeader(['Home', 'Dashboard']);
+    }
 
     // ── Dashboard Panel ──────────────────────────────────────────────
     const model = agent.config.get('modelName') || DEFAULT_MODEL_IDS.openaiMain;
@@ -3277,9 +3255,7 @@ async function showBrowserMenu() {
         }
     }
 
-    console.clear();
-    banner();
-    sectionHeader('Browser Engine');
+    renderScreenHeader('Browser Engine');
     console.log('');
     const computerUseEnabled = !!agent.config.get('googleComputerUseEnabled');
     const computerUseModel = agent.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
@@ -3418,9 +3394,7 @@ async function showBrowserMenu() {
 }
 
 async function showToolingMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Tooling & APIs');
+    renderScreenHeader('Tooling & APIs');
 
     const hasSerper = !!agent.config.get('serperApiKey');
     const hasBrave = !!agent.config.get('braveSearchApiKey');
@@ -3639,9 +3613,7 @@ async function showToolingMenu() {
 }
 
 async function showGoogleIdentityMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Google Identity (OAuth + Gmail)');
+    renderScreenHeader('Google Identity (OAuth + Gmail)');
 
     const status = agent.googleIdentity.getStatus();
     const email = status.email || '(unknown)';
@@ -3790,9 +3762,7 @@ async function showGoogleIdentityMenu() {
 }
 
 async function showGoogleWorkspaceCliMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Google Workspace CLI (gws)');
+    renderScreenHeader('Google Workspace CLI (gws)');
 
     const status = await agent.googleWorkspaceCli.getStatus();
     const configuredPath = String(agent.config.get('googleWorkspaceCliPath') || '').trim();
@@ -3920,9 +3890,7 @@ async function showGoogleWorkspaceCliMenu() {
 }
 
 async function showGitHubCliMenu() {
-    console.clear();
-    banner();
-    sectionHeader('GitHub CLI (gh)');
+    renderScreenHeader('GitHub CLI (gh)');
 
     const status = await agent.githubCli.getStatus();
     const configuredPath = String(agent.config.get('githubCliPath') || '').trim();
@@ -4559,8 +4527,7 @@ async function showGitHubCliMenu() {
 }
 
 async function showGatewayMenu() {
-    console.clear();
-    banner();
+    renderScreenHeader('Web Gateway');
     const currentPort = agent.config.get('gatewayPort') || 3100;
     const currentHost = agent.config.get('gatewayHost') || '0.0.0.0';
     const apiKey = agent.config.get('gatewayApiKey');
@@ -4570,8 +4537,7 @@ async function showGatewayMenu() {
     const mcpApiKey = agent.config.get('mcpApiKey') || apiKey;
     const autonomyAllowed = isAutonomyEnabledForChannel('gateway-chat');
 
-    sectionHeader('Web Gateway');
-    console.log('');
+    
     const gatewayLines = [
         `${dim('Host')}       ${bold(String(currentHost))}`,
         `${dim('Port')}       ${brightCyan(bold(String(currentPort)))}`,
@@ -5123,9 +5089,7 @@ function getTailscaleInfo(): TailscaleInfo {
 }
 
 async function showModelsMenu() {
-    console.clear();
-    banner();
-    sectionHeader('AI Models & Providers');
+    renderScreenHeader('AI Models & Providers');
 
     const currentProvider = agent.config.get('llmProvider') || 'auto';
     const currentModel = agent.config.get('modelName') || '(default)';
@@ -5209,9 +5173,7 @@ async function showModelsMenu() {
 // Catalogue is now fetched dynamically from agent.llm.getPiAICatalogue()
 
 async function showOllamaMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Ollama / Local Models');
+    renderScreenHeader('Ollama / Local Models');
 
     const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
     const helper = new OllamaHelper(ollamaUrl);
@@ -5379,9 +5341,7 @@ async function showOllamaMenu() {
 }
 
 async function showSelfTrainingMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Self-Training Sidecar');
+    renderScreenHeader('Self-Training Sidecar');
 
     const status = agent.getSelfTrainingStatus();
     const lastEval = status.lastEvaluationReport;
@@ -5585,9 +5545,7 @@ async function showSelfTrainingMenu() {
 }
 
 async function showPiAIConfig() {
-    console.clear();
-    banner();
-    sectionHeader('Model & Provider Setup');
+    renderScreenHeader('Model & Provider Setup');
 
     const catalogue = await agent.llm.getPiAICatalogue();
 
@@ -5995,9 +5953,7 @@ async function showOpenAIConfig() {
 }
 
 async function showGeminiConfig() {
-    console.clear();
-    banner();
-    sectionHeader('Google Gemini (Cloud API)');
+    renderScreenHeader('Google Gemini (Cloud API)');
 
     const currentModel = agent.config.get('modelName');
     const apiKey = agent.config.get('googleApiKey') || 'Not Set';
@@ -6160,9 +6116,7 @@ async function showBedrockConfig() {
 }
 
 async function showPushTaskMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Push Task');
+    renderScreenHeader('Push Task');
     console.log('');
 
     const { task } = await inquirer.prompt([
@@ -6195,9 +6149,7 @@ async function showWorldEventsMenu() {
     const globeCommand = agent.config.get('worldEventsGlobeCommand') || 'globe';
     const globeArgs = parseGlobeArgs(agent.config.get('worldEventsGlobeArgs'));
 
-    console.clear();
-    banner();
-    sectionHeader('World Events');
+    renderScreenHeader('World Events');
     console.log('');
 
     const lines = [
@@ -6360,9 +6312,7 @@ async function showWorldEventsMenu() {
 }
 
 async function showConnectionsMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Connections');
+    renderScreenHeader('Connections');
 
     const hasTelegram = !!agent.config.get('telegramToken');
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
@@ -6427,9 +6377,7 @@ async function showTelegramConfig() {
     const groupPolicy = String(agent.config.get('telegramGroupPolicy') || 'mention_only');
     const allowedGroups = (agent.config.get('telegramAllowedGroups') || []) as string[];
     const blockedGroups = (agent.config.get('telegramBlockedGroups') || []) as string[];
-    console.clear();
-    banner();
-    sectionHeader('Telegram Settings');
+    renderScreenHeader('Telegram Settings');
     console.log('');
     const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'reply_only' ? yellow('REPLY TO BOT ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
     const tgLines = [
@@ -6575,9 +6523,7 @@ async function showWhatsAppConfig() {
     const ownerJid = agent.config.get('whatsappOwnerJID') || 'Not Linked';
     const autonomyAllowed = isAutonomyEnabledForChannel('whatsapp');
 
-    console.clear();
-    banner();
-    sectionHeader('WhatsApp Settings');
+    renderScreenHeader('WhatsApp Settings');
     console.log('');
     const onOff = (v: any) => v ? green(bold('● ON')) : gray('○ OFF');
     const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'owner_only' ? yellow('OWNER ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
@@ -6943,9 +6889,7 @@ async function showSlackConfig() {
     const currentSigningSecret = agent.config.get('slackSigningSecret') || 'Not Set';
     const autoReply = agent.config.get('slackAutoReplyEnabled');
     const autonomyAllowed = isAutonomyEnabledForChannel('slack');
-    console.clear();
-    banner();
-    sectionHeader('Slack Settings');
+    renderScreenHeader('Slack Settings');
     console.log('');
     const slLines = [
         `${dim('Bot Token')}   ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 8) + '…' + currentToken.slice(-4))}`,
@@ -7038,9 +6982,7 @@ async function showEmailConfig() {
     const timeoutMs = Number(agent.config.get('emailSocketTimeoutMs') || 15000);
     const autonomyAllowed = isAutonomyEnabledForChannel('email');
 
-    console.clear();
-    banner();
-    sectionHeader('Email Settings');
+    renderScreenHeader('Email Settings');
     console.log('');
     const lines = [
         `${dim('Enabled')}      ${enabled ? green(bold('● ON')) : gray('○ OFF')}`,
@@ -7191,9 +7133,7 @@ async function showDiscordConfig() {
     const currentToken = agent.config.get('discordToken') || 'Not Set';
     const autoReply = agent.config.get('discordAutoReplyEnabled');
     const autonomyAllowed = isAutonomyEnabledForChannel('discord');
-    console.clear();
-    banner();
-    sectionHeader('Discord Settings');
+    renderScreenHeader('Discord Settings');
     console.log('');
     const dcLines = [
         `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green('***' + currentToken.slice(-8))}`,
@@ -7253,9 +7193,7 @@ async function showDiscordConfig() {
 }
 
 async function showWorkerProfileMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Worker Profile');
+    renderScreenHeader('Worker Profile');
 
     if (!workerProfile.exists()) {
         console.log('');
@@ -7377,9 +7315,7 @@ async function showWorkerProfileMenu() {
 }
 
 async function showWorldGovernanceMenu() {
-    console.clear();
-    banner();
-    sectionHeader('World Governance');
+    renderScreenHeader('World Governance');
 
     const worldPath = agent.config.get('worldPath');
     let worldContent = '';
@@ -7463,9 +7399,7 @@ async function showWorldGovernanceMenu() {
                 const peerWorldPath = require('path').join(require('path').dirname(peer.memoryPath), 'WORLD.md');
                 if (require('fs').existsSync(peerWorldPath)) {
                     const peerWorld = require('fs').readFileSync(peerWorldPath, 'utf-8');
-                    console.clear();
-                    banner();
-                    sectionHeader(`${peer.name}'s World`);
+                    renderScreenHeader(`${peer.name}'s World`);
                     box(peerWorld.split('\n'), { title: 'PEER WORLD.MD', width: 64 });
                 } else {
                     console.log(red('\nPeer WORLD.md not found.'));
@@ -7481,9 +7415,7 @@ async function showWorkerWebsitesMenu() {
     const profile = workerProfile.get();
     if (!profile) return showWorkerProfileMenu();
 
-    console.clear();
-    banner();
-    sectionHeader('Linked Websites');
+    renderScreenHeader('Linked Websites');
 
     console.log('');
     if (profile.websites.length === 0) {
@@ -7538,9 +7470,7 @@ async function showWorkerWebsitesMenu() {
 }
 
 async function showAgenticUserMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Agentic User (HITL Proxy)');
+    renderScreenHeader('Agentic User (HITL Proxy)');
 
     const au = agent.agenticUser;
     const settings = au.getSettings();
@@ -7722,9 +7652,7 @@ async function showAgenticUserMenu() {
 }
 
 async function showOrchestrationMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Multi-Agent Orchestration');
+    renderScreenHeader('Multi-Agent Orchestration');
 
     const orchestrator = agent.orchestrator;
     const status = orchestrator.getStatus();
@@ -7797,9 +7725,7 @@ async function showOrchestrationMenu() {
 
     switch (action) {
         case 'status': {
-            console.clear();
-            banner();
-            sectionHeader('Orchestration Dashboard');
+            renderScreenHeader('Orchestration Dashboard');
 
             // Summary box
             const summaryLines = [
@@ -7887,9 +7813,7 @@ async function showOrchestrationMenu() {
             break;
         }
         case 'worker_details': {
-            console.clear();
-            banner();
-            sectionHeader('Worker Task Details');
+            renderScreenHeader('Worker Task Details');
             if (detailedWorkers.length === 0) {
                 console.log(`\n  ${dim('No workers available.')}`);
             } else {
@@ -7955,9 +7879,7 @@ async function showOrchestrationMenu() {
             break;
         }
         case 'list': {
-            console.clear();
-            console.log('Active Agents');
-            console.log('================');
+            renderScreenHeader(['Multi-Agent', 'Active Agents']);
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
                 console.log('No agents currently spawned.');
@@ -7976,9 +7898,7 @@ async function showOrchestrationMenu() {
             break;
         }
         case 'processes': {
-            console.clear();
-            console.log('Running Worker Processes');
-            console.log('===========================');
+            renderScreenHeader(['Multi-Agent', 'Worker Processes']);
             if (runningWorkers.length === 0) {
                 console.log('No worker processes currently running.');
             } else {
@@ -8282,9 +8202,7 @@ async function showOrchestrationMenu() {
 }
 
 async function showSecurityMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Security & Permissions');
+    renderScreenHeader('Security & Permissions');
 
     const safeMode = agent.config.get('safeMode');
     const sudoMode = agent.config.get('sudoMode');
@@ -8489,9 +8407,7 @@ async function showSecurityMenu() {
  * When no admin users are configured, everyone has full access (backwards compatible).
  */
 async function showAdminUsersMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Admin Users Management');
+    renderScreenHeader('Admin Users Management');
 
     const adminUsers = agent.config.get('adminUsers') as any || {};
     const tgAdmins = (adminUsers.telegram || []) as string[];
@@ -8690,9 +8606,7 @@ async function showAdminUsersMenu() {
 }
 
 async function showConfigMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Agent Configuration');
+    renderScreenHeader('Agent Configuration');
     console.log('');
 
     const config = agent.config.getAll();
@@ -8800,9 +8714,7 @@ async function showConfigMenu() {
  * Fetch and display skills from the community vault (github.com/fredabila/orcbot-skills).
  */
 async function showCommunitySkillsMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Community Skills');
+    renderScreenHeader('Community Skills');
     console.log(gray('  Fetching latest skills from fredabila/orcbot-skills...'));
 
     try {
@@ -8878,9 +8790,7 @@ async function showCommunitySkillsMenu() {
                 const parsed = agent.skills.parseSkillMd(content);
 
                 if (parsed) {
-                    console.clear();
-                    banner();
-                    sectionHeader(`Skill: ${skillName}`);
+                    renderScreenHeader(`Skill: ${skillName}`);
 
                     console.log(`\n  ${bold('Description:')}`);
                     console.log(`  ${parsed.meta.description}\n`);
@@ -8942,9 +8852,7 @@ async function showCommunitySkillsMenu() {
 }
 
 async function showSkillsMenu() {
-    console.clear();
-    banner();
-    sectionHeader('Skills Manager');
+    renderScreenHeader('Skills Manager');
 
     const skills = agent.skills.getAllSkills();
     const agentSkills = agent.skills.getAgentSkills();
@@ -9348,9 +9256,7 @@ async function performUpdate() {
 }
 
 function showStatus() {
-    console.clear();
-    banner();
-    sectionHeader('Agent Status');
+    renderScreenHeader('Agent Status');
 
     const shortMem = agent.memory.searchMemory('short').length;
     const episodicMem = agent.memory.searchMemory('episodic').length;
@@ -9422,9 +9328,7 @@ function showStatus() {
 }
 
 function showGuardrailMetrics(limit: number = 10) {
-    console.clear();
-    banner();
-    sectionHeader('Guardrail Metrics');
+    renderScreenHeader('Guardrail Metrics');
 
     const episodic = agent.memory.searchMemory('episodic') as any[];
     const supportedMetrics = new Set(['max_step_fallback', 'delay_risk_high']);
@@ -9514,9 +9418,7 @@ function showGuardrailMetrics(limit: number = 10) {
 }
 
 function showTokenUsage() {
-    console.clear();
-    banner();
-    sectionHeader('Token Usage');
+    renderScreenHeader('Token Usage');
 
     const tracker = new TokenTracker(
         agent.config.get('tokenUsagePath'),
@@ -9536,8 +9438,8 @@ function showTokenUsage() {
         `${c.white}API-reported calls:${c.reset}    ${c.bold}${c.brightWhite}${accuracy.realCalls.toLocaleString().padStart(8)}${c.reset}  ${c.gray}│${c.reset}  ${c.brightGreen}${(summary.realTotals?.totalTokens?.toLocaleString() || '0').padStart(12)}${c.reset} tokens`,
         `${c.white}Estimated calls:${c.reset}       ${c.bold}${c.brightWhite}${accuracy.estimatedCalls.toLocaleString().padStart(8)}${c.reset}  ${c.gray}│${c.reset}  ${c.yellow}${(summary.estimatedTotals?.totalTokens?.toLocaleString() || '0').padStart(12)}${c.reset} tokens`,
         `${c.gray}${'─'.repeat(52)}${c.reset}`,
-        `${c.white}If numbers seem high, estimated calls use a heuristic${c.reset}`,
-        `${c.white}that can over-count. Run${c.reset} ${c.bold}${c.brightCyan}orcbot tokens recount${c.reset} ${c.white}to rebuild.${c.reset}`,
+        `${c.white}If numbers seem high, estimated calls had no usage${c.reset}`,
+        `${c.white}block from the provider. Run${c.reset} ${c.bold}${c.brightCyan}orcbot tokens recount${c.reset} ${c.white}to rebuild.${c.reset}`,
     ], { title: 'DATA ACCURACY', width: 58, color: accuracyColor });
 
     // Totals Panel — now with real vs estimated breakdown
@@ -9551,8 +9453,26 @@ function showTokenUsage() {
         `${c.gray}${'─'.repeat(34)}${c.reset}`,
         `${c.white}Total${c.reset}        ${c.brightCyan}${c.bold}${totalTokens.toLocaleString().padStart(12)}${c.reset} tokens`,
         `  ${c.gray}├ API-reported:${c.reset} ${c.brightGreen}${realTotal.toLocaleString().padStart(10)}${c.reset}`,
-        `  ${c.gray}└ Estimated:${c.reset}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? `${c.gray}(~30-60% inflated)${c.reset}` : ''}`,
+        `  ${c.gray}└ Estimated:${c.reset}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? `${c.gray}(tokenizer estimate)${c.reset}` : ''}`,
     ], { title: 'TOKEN TOTALS', width: 48 });
+
+    // Prompt cache panel — OpenAI and Gemini cache implicitly and silently, so without this
+    // there is no way to tell whether the cache is being hit at all.
+    const cache = tracker.getCacheReport();
+    if (cache.promptTokens > 0) {
+        console.log('');
+        const cacheLines: string[] = [
+            `${c.white}Cached prompt${c.reset}  ${c.brightCyan}${c.bold}${cache.cachedTokens.toLocaleString().padStart(12)}${c.reset} tokens  ${c.gray}(${cache.hitRatePct}% of API-reported prompt tokens)${c.reset}`,
+        ];
+        const cacheProviders = Object.entries(cache.byProvider);
+        if (cacheProviders.length > 0) {
+            cacheLines.push(`${c.gray}${'─'.repeat(40)}${c.reset}`);
+            for (const [prov, cached] of cacheProviders) {
+                cacheLines.push(`${c.white}${prov.padEnd(12)}${c.reset} ${dim(cached.toLocaleString().padStart(12))}`);
+            }
+        }
+        box(cacheLines, { title: 'PROMPT CACHE', width: 58 });
+    }
 
     // Provider breakdown
     const providers = Object.entries(summary.byProvider);

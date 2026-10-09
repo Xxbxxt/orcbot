@@ -55,6 +55,21 @@ describe('TokenTracker cache reporting', () => {
         expect(report.byProvider).toEqual({ openai: 750, anthropic: 250 });
     });
 
+    it('computes the hit rate against API-reported prompts only', () => {
+        const summaryPath = path.join(tmpDir, 'summary4.json');
+        const tracker = new TokenTracker(summaryPath, path.join(tmpDir, 'usage4.log'));
+
+        // Only a call that returned a usage block can report a cache hit, so an estimated
+        // call must not count as a cache miss and drag the displayed rate down.
+        tracker.record(entry({ provider: 'openai', promptTokens: 1000, cachedTokens: 500 }));
+        tracker.record(entry({ provider: 'ollama', promptTokens: 9000, cachedTokens: 0, metadata: { estimated: true } }));
+
+        const report = tracker.getCacheReport();
+        expect(report.promptTokens).toBe(10000);
+        expect(report.reportedPromptTokens).toBe(1000);
+        expect(report.hitRatePct).toBe(50);
+    });
+
     it('treats a missing cachedTokens field as zero', () => {
         const summaryPath = path.join(tmpDir, 'summary3.json');
         const tracker = new TokenTracker(summaryPath, path.join(tmpDir, 'usage3.log'));

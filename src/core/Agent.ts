@@ -9555,8 +9555,10 @@ The plugin handles all logic internally. See the plugin source for implementatio
 
         // Report where the work actually got to before failing, then what stopped it. Showing
         // only the blocker discards the grounded progress the user needs in order to unblock.
+        // Labelled "Earlier" because resultSnippets holds the earliest observation captured
+        // from this action's memory window, not the most recent one.
         if (resultSnippets.length > 0) {
-            lines.push(`Last observation: ${resultSnippets[0]}`);
+            lines.push(`Earlier observation: ${resultSnippets[0]}`);
         }
 
         const blocker = lastBlocker || errorSnippets[0] || '';
@@ -16640,8 +16642,11 @@ Respond with a single actionable task description (one sentence). Be specific ab
                 }
             }
 
-            // If we exhausted all steps without completing, review before giving up
-            if (currentStep >= MAX_STEPS && !goalsMet) {
+            // If we exhausted all steps without completing, review before giving up.
+            // Skipped while waiting on the user: the action is paused for clarification, not
+            // short of steps, and granting bonus steps would burn decisions on a task that is
+            // blocked on input rather than on effort.
+            if (currentStep >= MAX_STEPS && !goalsMet && !waitingForClarification) {
                 logger.warn(`Agent: Reached max steps (${MAX_STEPS}) for action ${action.id}. Reviewing if task is truly done...`);
 
                 const maxStepsReview = await this.reviewForcedTermination(

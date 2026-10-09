@@ -45,6 +45,18 @@ describe('SkillsManager.parseUsageToSchema', () => {
         expect(required).toEqual(['count', 'n', 'flag', 'tags', 'opts']);
     });
 
+    it('keeps a parameter literally named __proto__ instead of dropping or polluting', () => {
+        const { properties } = SkillsManager.parseUsageToSchema('demo(__proto__, constructor)');
+
+        // A null-prototype map means these become own keys rather than touching the prototype.
+        expect(Object.getPrototypeOf(properties)).toBeNull();
+        expect(Object.prototype.hasOwnProperty.call(properties, '__proto__')).toBe(true);
+        expect(properties['__proto__']).toEqual({ type: 'string' });
+        expect(properties.constructor).toEqual({ type: 'string' });
+        // The global prototype must be untouched.
+        expect(({} as any).type).toBeUndefined();
+    });
+
     it('parses the object notation form', () => {
         const { properties, required } = SkillsManager.parseUsageToSchema(
             'create_skill({ name, description, code:number?, tags:array? })'
@@ -163,6 +175,53 @@ describe('MultiLLM.toGeminiSchema', () => {
         expect(sanitized.properties.query).toEqual({ type: 'string' });
         expect(sanitized.properties.nested.properties.deep).toEqual({ type: 'string' });
         expect(sanitized.properties.list.items).toEqual({ type: 'string' });
+    });
+
+    it('strips the wider set of non-OpenAPI JSON Schema keywords but keeps supported ones', () => {
+        const sanitized = (MultiLLM as any).toGeminiSchema({
+            type: 'object',
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            additionalProperties: false,
+            oneOf: [{ type: 'string' }],
+            allOf: [{ type: 'string' }],
+            not: { type: 'string' },
+            const: 'x',
+            if: { type: 'string' },
+            then: { type: 'string' },
+            patternProperties: { '^a': { type: 'string' } },
+            dependencies: { a: ['b'] },
+            multipleOf: 2,
+            exclusiveMinimum: 1,
+            properties: {
+                mode: {
+                    type: 'string',
+                    enum: ['a', 'b'],
+                    default: 'a',
+                    format: 'date',
+                    nullable: true,
+                    minLength: 1,
+                    maxLength: 10,
+                    oneOf: [{ type: 'string' }],
+                },
+            },
+            anyOf: [{ type: 'object' }],
+        });
+
+        for (const dropped of [
+            '$schema', 'additionalProperties', 'oneOf', 'allOf', 'not', 'const',
+            'if', 'then', 'patternProperties', 'dependencies', 'multipleOf', 'exclusiveMinimum',
+        ]) {
+            expect(sanitized).not.toHaveProperty(dropped);
+        }
+        expect(sanitized.properties.mode).not.toHaveProperty('oneOf');
+
+        // Gemini's OpenAPI subset does understand these, so they must survive intact.
+        expect(sanitized.properties.mode.enum).toEqual(['a', 'b']);
+        expect(sanitized.properties.mode.default).toBe('a');
+        expect(sanitized.properties.mode.format).toBe('date');
+        expect(sanitized.properties.mode.nullable).toBe(true);
+        expect(sanitized.properties.mode.maxLength).toBe(10);
+        expect(sanitized.anyOf).toEqual([{ type: 'object' }]);
     });
 
     it('preserves enum and array item types', () => {

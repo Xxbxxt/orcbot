@@ -1761,7 +1761,10 @@ main().catch(console.error);
         properties: Record<string, { type: string; description?: string }>;
         required: string[];
     } {
-        const properties: Record<string, { type: string; description?: string }> = {};
+        // Null-prototype so a parameter named `__proto__` or `constructor` coming from an
+        // untrusted plugin usage string becomes an own key instead of mutating the prototype
+        // (and silently vanishing from the emitted schema).
+        const properties: Record<string, { type: string; description?: string }> = Object.create(null);
         const required: string[] = [];
 
         // Extract contents of first set of parentheses

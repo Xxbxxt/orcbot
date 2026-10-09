@@ -625,6 +625,7 @@ Key settings (excerpt):
 - `githubCliPath`: Optional GitHub CLI binary path if `gh` is not already on PATH
 - `telegramToken` / `whatsappEnabled`
 - `maxStepsPerAction`, `maxMessagesPerAction`, `messageDedupWindow`
+- `structuredOutputEnabled`: Set to `false` to stop asking providers for a native JSON response on the decision path. Default on; providers that reject the request are retried without it automatically.
 - `autonomyEnabled`, `autonomyInterval`, `autonomyBacklogLimit`
 - `autonomyAllowedChannels`: List of channels the agent can message proactively (e.g., `["telegram"]`).
 - `skillRoutingRules`: Intent-based skill selection rules

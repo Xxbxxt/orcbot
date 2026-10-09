@@ -260,7 +260,7 @@ describe('Agent runtime recovery supervision', () => {
         expect(message).toContain('What I tried:');
         expect(message).toContain('browser_navigate');
         expect(message).toContain('browser_vision');
-        expect(message).toContain('Last observation:');
+        expect(message).toContain('Earlier observation:');
         expect(message).toContain('admin.shopify.com');
         expect(message).toContain('Blocker:');
         expect(message).toContain('OpenAI API key not configured');
