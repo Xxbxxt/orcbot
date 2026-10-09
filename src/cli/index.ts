@@ -29,6 +29,8 @@ import {
     renderCompactHeader,
     isSplashShown,
     clearScreen,
+    enterAlternateScreen,
+    exitAlternateScreen,
 } from './ui/Header';
 import {
     promptSelect,
@@ -881,7 +883,12 @@ program
     .command('ui')
     .description('Start the interactive TUI mode')
     .action(async () => {
-        await showMainMenu();
+        enterAlternateScreen();
+        try {
+            await showMainMenu();
+        } finally {
+            exitAlternateScreen();
+        }
     });
 
 program
@@ -3032,6 +3039,7 @@ Rules:
     }
 
 async function showMainMenu() {
+    enterAlternateScreen();
     if (!isSplashShown()) {
         clearScreen();
         renderSplash();
@@ -3115,6 +3123,7 @@ async function showMainMenu() {
     });
 
     if (p.isCancel(action)) {
+        exitAlternateScreen();
         process.exit(0);
     }
 
@@ -3205,6 +3214,7 @@ async function showMainMenu() {
             await showMainMenu();
             break;
         case 'exit':
+            exitAlternateScreen();
             process.exit(0);
     }
 }

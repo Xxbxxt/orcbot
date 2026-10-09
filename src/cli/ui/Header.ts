@@ -127,16 +127,58 @@ export function formatBreadcrumbs(trail: string | string[]): string {
     return `${parents} ${c.gray}›${c.reset} ${current}`;
 }
 
+let inAlternateScreen = false;
+
+/** Reset alternate screen state (useful for tests) */
+export function resetAlternateScreenState(): void {
+    inAlternateScreen = false;
+}
+
 /**
- * Clear the screen, but only when stdout is a real terminal.
+ * Enter terminal Alternate Screen Buffer (\x1b[?1049h).
+ * Gives the TUI a dedicated, fixed single-page canvas with zero scrollback pollution.
+ */
+export function enterAlternateScreen(): void {
+    if (process.stdout.isTTY && !inAlternateScreen) {
+        process.stdout.write('\x1b[?1049h\x1b[H');
+        inAlternateScreen = true;
+
+        const restore = () => {
+            if (inAlternateScreen) {
+                exitAlternateScreen();
+            }
+        };
+        process.once('exit', restore);
+        process.once('SIGINT', restore);
+    }
+}
+
+/**
+ * Exit Alternate Screen Buffer (\x1b[?1049l) and restore the user's original shell history.
+ */
+export function exitAlternateScreen(): void {
+    if (inAlternateScreen) {
+        if (process.stdout.isTTY) {
+            process.stdout.write('\x1b[?1049l');
+        }
+        inAlternateScreen = false;
+    }
+}
+
+/** True when the TUI is running in the alternate screen buffer */
+export function isAlternateScreen(): boolean {
+    return inAlternateScreen;
+}
+
+/**
+ * Clear the screen and purge scrollback buffer (\x1b[2J\x1b[3J\x1b[H) on a real terminal.
  *
- * `console.clear()`, which this replaced, is a no-op when stdout is not a TTY. Writing the
- * escape sequence unconditionally regressed piped and CI output, which then received raw
- * control characters. The check is explicit, and shared, so no caller can reintroduce it.
+ * \x1b[2J clears the visible screen, \x1b[3J purges accumulated scrollback so old
+ * menus do not duplicate or stack up, and \x1b[H homes the cursor to (1,1).
  */
 export function clearScreen(): void {
     if (process.stdout.isTTY) {
-        process.stdout.write('\x1b[H\x1b[2J');
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
     }
 }
 
