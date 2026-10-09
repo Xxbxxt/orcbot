@@ -77,4 +77,4 @@ OrcBot will hot-reload most settings automatically.
 ---
 
 **Summary:**
-Tuning OrcBot's memory lets you unlock deeper reasoning and richer context. Expand memory limits thoughtfully, monitor performance, and adjust as needed for your use case. For more, see the [project documentation](../README.md) or `orcbot config --help`.
+Tuning OrcBot's memory lets you unlock deeper reasoning and richer context. Expand memory limits thoughtfully, monitor performance, and adjust as needed for your use case. For more, see the [project documentation](../../README.md) or `orcbot config --help`.

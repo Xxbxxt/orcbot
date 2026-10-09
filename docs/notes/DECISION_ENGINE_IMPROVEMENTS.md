@@ -123,7 +123,7 @@ decisionEngineAutoCompaction: true  # Auto-compact on overflow
 - **DecisionEngine**: 2 existing tests still pass
 
 ### Manual Integration Tests
-Created `test-decision-engine.ts` to verify:
+Created `tests/manual-decision-engine.ts` to verify:
 1. ✅ Retry logic with rate limit errors
 2. ✅ Response validation with invalid tools
 3. ✅ Context compaction on overflow
@@ -195,7 +195,7 @@ Possible improvements for future PRs:
 - `tests/executionState.test.ts` (186 lines)
 - `tests/contextCompactor.test.ts` (157 lines)
 - `tests/responseValidator.test.ts` (352 lines)
-- `test-decision-engine.ts` (207 lines)
+- `tests/manual-decision-engine.ts` (207 lines)
 
 ### Modified Files (1):
 - `src/core/DecisionEngine.ts` (+68 lines, more robust)

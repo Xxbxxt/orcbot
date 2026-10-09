@@ -307,6 +307,6 @@ When adding new configuration options:
 
 ## See Also
 
-- [ConfigManager Documentation](../src/config/ConfigManager.ts)
-- [Agent Skills Documentation](../SKILLS.md)
-- [Decision Engine Documentation](../src/core/DecisionEngine.ts)
+- [ConfigManager Documentation](../../src/config/ConfigManager.ts)
+- [Agent Skills Documentation](../../SKILLS.md)
+- [Decision Engine Documentation](../../src/core/DecisionEngine.ts)

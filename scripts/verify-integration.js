@@ -11,8 +11,8 @@
  */
 
 async function main() {
-    const { Agent } = require('./dist/core/Agent.js');
-    const { PollingManager } = require('./dist/core/PollingManager.js');
+    const { Agent } = require('../dist/core/Agent.js');
+    const { PollingManager } = require('../dist/core/PollingManager.js');
 
     console.log('🧪 Running Integration Verification\n');
     console.log('='.repeat(50));

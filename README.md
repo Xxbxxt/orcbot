@@ -68,7 +68,7 @@ OrcBot v2.1 is engineered for peak reliability and strategic depth. Our latest b
 <div align="center">
 <img src="https://raw.githubusercontent.com/fredabila/orcbot/main/assets/benchmarks_v21.png" width="600" alt="OrcBot v2.1 Benchmarks">
 
-**[View Detailed Benchmark Methodology & Data](docs/BENCHMARKS.md)**
+**[View Detailed Benchmark Methodology & Data](docs/reference/BENCHMARKS.md)**
 </div>
 
 *   **Conversational IQ (9.5/10)**: State-of-the-art context management and complex reasoning.
@@ -302,7 +302,7 @@ docker compose -f docker-compose.minimal.yml up -d
 # Open dashboard at http://localhost:3100
 ```
 
-See [Docker Guide](docs/DOCKER.md) for full setup options.
+See [Docker Guide](docs/guides/DOCKER.md) for full setup options.
 
 **Manual Installation**
 ```bash
@@ -355,15 +355,15 @@ If GitHub Actions fails with `EOTP`, your `NPM_TOKEN` is the wrong type. CI publ
 Live docs (GitHub Pages): https://fredabila.github.io/orcbot/docs/
 
 **Key Guides:**
-*   🌐 [**Browser & Identity Improvements**](BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
+*   🌐 [**Browser & Identity Improvements**](docs/notes/BROWSER_IDENTITY_IMPROVEMENTS.md) - Loop prevention, state tracking, self-updating system
 *   🔐 [**Google Identity Service**](docs/GOOGLE_IDENTITY.md) - OAuth setup, Gmail OTP workflows, storage model, and security guidance
 *   ☁️ [**Google Workspace CLI Integration**](docs/GOOGLE_WORKSPACE_CLI.md) - Using `gws` as OrcBot's broad Google Workspace backend for Docs, Drive, and more
-*   ⏱️ [**Polling System Guide**](POLLING_USAGE.md) - Event-driven condition monitoring
-*   ⚙️ [**Configuration Guide**](docs/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
-*   🐳 [**Docker Guide**](docs/DOCKER.md) - Container deployment options
+*   ⏱️ [**Polling System Guide**](docs/guides/POLLING_USAGE.md) - Event-driven condition monitoring
+*   ⚙️ [**Configuration Guide**](docs/guides/CONFIG_MANAGEMENT.md) - Comprehensive configuration management
+*   🐳 [**Docker Guide**](docs/guides/DOCKER.md) - Container deployment options
 *   📊 [**Testing Guide**](TESTING_GUIDE.md) - Testing strategies and patterns
-*   🔒 [**Security Summary**](SECURITY_SUMMARY.md) - Security features and best practices
-*   🚀 [**Extraordinary Use Cases**](docs/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
+*   🔒 [**Security Summary**](docs/notes/SECURITY_SUMMARY.md) - Security features and best practices
+*   🚀 [**Extraordinary Use Cases**](docs/guides/EXTRAORDINARY_USE_CASES.md) - God-mode automation, robotics, and strategic orchestration
 *   🤖 [**Robotics + OrcBot**](docs/blog/robotics.md) - Hardware integration approach and safety patterns
 *   🧪 [**Self-Training Sidecar Page**](https://orcbot.vercel.app/self-training) - Capture, evaluation, launch, and promotion workflow
 
@@ -677,7 +677,7 @@ manage_config({ action: "pending" })
 manage_config({ action: "approve", key: "openaiApiKey" })
 ```
 
-See [Config Management Documentation](docs/CONFIG_MANAGEMENT.md) for complete details.
+See [Config Management Documentation](docs/guides/CONFIG_MANAGEMENT.md) for complete details.
 
 ### Google Identity Service
 

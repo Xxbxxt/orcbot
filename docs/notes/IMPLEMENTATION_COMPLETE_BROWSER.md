@@ -117,7 +117,7 @@ register_polling_job(
    - Troubleshooting section
    - Performance impact analysis
 
-2. `POLLING_USAGE.md` (9KB)
+2. `../guides/POLLING_USAGE.md` (9KB)
    - Usage examples
    - Common use cases
    - Best practices
@@ -237,7 +237,7 @@ $ npx ts-node tests/integration-test.ts
 
 ### Documentation (3 files)
 1. `BROWSER_IDENTITY_IMPROVEMENTS.md` (NEW, 422 lines)
-2. `POLLING_USAGE.md` (NEW, 342 lines)
+2. `../guides/POLLING_USAGE.md` (NEW, 342 lines)
 3. `README.md` (modified, +3 feature highlights)
 
 ### Tests (1 file)
