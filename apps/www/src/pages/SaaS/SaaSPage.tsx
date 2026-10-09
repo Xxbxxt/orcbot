@@ -49,8 +49,8 @@ const SaaSPage: React.FC = () => {
 
       const data = await response.json();
       if (data.success) {
-        setStatus({ 
-          type: 'success', 
+        setStatus({
+          type: 'success',
           msg: 'PROFILE GENERATED. COPY THE COMMAND BELOW TO START LOCALLY.',
           commands: data.commands
         });
@@ -92,10 +92,10 @@ const SaaSPage: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      backgroundColor: '#000', 
-      color: '#fff', 
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: '#000',
+      color: '#fff',
       fontFamily: '"Inter", -apple-system, sans-serif',
       padding: '0 20px 60px',
       display: 'flex',
@@ -125,17 +125,17 @@ const SaaSPage: React.FC = () => {
       </header>
 
       <main style={{ width: '100%', maxWidth: '900px', display: 'grid', gridTemplateColumns: '1fr 400px', gap: '60px' }}>
-        
+
         {/* ── Blueprints ── */}
         <section>
           <h2 style={labelStyle}>1. SELECT_BLUEPRINT</h2>
           <div style={{ display: 'grid', gap: '16px' }}>
             {Blueprints.map((bp) => (
-              <div 
-                key={bp.id} 
+              <div
+                key={bp.id}
                 className="bp-card"
                 onClick={() => setSelectedBlueprint(bp.id)}
-                style={{ 
+                style={{
                   border: `1px solid ${selectedBlueprint === bp.id ? '#fff' : '#222'}`,
                   padding: '24px',
                   cursor: 'pointer',
@@ -159,25 +159,25 @@ const SaaSPage: React.FC = () => {
         <section>
           <div style={{ border: '1px solid #222', padding: '32px', position: 'sticky', top: '40px' }}>
             <h2 style={{ ...labelStyle, marginBottom: '24px' }}>2. CONFIGURE_AGENT</h2>
-            
+
             <form onSubmit={handleSubmit} style={{ display: 'grid', gap: '20px' }}>
               <div>
                 <label style={labelStyle}>OWNER_NAME</label>
-                <input 
-                  type="text" 
-                  required 
+                <input
+                  type="text"
+                  required
                   placeholder="ID_FREDERICK"
                   style={inputStyle}
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 />
               </div>
-              
+
               <div>
                 <label style={labelStyle}>TELEGRAM_BOT_TOKEN</label>
-                <input 
-                  type="password" 
-                  required 
+                <input
+                  type="password"
+                  required
                   placeholder="••••••••••••••••••••"
                   style={inputStyle}
                   value={formData.token}
@@ -187,9 +187,9 @@ const SaaSPage: React.FC = () => {
 
               <div>
                 <label style={labelStyle}>ADMIN_TELEGRAM_ID</label>
-                <input 
-                  type="text" 
-                  required 
+                <input
+                  type="text"
+                  required
                   placeholder="8077489121"
                   style={inputStyle}
                   value={formData.userId}
@@ -197,15 +197,15 @@ const SaaSPage: React.FC = () => {
                 />
               </div>
 
-              <button 
+              <button
                 type="submit"
                 disabled={loading}
-                style={{ 
-                  background: loading ? '#111' : '#fff', 
-                  color: loading ? '#444' : '#000', 
-                  padding: '16px', 
-                  border: 'none', 
-                  fontSize: '0.8rem', 
+                style={{
+                  background: loading ? '#111' : '#fff',
+                  color: loading ? '#444' : '#000',
+                  padding: '16px',
+                  border: 'none',
+                  fontSize: '0.8rem',
                   fontWeight: 900,
                   letterSpacing: '0.2em',
                   cursor: loading ? 'not-allowed' : 'pointer',
@@ -220,7 +220,7 @@ const SaaSPage: React.FC = () => {
             {status && status.commands && (
               <div style={{ marginTop: '40px', borderTop: '1px solid #222', paddingTop: '30px' }}>
                 <h2 style={labelStyle}>3. EXECUTE_LOCALLY</h2>
-                
+
                 <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
                   <button onClick={() => setActiveTab('windows')} style={{ background: activeTab === 'windows' ? '#222' : 'transparent', border: '1px solid #333', color: '#fff', fontSize: '0.6rem', padding: '4px 10px', cursor: 'pointer' }}>WINDOWS (PS)</button>
                   <button onClick={() => setActiveTab('linux')} style={{ background: activeTab === 'linux' ? '#222' : 'transparent', border: '1px solid #333', color: '#fff', fontSize: '0.6rem', padding: '4px 10px', cursor: 'pointer' }}>LINUX / MACOS</button>
@@ -234,11 +234,11 @@ const SaaSPage: React.FC = () => {
             )}
 
             {status && !status.commands && (
-              <div style={{ 
-                marginTop: '24px', 
-                padding: '12px', 
-                backgroundColor: status.type === 'error' ? '#220000' : '#111', 
-                color: status.type === 'error' ? '#ff0000' : '#888', 
+              <div style={{
+                marginTop: '24px',
+                padding: '12px',
+                backgroundColor: status.type === 'error' ? '#220000' : '#111',
+                color: status.type === 'error' ? '#ff0000' : '#888',
                 fontSize: '0.75rem',
                 fontFamily: 'monospace',
                 border: `1px solid ${status.type === 'error' ? '#440000' : '#222'}`,

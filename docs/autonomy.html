@@ -12,7 +12,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="index.html" class="sidebar-logo">
-          <div class="sidebar-logo-icon">🤖</div>
+          <div class="sidebar-logo-icon">OB</div>
           OrcBot
         </a>
         <span class="sidebar-version">v1.0.0</span>
@@ -22,35 +22,35 @@
         <div class="nav-section">
           <div class="nav-section-title">Getting Started</div>
           <ul class="nav-links">
-            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
-            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
-            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+            <li><a href="index.html" class="nav-link">Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link">Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link">Configuration</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Core Concepts</div>
           <ul class="nav-links">
-            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
-            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
-            <li><a href="autonomy.html" class="nav-link active"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
-            <li><a href="local-models.html" class="nav-link"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+            <li><a href="architecture.html" class="nav-link">Architecture</a></li>
+            <li><a href="skills.html" class="nav-link">Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link active">Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link">Local Models</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Deployment</div>
           <ul class="nav-links">
-            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
-            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
-            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+            <li><a href="docker.html" class="nav-link">Docker</a></li>
+            <li><a href="gateway.html" class="nav-link">Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link">Operations</a></li>
           </ul>
         </div>
       </nav>
       
       <div class="sidebar-footer">
-        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
-        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+        <a href="https://github.com/fredabila/orcbot" target="_blank">GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">Community</a>
       </div>
     </aside>
 
@@ -64,19 +64,19 @@
           <span>Autonomy</span>
         </div>
         <div class="header-actions">
-          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">Star</a>
         </div>
       </header>
 
       <div class="page-content">
         <div class="page-header">
-          <span class="page-badge">🤖 Core Concepts</span>
+          <span class="page-badge"> Core Concepts</span>
           <h1 class="page-title">Autonomy</h1>
           <p class="page-description">How OrcBot operates independently via heartbeat, scheduler, and safety guardrails.</p>
         </div>
 
         <div class="card">
-          <h2>💓 Heartbeat Loop</h2>
+          <h2> Heartbeat Loop</h2>
           <p>The agent runs a continuous heartbeat loop that:</p>
           <ul>
             <li>Pulls the next action from the priority queue</li>
@@ -90,7 +90,7 @@ orcbot run</code></pre>
         </div>
 
         <div class="card">
-          <h2>⏰ Scheduler</h2>
+          <h2>Scheduler</h2>
           <p>The scheduler emits <code>scheduler:tick</code> events on a configurable interval:</p>
           <pre><code># Config
 heartbeatInterval: 60  # seconds between ticks</code></pre>
@@ -103,7 +103,7 @@ eventBus.on('scheduler:tick', async () => {
         </div>
 
         <div class="card">
-          <h2>🛡️ Safety Guardrails</h2>
+          <h2> Safety Guardrails</h2>
           <div class="key-grid">
             <div class="key-item">
               <div class="key-name">Simulation</div>
@@ -125,7 +125,7 @@ eventBus.on('scheduler:tick', async () => {
         </div>
 
         <div class="card">
-          <h2>🧠 Decision Pipeline</h2>
+          <h2> Decision Pipeline</h2>
           <p>Each decision goes through multiple stages:</p>
           <ol>
             <li><strong>Context Gathering</strong> — Recent memories, journal, learning snippets</li>
@@ -137,7 +137,7 @@ eventBus.on('scheduler:tick', async () => {
         </div>
 
         <div class="card">
-          <h2>📋 Action Queue</h2>
+          <h2> Action Queue</h2>
           <p>Tasks are persisted in a file-backed priority queue:</p>
           <pre><code>// Push a task programmatically
 actionQueue.push({
@@ -153,7 +153,7 @@ orcbot push "Research topic X" -p 8</code></pre>
         </div>
 
         <div class="card">
-          <h2>🔄 Learning & Memory</h2>
+          <h2> Learning & Memory</h2>
           <p>The agent consolidates short-term memories into episodic summaries:</p>
           <ul>
             <li><strong>Short-term</strong> — Recent events stored individually</li>

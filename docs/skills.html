@@ -12,7 +12,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="index.html" class="sidebar-logo">
-          <div class="sidebar-logo-icon">🤖</div>
+          <div class="sidebar-logo-icon">OB</div>
           OrcBot
         </a>
         <span class="sidebar-version">v1.0.0</span>
@@ -22,35 +22,35 @@
         <div class="nav-section">
           <div class="nav-section-title">Getting Started</div>
           <ul class="nav-links">
-            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
-            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
-            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+            <li><a href="index.html" class="nav-link">Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link">Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link">Configuration</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Core Concepts</div>
           <ul class="nav-links">
-            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
-            <li><a href="skills.html" class="nav-link active"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
-            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
-            <li><a href="local-models.html" class="nav-link"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+            <li><a href="architecture.html" class="nav-link">Architecture</a></li>
+            <li><a href="skills.html" class="nav-link active">Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link">Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link">Local Models</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Deployment</div>
           <ul class="nav-links">
-            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
-            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
-            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+            <li><a href="docker.html" class="nav-link">Docker</a></li>
+            <li><a href="gateway.html" class="nav-link">Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link">Operations</a></li>
           </ul>
         </div>
       </nav>
       
       <div class="sidebar-footer">
-        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
-        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+        <a href="https://github.com/fredabila/orcbot" target="_blank">GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">Community</a>
       </div>
     </aside>
 
@@ -64,19 +64,19 @@
           <span>Skills & Plugins</span>
         </div>
         <div class="header-actions">
-          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">Star</a>
         </div>
       </header>
 
       <div class="page-content">
         <div class="page-header">
-          <span class="page-badge">🧩 Core Concepts</span>
+          <span class="page-badge"> Core Concepts</span>
           <h1 class="page-title">Skills & Plugins</h1>
           <p class="page-description">Core capabilities and how to extend OrcBot with custom plugins.</p>
         </div>
 
         <div class="card">
-          <h2>🔧 Built-in Skills</h2>
+          <h2> Built-in Skills</h2>
           <p>OrcBot ships with 60+ skills organized by category:</p>
           
           <div class="key-grid">
@@ -135,7 +135,7 @@
         </div>
 
         <div class="card">
-          <h2>🔌 Creating Custom Plugins</h2>
+          <h2> Creating Custom Plugins</h2>
           <p>Drop TypeScript or JavaScript files in <code>~/.orcbot/plugins/</code> to extend OrcBot.</p>
           
           <h4>Plugin Structure</h4>
@@ -157,7 +157,7 @@ module.exports = {
         </div>
 
         <div class="card">
-          <h2>🔧 Context Object</h2>
+          <h2> Context Object</h2>
           <p>Plugins receive a context object with access to:</p>
           <table>
             <tr><th>Property</th><th>Description</th></tr>
@@ -169,11 +169,11 @@ module.exports = {
         </div>
 
         <div class="card">
-          <h2>🔄 Self-Repair</h2>
+          <h2> Self-Repair</h2>
           <p>If a plugin fails to load due to syntax errors, OrcBot triggers a high-priority <code>self_repair_skill</code> task that uses the LLM to attempt automatic fixes.</p>
           
           <div class="callout callout-info">
-            <span class="callout-icon">💡</span>
+            <span class="callout-icon"></span>
             <div class="callout-content">
               <strong>Tip:</strong> Add a <code>// @source:</code> header to your plugin to help the LLM understand its purpose during repairs.
             </div>
@@ -181,7 +181,7 @@ module.exports = {
         </div>
 
         <div class="card">
-          <h2>📦 Skill Builder</h2>
+          <h2> Skill Builder</h2>
           <p>Build skills from remote specifications using the CLI:</p>
           <pre><code>orcbot builder https://example.com/skill-spec.md</code></pre>
           <p>This fetches the spec, generates the plugin code, and installs it automatically.</p>

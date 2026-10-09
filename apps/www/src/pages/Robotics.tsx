@@ -31,117 +31,26 @@ type GuideId = 'pi-robot' | 'arduino' | 'humanoid';
 
 interface GuideMeta {
   id: GuideId;
-  icon: string;
   tab: string;
   tabSub: string;
   badge?: string;
   title: React.ReactNode;
   subtitle: string;
-  meta: { icon: string; label: string }[];
+  meta: { label: string }[];
   toc: { num: string; label: string; id: string }[];
 }
 
 const guides: GuideMeta[] = [
   {
-    id: 'pi-robot',
-    icon: '🤖',
-    tab: 'Raspberry Pi Robot',
-    tabSub: 'Full Build Guide',
-    title: <>Build an <em>AI-Powered Robot</em> with OrcBot</>,
-    subtitle: 'A comprehensive, hands-on guide for students and makers. Go from parts on a desk to an autonomous robot you command over Telegram — step by step.',
-    meta: [
-      { icon: '📖', label: '~45 min read' },
-      { icon: '🔧', label: 'Full build guide' },
-      { icon: '💰', label: '~$120–160 budget' },
-      { icon: '🎓', label: 'Student friendly' },
-    ],
-    toc: [
-      { num: '01', label: 'Overview & How It Works', id: 'overview' },
-      { num: '02', label: 'Shopping List (BOM)', id: 'bom' },
-      { num: '03', label: 'Tools You\'ll Need', id: 'tools' },
-      { num: '04', label: 'Software Prerequisites', id: 'software' },
-      { num: '05', label: 'Build the Chassis', id: 'chassis' },
-      { num: '06', label: 'Set Up the Raspberry Pi', id: 'pi-setup' },
-      { num: '07', label: 'Build the Hardware Bridge', id: 'bridge' },
-      { num: '08', label: 'Create OrcBot Skills', id: 'skills' },
-      { num: '09', label: 'Safety & Emergency Stop', id: 'safety' },
-      { num: '10', label: 'Test in Simulation', id: 'simulation' },
-      { num: '11', label: 'Connect Real Hardware', id: 'real-hw' },
-      { num: '12', label: 'Deploy & Operate', id: 'deploy' },
-      { num: '13', label: 'Camera Vision', id: 'camera' },
-      { num: '14', label: 'ROS2 Integration', id: 'ros2' },
-      { num: '15', label: 'MQTT Fleet Control', id: 'mqtt' },
-      { num: '16', label: 'Troubleshooting', id: 'troubleshoot' },
-      { num: '17', label: 'Learning Resources', id: 'resources' },
-      { num: '18', label: 'Architecture Reference', id: 'arch-ref' },
-    ],
-  },
-  {
-    id: 'arduino',
-    icon: '⚡',
-    tab: 'Arduino Starter Kit',
-    tabSub: 'Beginner Friendly',
-    badge: 'new',
-    title: <>Build Smart Hardware with <em>Arduino &amp; OrcBot</em></>,
-    subtitle: 'Use an Arduino starter kit as your gateway to AI-controlled hardware. OrcBot sends serial commands, Arduino drives the components — no Raspberry Pi required.',
-    meta: [
-      { icon: '📖', label: '~30 min read' },
-      { icon: '⚡', label: 'Arduino Uno/Nano' },
-      { icon: '💰', label: '~$30–60 budget' },
-      { icon: '🎓', label: 'Beginner friendly' },
-    ],
-    toc: [
-      { num: '01', label: 'How Arduino + OrcBot Work Together', id: 'a-overview' },
-      { num: '02', label: 'What\'s in a Starter Kit', id: 'a-kit' },
-      { num: '03', label: 'Extra Parts You\'ll Need', id: 'a-extras' },
-      { num: '04', label: 'Software Setup', id: 'a-software' },
-      { num: '05', label: 'The Serial Bridge Pattern', id: 'a-serial' },
-      { num: '06', label: 'Arduino Sketch — Command Receiver', id: 'a-sketch' },
-      { num: '07', label: 'Python Serial Bridge for OrcBot', id: 'a-bridge' },
-      { num: '08', label: 'OrcBot Skills for Arduino', id: 'a-skills' },
-      { num: '09', label: 'Project 1 — Smart LED Controller', id: 'a-led' },
-      { num: '10', label: 'Project 2 — Ultrasonic Sentry', id: 'a-sentry' },
-      { num: '11', label: 'Project 3 — Servo Arm', id: 'a-servo' },
-      { num: '12', label: 'Safety & Best Practices', id: 'a-safety' },
-      { num: '13', label: 'Troubleshooting', id: 'a-troubleshoot' },
-      { num: '14', label: 'Next Steps', id: 'a-next' },
-    ],
-  },
-  {
-    id: 'humanoid',
-    icon: '🦾',
-    tab: 'Humanoid Companion',
-    tabSub: 'Advanced Build',
-    badge: 'new',
-    title: <>Build a <em>Humanoid Robotic Companion</em> with OrcBot</>,
-    subtitle: 'An advanced project guide to building a full-body humanoid robot with speech, sign language, vision, walking, and AI cognition — all orchestrated by OrcBot.',
-    meta: [
-      { icon: '📖', label: '~60 min read' },
-      { icon: '🦾', label: '22+ DOF humanoid' },
-      { icon: '💰', label: '~$800–2,500 budget' },
-      { icon: '🎓', label: 'Intermediate+' },
-    ],
-    toc: [
-      { num: '01', label: 'Vision & Architecture', id: 'h-overview' },
-      { num: '02', label: 'Choosing a Humanoid Platform', id: 'h-platform' },
-      { num: '03', label: 'Bill of Materials', id: 'h-bom' },
-      { num: '04', label: 'Mechanical Assembly', id: 'h-assembly' },
-      { num: '05', label: 'Electronics & Wiring', id: 'h-electronics' },
-      { num: '06', label: 'Motion Controller Bridge', id: 'h-motion' },
-      { num: '07', label: 'Walking & Balance', id: 'h-walking' },
-      { num: '08', label: 'Arm & Hand Control', id: 'h-arms' },
-      { num: '09', label: 'Speech — Voice & Hearing', id: 'h-speech' },
-      { num: '10', label: 'Sign Language', id: 'h-sign' },
-      { num: '11', label: 'Computer Vision & Face', id: 'h-vision' },
-      { num: '12', label: 'Cognition — OrcBot Brain', id: 'h-cognition' },
-      { num: '13', label: 'OrcBot Humanoid Skills', id: 'h-skills' },
-      { num: '14', label: 'Safety & Ethics', id: 'h-safety' },
-      { num: '15', label: 'Simulation & Testing', id: 'h-simulation' },
-      { num: '16', label: 'Deployment & Operation', id: 'h-deploy' },
-      { num: '17', label: 'Troubleshooting', id: 'h-troubleshoot' },
-      { num: '18', label: 'Resources & Community', id: 'h-resources' },
-    ],
-  },
+    id: 'pi-robot', tab: 'Raspberry Pi Robot', tabSub: 'Full Build Guide', title: <>Build an <em>AI-Powered Robot</em> with OrcBot</>, subtitle: 'A comprehensive, hands-on guide for students and makers. Go from parts on a desk to an autonomous robot you command over Telegram, step by step.', meta: [
+      { label: '~45 min read' }, { label: 'Full build guide' }, { label: '~$120–160 budget' }, { label: 'Student friendly' }, ], toc: [
+      { num: '01', label: 'Overview & How It Works', id: 'overview' }, { num: '02', label: 'Shopping List (BOM)', id: 'bom' }, { num: '03', label: 'Tools You\'ll Need', id: 'tools' }, { num: '04', label: 'Software Prerequisites', id: 'software' }, { num: '05', label: 'Build the Chassis', id: 'chassis' }, { num: '06', label: 'Set Up the Raspberry Pi', id: 'pi-setup' }, { num: '07', label: 'Build the Hardware Bridge', id: 'bridge' }, { num: '08', label: 'Create OrcBot Skills', id: 'skills' }, { num: '09', label: 'Safety & Emergency Stop', id: 'safety' }, { num: '10', label: 'Test in Simulation', id: 'simulation' }, { num: '11', label: 'Connect Real Hardware', id: 'real-hw' }, { num: '12', label: 'Deploy & Operate', id: 'deploy' }, { num: '13', label: 'Camera Vision', id: 'camera' }, { num: '14', label: 'ROS2 Integration', id: 'ros2' }, { num: '15', label: 'MQTT Fleet Control', id: 'mqtt' }, { num: '16', label: 'Troubleshooting', id: 'troubleshoot' }, { num: '17', label: 'Learning Resources', id: 'resources' }, { num: '18', label: 'Architecture Reference', id: 'arch-ref' }, ], }, {
+    id: 'arduino', tab: 'Arduino Starter Kit', tabSub: 'Beginner Friendly', badge: 'new', title: <>Build Smart Hardware with <em>Arduino &amp; OrcBot</em></>, subtitle: 'Use an Arduino starter kit as your gateway to AI-controlled hardware. OrcBot sends serial commands, Arduino drives the components, no Raspberry Pi required.', meta: [
+      { label: '~30 min read' }, { label: 'Arduino Uno/Nano' }, { label: '~$30–60 budget' }, { label: 'Beginner friendly' }, ], toc: [
+      { num: '01', label: 'How Arduino + OrcBot Work Together', id: 'a-overview' }, { num: '02', label: 'What\'s in a Starter Kit', id: 'a-kit' }, { num: '03', label: 'Extra Parts You\'ll Need', id: 'a-extras' }, { num: '04', label: 'Software Setup', id: 'a-software' }, { num: '05', label: 'The Serial Bridge Pattern', id: 'a-serial' }, { num: '06', label: 'Arduino Sketch, Command Receiver', id: 'a-sketch' }, { num: '07', label: 'Python Serial Bridge for OrcBot', id: 'a-bridge' }, { num: '08', label: 'OrcBot Skills for Arduino', id: 'a-skills' }, { num: '09', label: 'Project 1, Smart LED Controller', id: 'a-led' }, { num: '10', label: 'Project 2, Ultrasonic Sentry', id: 'a-sentry' }, { num: '11', label: 'Project 3, Servo Arm', id: 'a-servo' }, { num: '12', label: 'Safety & Best Practices', id: 'a-safety' }, { num: '13', label: 'Troubleshooting', id: 'a-troubleshoot' }, { num: '14', label: 'Next Steps', id: 'a-next' }, ], }, {
+    id: 'humanoid', tab: 'Humanoid Companion', tabSub: 'Advanced Build', badge: 'new', title: <>Build a <em>Humanoid Robotic Companion</em> with OrcBot</>, subtitle: 'An advanced project guide to building a full-body humanoid robot with speech, sign language, vision, walking, and AI cognition, all orchestrated by OrcBot.', meta: [
+      { label: '~60 min read' }, { label: '22+ DOF humanoid' }, { label: '~$800–2,500 budget' }, { label: 'Intermediate+' }, ], toc: [
+      { num: '01', label: 'Vision & Architecture', id: 'h-overview' }, { num: '02', label: 'Choosing a Humanoid Platform', id: 'h-platform' }, { num: '03', label: 'Bill of Materials', id: 'h-bom' }, { num: '04', label: 'Mechanical Assembly', id: 'h-assembly' }, { num: '05', label: 'Electronics & Wiring', id: 'h-electronics' }, { num: '06', label: 'Motion Controller Bridge', id: 'h-motion' }, { num: '07', label: 'Walking & Balance', id: 'h-walking' }, { num: '08', label: 'Arm & Hand Control', id: 'h-arms' }, { num: '09', label: 'Speech, Voice & Hearing', id: 'h-speech' }, { num: '10', label: 'Sign Language', id: 'h-sign' }, { num: '11', label: 'Computer Vision & Face', id: 'h-vision' }, { num: '12', label: 'Cognition, OrcBot Brain', id: 'h-cognition' }, { num: '13', label: 'OrcBot Humanoid Skills', id: 'h-skills' }, { num: '14', label: 'Safety & Ethics', id: 'h-safety' }, { num: '15', label: 'Simulation & Testing', id: 'h-simulation' }, { num: '16', label: 'Deployment & Operation', id: 'h-deploy' }, { num: '17', label: 'Troubleshooting', id: 'h-troubleshoot' }, { num: '18', label: 'Resources & Community', id: 'h-resources' }, ], },
 ];
 
 const VALID_GUIDES = new Set<GuideId>(guides.map(g => g.id));
@@ -160,7 +69,7 @@ export default function Robotics() {
 
   // Sync document title
   useEffect(() => {
-    document.title = `${guide.tab} — OrcBot Robotics`;
+    document.title = `${guide.tab}, OrcBot Robotics`;
   }, [guide.tab]);
 
   return (
@@ -173,12 +82,8 @@ export default function Robotics() {
 
       <header className="robotics-hero" id="top">
 
-        <div className="robotics-hero-bg" />
         <div className="robotics-hero-content">
-          <div className="robotics-badge">
-            <span className="robotics-badge-dot" />
-            Hardware &amp; Robotics Guide
-          </div>
+
           <h1 className="robotics-title">
             {guide.title}
           </h1>
@@ -187,7 +92,7 @@ export default function Robotics() {
           </p>
           <div className="robotics-meta">
             {guide.meta.map((m, i) => (
-              <span className="robotics-meta-item" key={i}><span className="meta-icon">{m.icon}</span> {m.label}</span>
+              <span className="robotics-meta-item" key={i}> {m.label}</span>
             ))}
           </div>
         </div>
@@ -202,7 +107,6 @@ export default function Robotics() {
               className={`guide-tab${activeGuide === g.id ? ' active' : ''}`}
               onClick={() => switchGuide(g.id)}
             >
-              <span className="guide-tab-icon">{g.icon}</span>
               <span className="guide-tab-info">
                 <span className="guide-tab-title">{g.tab}</span>
                 <span className="guide-tab-sub">{g.tabSub}</span>
@@ -237,7 +141,7 @@ export default function Robotics() {
         <section className="content-section" id="overview">
           <div className="content-section-label">Phase 0</div>
           <h2>Overview &amp; How It Works</h2>
-          <p>Traditional robots run pre-programmed routines. This project is different — the robot <strong>thinks before it acts</strong>. OrcBot receives a goal, breaks it into steps, executes those steps using skills, handles errors, and reports results.</p>
+          <p>Traditional robots run pre-programmed routines. This project is different, the robot <strong>thinks before it acts</strong>. OrcBot receives a goal, breaks it into steps, executes those steps using skills, handles errors, and reports results.</p>
 
           <div className="arch-diagram">
             <pre>{`  ┌───────────────────────────────────────────────────────┐
@@ -273,13 +177,10 @@ export default function Robotics() {
           </div>
 
           <h3>Why This Architecture?</h3>
-          <p>OrcBot <strong>never touches hardware directly</strong>. It calls a Hardware Bridge — a small, separate service that validates every command before sending it to motors and sensors. This gives you:</p>
+          <p>OrcBot <strong>never touches hardware directly</strong>. It calls a Hardware Bridge, a small, separate service that validates every command before sending it to motors and sensors. This gives you:</p>
           <div className="safety-layers" style={{ marginTop: 12 }}>
             {[
-              { title: 'Safety', desc: 'The bridge enforces speed limits, timeouts, and emergency stops regardless of what the AI decides.' },
-              { title: 'Separation', desc: 'You can test OrcBot\'s planning without a real robot, and test the robot without OrcBot.' },
-              { title: 'Flexibility', desc: 'Swap the bridge from a wheeled robot to a drone to a robotic arm without changing OrcBot.' },
-            ].map((item, i) => (
+              { title: 'Safety', desc: 'The bridge enforces speed limits, timeouts, and emergency stops regardless of what the AI decides.' }, { title: 'Separation', desc: 'You can test OrcBot\'s planning without a real robot, and test the robot without OrcBot.' }, { title: 'Flexibility', desc: 'Swap the bridge from a wheeled robot to a drone to a robotic arm without changing OrcBot.' }, ].map((item, i) => (
               <div className="safety-layer" key={i}>
                 <h4 style={{ margin: 0, marginBottom: 4 }}>{item.title}</h4>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.desc}</p>
@@ -299,24 +200,13 @@ export default function Robotics() {
               <thead><tr><th>#</th><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['1', 'Raspberry Pi 4B (4 GB+)', 'Runs OrcBot + bridge', '$55–75'],
-                  ['2', 'MicroSD Card (32 GB+, Class 10)', 'Pi storage', '$8–12'],
-                  ['3', 'USB-C Power Supply (5 V 3 A)', 'Power the Pi on desk', '$10'],
-                  ['4', '2WD Robot Chassis Kit', 'Frame, wheels, caster', '$12–20'],
-                  ['5', '2× DC Gear Motors (3-6 V)', 'Drive wheels', 'Included'],
-                  ['6', 'L298N Motor Driver Module', 'Motor speed & direction', '$3–6'],
-                  ['7', 'HC-SR04 Ultrasonic Sensor', 'Obstacle detection', '$2–4'],
-                  ['8', 'Jumper Wires (assorted)', 'Connections', '$5'],
-                  ['9', 'Mini Breadboard', 'Prototyping', '$2–3'],
-                  ['10', '4× AA Battery Holder + Batteries', 'Motor power (6 V)', '$8'],
-                  ['11', 'USB Power Bank (5 V 2 A+)', 'Mobile Pi power', '$15–25'],
-                ].map(r => (
+                  ['1', 'Raspberry Pi 4B (4 GB+)', 'Runs OrcBot + bridge', '$55–75'], ['2', 'MicroSD Card (32 GB+, Class 10)', 'Pi storage', '$8–12'], ['3', 'USB-C Power Supply (5 V 3 A)', 'Power the Pi on desk', '$10'], ['4', '2WD Robot Chassis Kit', 'Frame, wheels, caster', '$12–20'], ['5', '2× DC Gear Motors (3-6 V)', 'Drive wheels', 'Included'], ['6', 'L298N Motor Driver Module', 'Motor speed & direction', '$3–6'], ['7', 'HC-SR04 Ultrasonic Sensor', 'Obstacle detection', '$2–4'], ['8', 'Jumper Wires (assorted)', 'Connections', '$5'], ['9', 'Mini Breadboard', 'Prototyping', '$2–3'], ['10', '4× AA Battery Holder + Batteries', 'Motor power (6 V)', '$8'], ['11', 'USB Power Bank (5 V 2 A+)', 'Mobile Pi power', '$15–25'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="bom-total">💰 Estimated core total: $120–160</div>
+          <div className="bom-total"> Estimated core total: $120–160</div>
 
           <h3>Optional Upgrades</h3>
           <div className="bom-table-wrap">
@@ -324,14 +214,7 @@ export default function Robotics() {
               <thead><tr><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['Pi Camera Module v2 / USB webcam', 'Visual inspection, navigation', '$15–30'],
-                  ['Servo Motor (SG90)', 'Pan camera / arm joint', '$3–5'],
-                  ['PCA9685 Servo Driver Board', 'Multi-servo via I2C', '$5–8'],
-                  ['MPU6050 IMU Module', 'Orientation sensing', '$3–5'],
-                  ['IR Obstacle Sensors (×2)', 'Edge / line detection', '$2–4'],
-                  ['OLED Display (SSD1306)', 'Onboard status display', '$5–8'],
-                  ['Physical E-Stop Button', 'Hardware cutoff', '$3–5'],
-                ].map((r, i) => (
+                  ['Pi Camera Module v2 / USB webcam', 'Visual inspection, navigation', '$15–30'], ['Servo Motor (SG90)', 'Pan camera / arm joint', '$3–5'], ['PCA9685 Servo Driver Board', 'Multi-servo via I2C', '$5–8'], ['MPU6050 IMU Module', 'Orientation sensing', '$3–5'], ['IR Obstacle Sensors (×2)', 'Edge / line detection', '$2–4'], ['OLED Display (SSD1306)', 'Onboard status display', '$5–8'], ['Physical E-Stop Button', 'Hardware cutoff', '$3–5'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -347,15 +230,14 @@ export default function Robotics() {
           <h3>Physical Tools</h3>
           <div className="tools-grid">
             {[
-              { icon: '🔧', name: 'Small Phillips Screwdriver', desc: 'Chassis assembly' },
-              { icon: '✂️', name: 'Wire Strippers', desc: 'Prepare wires for connections' },
-              { icon: '🔥', name: 'Soldering Iron (optional)', desc: 'Motor wire connections — tape works for prototyping' },
-              { icon: '📏', name: 'Multimeter (optional)', desc: 'Debug voltage and connections' },
-              { icon: '🔫', name: 'Hot Glue Gun or Zip Ties', desc: 'Mount sensors to chassis' },
-              { icon: '🩹', name: 'Electrical Tape', desc: 'Insulate wire connections' },
+              { name: 'Small Phillips Screwdriver', desc: 'Chassis assembly' },
+              { name: 'Wire Strippers', desc: 'Prepare wires for connections' },
+              { name: 'Soldering Iron (optional)', desc: 'Motor wire connections, tape works for prototyping' },
+              { name: 'Multimeter (optional)', desc: 'Debug voltage and connections' },
+              { name: 'Hot Glue Gun or Zip Ties', desc: 'Mount sensors to chassis' },
+              { name: 'Electrical Tape', desc: 'Insulate wire connections' },
             ].map((t, i) => (
               <div className="tool-card" key={i}>
-                <div className="tool-card-icon">{t.icon}</div>
                 <div><h5>{t.name}</h5><p>{t.desc}</p></div>
               </div>
             ))}
@@ -364,14 +246,8 @@ export default function Robotics() {
           <h3>Software Tools (all free)</h3>
           <div className="tools-grid">
             {[
-              { icon: '💾', name: 'Raspberry Pi Imager', desc: 'Flash the Pi\'s SD card' },
-              { icon: '💻', name: 'VS Code + Remote SSH', desc: 'Edit code on Pi from your laptop' },
-              { icon: '🟢', name: 'Node.js 18+', desc: 'Run OrcBot on the Pi' },
-              { icon: '🐍', name: 'Python 3.9+', desc: 'Run the hardware bridge' },
-              { icon: '📦', name: 'Git', desc: 'Clone repositories' },
-            ].map((t, i) => (
+              { name: 'Raspberry Pi Imager', desc: 'Flash the Pi\'s SD card' }, { name: 'VS Code + Remote SSH', desc: 'Edit code on Pi from your laptop' }, { name: 'Node.js 18+', desc: 'Run OrcBot on the Pi' }, { name: 'Python 3.9+', desc: 'Run the hardware bridge' }, { name: 'Git', desc: 'Clone repositories' }, ].map((t, i) => (
               <div className="tool-card" key={i}>
-                <div className="tool-card-icon">{t.icon}</div>
                 <div><h5>{t.name}</h5><p>{t.desc}</p></div>
               </div>
             ))}
@@ -387,8 +263,8 @@ export default function Robotics() {
           <h3>Flash Raspberry Pi OS</h3>
           <div className="phase-steps">
             <div className="phase-step"><div className="phase-step-num">1</div><div className="phase-step-content"><h5>Download Raspberry Pi Imager</h5><p>Get it from raspberrypi.com/software</p></div></div>
-            <div className="phase-step"><div className="phase-step-num">2</div><div className="phase-step-content"><h5>Select Raspberry Pi OS (64-bit, Lite)</h5><p>You don't need a desktop — headless is lighter and faster</p></div></div>
-            <div className="phase-step"><div className="phase-step-num">3</div><div className="phase-step-content"><h5>Configure in Settings (⚙)</h5><p>Set hostname to <code>orcbot-robot</code>, enable SSH, configure Wi-Fi, set timezone</p></div></div>
+            <div className="phase-step"><div className="phase-step-num">2</div><div className="phase-step-content"><h5>Select Raspberry Pi OS (64-bit, Lite)</h5><p>You don't need a desktop, headless is lighter and faster</p></div></div>
+            <div className="phase-step"><div className="phase-step-num">3</div><div className="phase-step-content"><h5>Configure in Settings ()</h5><p>Set hostname to <code>orcbot-robot</code>, enable SSH, configure Wi-Fi, set timezone</p></div></div>
             <div className="phase-step"><div className="phase-step-num">4</div><div className="phase-step-content"><h5>Flash and Boot</h5><p>Insert SD card into Pi, power on, wait 2–3 minutes</p></div></div>
           </div>
 
@@ -442,12 +318,7 @@ pip install flask RPi.GPIO gpiozero`}</CodeBlock>
           <h3>Assembly Steps</h3>
           <div className="phase-steps">
             {[
-              { title: 'Mount the motors', desc: 'Attach DC motors to the bottom plate using brackets and screws. Shafts point outward.' },
-              { title: 'Attach the wheels', desc: 'Push-fit each wheel onto a motor shaft. Add tape if loose.' },
-              { title: 'Mount the caster wheel', desc: 'Attach the ball caster to the front of the bottom plate — steering is via differential drive.' },
-              { title: 'Add standoffs', desc: 'Screw brass standoffs into corner holes — these create space for electronics between plates.' },
-              { title: 'Plan your layout', desc: 'Bottom: L298N motor driver + battery. Top: Raspberry Pi + breadboard + sensors.' },
-            ].map((s, i) => (
+              { title: 'Mount the motors', desc: 'Attach DC motors to the bottom plate using brackets and screws. Shafts point outward.' }, { title: 'Attach the wheels', desc: 'Push-fit each wheel onto a motor shaft. Add tape if loose.' }, { title: 'Mount the caster wheel', desc: 'Attach the ball caster to the front of the bottom plate, steering is via differential drive.' }, { title: 'Add standoffs', desc: 'Screw brass standoffs into corner holes, these create space for electronics between plates.' }, { title: 'Plan your layout', desc: 'Bottom: L298N motor driver + battery. Top: Raspberry Pi + breadboard + sensors.' }, ].map((s, i) => (
               <div className="phase-step" key={i}>
                 <div className="phase-step-num">{i + 1}</div>
                 <div className="phase-step-content"><h5>{s.title}</h5><p>{s.desc}</p></div>
@@ -497,15 +368,7 @@ pip install flask RPi.GPIO gpiozero`}</CodeBlock>
               <thead><tr><th>L298N Pin</th><th>Connect To</th><th>Purpose</th></tr></thead>
               <tbody>
                 {[
-                  ['12V (VCC)', 'Battery pack + (6V)', 'Power motors'],
-                  ['GND', 'Battery − AND Pi GND', 'Common ground'],
-                  ['IN1', 'Pi GPIO 17', 'Left motor direction A'],
-                  ['IN2', 'Pi GPIO 27', 'Left motor direction B'],
-                  ['IN3', 'Pi GPIO 22', 'Right motor direction A'],
-                  ['IN4', 'Pi GPIO 10', 'Right motor direction B'],
-                  ['ENA', 'Pi GPIO 18', 'Left motor speed (PWM)'],
-                  ['ENB', 'Pi GPIO 25', 'Right motor speed (PWM)'],
-                ].map((r, i) => (
+                  ['12V (VCC)', 'Battery pack + (6V)', 'Power motors'], ['GND', 'Battery − AND Pi GND', 'Common ground'], ['IN1', 'Pi GPIO 17', 'Left motor direction A'], ['IN2', 'Pi GPIO 27', 'Left motor direction B'], ['IN3', 'Pi GPIO 22', 'Right motor direction A'], ['IN4', 'Pi GPIO 10', 'Right motor direction B'], ['ENA', 'Pi GPIO 18', 'Left motor speed (PWM)'], ['ENB', 'Pi GPIO 25', 'Right motor speed (PWM)'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -513,7 +376,6 @@ pip install flask RPi.GPIO gpiozero`}</CodeBlock>
           </div>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚠️</span>
             <strong>Remove the jumper caps</strong> on ENA and ENB pins. This lets you control speed via PWM instead of running at full speed.
           </div>
 
@@ -531,7 +393,6 @@ pip install flask RPi.GPIO gpiozero`}</CodeBlock>
           </div>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚡</span>
             <strong>Voltage divider required!</strong> The HC-SR04 outputs 5V on ECHO but Pi GPIO is 3.3V. Use a 1kΩ + 2kΩ resistor divider to drop the signal safely.
           </div>
 
@@ -563,7 +424,7 @@ This drops 5V → ~3.3V (safe for Pi)`}</pre>
           <p>Run this <strong>before</strong> writing any bridge code to verify everything is connected correctly.</p>
 
           <CodeBlock lang="python">{`#!/usr/bin/env python3
-"""Quick hardware test — verify wiring is correct."""
+"""Quick hardware test, verify wiring is correct."""
 
 import RPi.GPIO as GPIO
 import time
@@ -619,12 +480,11 @@ try:
         GPIO.output(i1, GPIO.LOW)
         print(f"  {label} motor ✓")
 
-    print("\\n✅ ALL TESTS COMPLETE")
+    print("\\n ALL TESTS COMPLETE")
 finally:
     pwm_a.stop(); pwm_b.stop(); GPIO.cleanup()`}</CodeBlock>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Motors don't spin?</strong> Check battery, verify IN1–IN4 wiring, ensure ENA/ENB jumpers are removed.<br />
             <strong>Sensor reads -1?</strong> Check TRIG/ECHO wires and the voltage divider.<br />
             <strong>Wrong direction?</strong> Swap the two motor wires on the L298N output terminals.
@@ -639,7 +499,7 @@ finally:
 
           <CodeBlock lang="python">{`#!/usr/bin/env python3
 """
-OrcBot Hardware Bridge — REST API for safe robot control.
+OrcBot Hardware Bridge, REST API for safe robot control.
 Safety: speed clamping, obstacle checks, watchdog, e-stop.
 """
 
@@ -667,8 +527,7 @@ GPIO.setup(23, GPIO.OUT); GPIO.setup(24, GPIO.IN)
 pwm_l = GPIO.PWM(18, 1000); pwm_r = GPIO.PWM(25, 1000)
 pwm_l.start(0); pwm_r.start(0)
 
-state = {'moving': False, 'direction': 'stopped', 'speed': 0,
-         'last_cmd': time.time(), 'e_stopped': False, 'cmds': 0}
+state = {'moving': False, 'direction': 'stopped', 'speed': 0, 'last_cmd': time.time(), 'e_stopped': False, 'cmds': 0}
 lock = threading.Lock()
 
 def stop_motors():
@@ -693,7 +552,7 @@ def watchdog():
         time.sleep(1)
         with lock:
             if state['moving'] and time.time() - state['last_cmd'] > WATCHDOG_TIMEOUT:
-                log.warning("WATCHDOG — stopping"); stop_motors()
+                log.warning("WATCHDOG, stopping"); stop_motors()
 threading.Thread(target=watchdog, daemon=True).start()
 
 @app.route('/health')
@@ -703,9 +562,7 @@ def health(): return jsonify(status='ok')
 def status():
     d = measure_distance()
     with lock:
-        return jsonify(moving=state['moving'], direction=state['direction'],
-            speed=state['speed'], e_stopped=state['e_stopped'],
-            obstacle_cm=d, obstacle_warning=0 < d < OBSTACLE_MIN_CM)
+        return jsonify(moving=state['moving'], direction=state['direction'], speed=state['speed'], e_stopped=state['e_stopped'], obstacle_cm=d, obstacle_warning=0 < d < OBSTACLE_MIN_CM)
 
 @app.route('/move', methods=['POST'])
 def move():
@@ -775,7 +632,7 @@ atexit.register(cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 if __name__ == '__main__':
-    log.info(f"Bridge starting — MAX_SPEED={MAX_SPEED}, WATCHDOG={WATCHDOG_TIMEOUT}s")
+    log.info(f"Bridge starting, MAX_SPEED={MAX_SPEED}, WATCHDOG={WATCHDOG_TIMEOUT}s")
     app.run(host='0.0.0.0', port=5050, debug=False)`}</CodeBlock>
 
           <h3>Test the Bridge</h3>
@@ -804,7 +661,7 @@ curl -X POST http://localhost:5050/e-stop`}</CodeBlock>
           <p>Skills connect OrcBot to the bridge. Place this file in <code>~/.orcbot/plugins/skills/robot-control/index.js</code></p>
 
           <CodeBlock lang="javascript">{`/**
- * OrcBot Robot Control Skill — connects to the Hardware Bridge API.
+ * OrcBot Robot Control Skill, connects to the Hardware Bridge API.
  */
 const BRIDGE_URL = process.env.ROBOT_BRIDGE_URL || 'http://localhost:5050';
 
@@ -822,51 +679,23 @@ async function callBridge(path, method = 'GET', body = null) {
 
 module.exports = [
   {
-    name: 'robot_move',
-    description: 'Move the robot (forward/backward/left/right) with speed and duration.',
-    usage: 'robot_move(direction, speed?, duration?)',
-    handler: async (args) => callBridge('/move', 'POST', {
-      direction: args.direction, speed: parseInt(args.speed || '40'),
-      duration: parseFloat(args.duration || '1.0')
+    name: 'robot_move', description: 'Move the robot (forward/backward/left/right) with speed and duration.', usage: 'robot_move(direction, speed?, duration?)', handler: async (args) => callBridge('/move', 'POST', {
+      direction: args.direction, speed: parseInt(args.speed || '40'), duration: parseFloat(args.duration || '1.0')
     })
-  },
-  {
-    name: 'robot_rotate',
-    description: 'Rotate in place. Positive angle = clockwise.',
-    usage: 'robot_rotate(angle, speed?)',
-    handler: async (args) => callBridge('/rotate', 'POST', {
+  }, {
+    name: 'robot_rotate', description: 'Rotate in place. Positive angle = clockwise.', usage: 'robot_rotate(angle, speed?)', handler: async (args) => callBridge('/rotate', 'POST', {
       angle: parseInt(args.angle || '90'), speed: parseInt(args.speed || '40')
     })
-  },
-  {
-    name: 'robot_stop',
-    description: 'Stop all movement immediately.',
-    usage: 'robot_stop()',
-    handler: async () => callBridge('/stop', 'POST')
-  },
-  {
-    name: 'robot_e_stop',
-    description: 'EMERGENCY STOP — halt and block further commands.',
-    usage: 'robot_e_stop()',
-    handler: async () => callBridge('/e-stop', 'POST')
-  },
-  {
-    name: 'robot_e_stop_reset',
-    description: 'Reset emergency stop to allow commands again.',
-    usage: 'robot_e_stop_reset()',
-    handler: async () => callBridge('/e-stop/reset', 'POST')
-  },
-  {
-    name: 'robot_status',
-    description: 'Get robot status: movement, sensors, warnings.',
-    usage: 'robot_status()',
-    handler: async () => callBridge('/status')
-  },
-  {
-    name: 'robot_distance',
-    description: 'Measure distance to nearest obstacle (cm).',
-    usage: 'robot_distance()',
-    handler: async () => callBridge('/sensor/distance')
+  }, {
+    name: 'robot_stop', description: 'Stop all movement immediately.', usage: 'robot_stop()', handler: async () => callBridge('/stop', 'POST')
+  }, {
+    name: 'robot_e_stop', description: 'EMERGENCY STOP, halt and block further commands.', usage: 'robot_e_stop()', handler: async () => callBridge('/e-stop', 'POST')
+  }, {
+    name: 'robot_e_stop_reset', description: 'Reset emergency stop to allow commands again.', usage: 'robot_e_stop_reset()', handler: async () => callBridge('/e-stop/reset', 'POST')
+  }, {
+    name: 'robot_status', description: 'Get robot status: movement, sensors, warnings.', usage: 'robot_status()', handler: async () => callBridge('/status')
+  }, {
+    name: 'robot_distance', description: 'Measure distance to nearest obstacle (cm).', usage: 'robot_distance()', handler: async () => callBridge('/sensor/distance')
   }
 ];`}</CodeBlock>
         </section>
@@ -881,38 +710,17 @@ module.exports = [
             {[
               {
                 num: 'Layer 1', title: 'Hardware Bridge Safety', items: [
-                  'Speed clamping — all speeds limited to 80%',
-                  'Duration clamping — no command runs longer than 5 seconds',
-                  'Obstacle checking — forward movement blocked if obstacle < 15cm',
-                  'Watchdog timer — motors auto-stop if no command in 10 seconds',
-                  'E-stop endpoint — overrides everything',
-                ]
-              },
-              {
+                  'Speed clamping, all speeds limited to 80%', 'Duration clamping, no command runs longer than 5 seconds', 'Obstacle checking, forward movement blocked if obstacle < 15cm', 'Watchdog timer, motors auto-stop if no command in 10 seconds', 'E-stop endpoint, overrides everything', ]
+              }, {
                 num: 'Layer 2', title: 'OrcBot Guard Rails', items: [
-                  'Skill frequency limits — can\'t spam same command 15+ times',
-                  'Pattern loop detection — breaks repetitive cycles',
-                  'Step limits — actions terminate after N steps',
-                  'Termination review — second LLM pass confirms completion',
-                ]
-              },
-              {
+                  'Skill frequency limits, can\'t spam same command 15+ times', 'Pattern loop detection, breaks repetitive cycles', 'Step limits, actions terminate after N steps', 'Termination review, second LLM pass confirms completion', ]
+              }, {
                 num: 'Layer 3', title: 'Physical Safety (You Build)', items: [
-                  'Physical E-stop button — cuts battery to motors, no software involved',
-                  'Battery inline fuse (5A) — prevents fires',
-                  'Bumper switch — microswitch triggers stop on contact',
-                ]
-              },
-              {
+                  'Physical E-stop button, cuts battery to motors, no software involved', 'Battery inline fuse (5A), prevents fires', 'Bumper switch, microswitch triggers stop on contact', ]
+              }, {
                 num: 'Layer 4', title: 'Testing Discipline', items: [
-                  '✅ Test bridge API with curl (no motors connected)',
-                  '✅ Test motors with robot lifted off ground',
-                  '✅ Test OrcBot → bridge with robot in the air',
-                  '✅ Ground test in confined area (cardboard arena)',
-                  '✅ Operate normally with supervision',
-                ]
-              },
-            ].map((layer, i) => (
+                  ' Test bridge API with curl (no motors connected)', ' Test motors with robot lifted off ground', ' Test OrcBot → bridge with robot in the air', ' Ground test in confined area (cardboard arena)', ' Operate normally with supervision', ]
+              }, ].map((layer, i) => (
               <div className="safety-layer" key={i}>
                 <div className="safety-layer-num">{layer.num}</div>
                 <h4>{layer.title}</h4>
@@ -937,18 +745,17 @@ Emergency: press button  = power cut (Pi stays on USB)`}</pre>
         <section className="content-section" id="simulation">
           <div className="content-section-label">Phase 6</div>
           <h2>Test in Simulation First</h2>
-          <p>Use a mock bridge on your laptop — no Pi or motors needed — to test OrcBot's planning logic.</p>
+          <p>Use a mock bridge on your laptop, no Pi or motors needed, to test OrcBot's planning logic.</p>
 
           <CodeBlock lang="python">{`#!/usr/bin/env python3
-"""Mock bridge — simulates robot behavior without GPIO."""
+"""Mock bridge, simulates robot behavior without GPIO."""
 
 from flask import Flask, request, jsonify
 import time, random, math
 
 app = Flask(__name__)
 
-state = {'x': 0.0, 'y': 0.0, 'heading': 0.0,
-         'moving': False, 'e_stopped': False}
+state = {'x': 0.0, 'y': 0.0, 'heading': 0.0, 'moving': False, 'e_stopped': False}
 
 @app.route('/health')
 def health(): return jsonify(status='ok', mock=True)
@@ -1012,15 +819,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           <h3>First Real-World Test (Supervised)</h3>
           <div className="test-checklist">
             {[
-              'Lift robot off the ground (put on a box)',
-              'Send via Telegram: "Move forward at speed 30 for 1 second"',
-              'Verify wheels spin in the correct direction',
-              'Send: "Check the distance sensor"',
-              'Put your hand in front of sensor — verify reading changes',
-              'Send: "Emergency stop the robot"',
-              'Verify: motors stop, further commands are blocked',
-              'Send: "Reset the emergency stop"',
-            ].map((item, i) => (
+              'Lift robot off the ground (put on a box)', 'Send via Telegram: "Move forward at speed 30 for 1 second"', 'Verify wheels spin in the correct direction', 'Send: "Check the distance sensor"', 'Put your hand in front of sensor, verify reading changes', 'Send: "Emergency stop the robot"', 'Verify: motors stop, further commands are blocked', 'Send: "Reset the emergency stop"', ].map((item, i) => (
               <div className="test-check" key={i}>
                 <span className="test-check-icon">✓</span>
                 <span>{item}</span>
@@ -1031,12 +830,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           <h3>Ground Test</h3>
           <div className="test-checklist">
             {[
-              'Place robot on floor in clear area (2m × 2m minimum)',
-              'Place obstacle ~30cm ahead',
-              'Send: "Move forward at speed 30 for 3 seconds"',
-              'Robot should stop automatically when obstacle < 15cm',
-              'Send: "Check status" — observe obstacle warning',
-            ].map((item, i) => (
+              'Place robot on floor in clear area (2m × 2m minimum)', 'Place obstacle ~30cm ahead', 'Send: "Move forward at speed 30 for 3 seconds"', 'Robot should stop automatically when obstacle < 15cm', 'Send: "Check status", observe obstacle warning', ].map((item, i) => (
               <div className="test-check" key={i}>
                 <span className="test-check-icon">✓</span>
                 <span>{item}</span>
@@ -1095,7 +889,6 @@ sudo journalctl -u orcbot -f`}</CodeBlock>
 
           <h3>Scheduled Patrols</h3>
           <div className="callout callout-success">
-            <span className="callout-icon">🕐</span>
             Send via Telegram: <em>"Schedule a patrol every 30 minutes: move forward 3 seconds, rotate 90°, check distance, report status back to me"</em>
           </div>
         </section>
@@ -1113,8 +906,7 @@ sudo journalctl -u orcbot -f`}</CodeBlock>
 def camera_capture():
     path = '/tmp/robot_capture.jpg'
     try:
-        subprocess.run(['libcamera-still', '-o', path, '--width', '640',
-            '--height', '480', '-t', '1000', '--nopreview'], timeout=10)
+        subprocess.run(['libcamera-still', '-o', path, '--width', '640', '--height', '480', '-t', '1000', '--nopreview'], timeout=10)
         with open(path, 'rb') as f:
             img = base64.b64encode(f.read()).decode()
         return jsonify(status='captured', image_base64=img)
@@ -1123,10 +915,7 @@ def camera_capture():
 
           <h3>OrcBot Vision Skill</h3>
           <CodeBlock lang="javascript">{`{
-  name: 'robot_look',
-  description: 'Capture + analyze a photo from the robot camera.',
-  usage: 'robot_look(prompt?)',
-  handler: async (args, context) => {
+  name: 'robot_look', description: 'Capture + analyze a photo from the robot camera.', usage: 'robot_look(prompt?)', handler: async (args, context) => {
     const result = await callBridge('/camera/capture');
     if (!result.success) return result;
     const fs = require('fs'), path = require('path');
@@ -1191,17 +980,7 @@ sudo systemctl start mosquitto`}</CodeBlock>
               <thead><tr><th>Problem</th><th>Cause</th><th>Fix</th></tr></thead>
               <tbody>
                 {[
-                  ['Motors don\'t spin', 'No battery power', 'Check battery connections & voltage with multimeter'],
-                  ['Wrong direction', 'Wires swapped', 'Swap motor wires on L298N output terminals'],
-                  ['Only one motor', 'Bad GPIO connection', 'Re-check IN/EN pin wiring, run test script'],
-                  ['Sensor reads -1', 'Timeout / bad wiring', 'Check TRIG/ECHO pins, verify voltage divider'],
-                  ['Wildly wrong readings', 'Missing voltage divider', 'Add 1kΩ + 2kΩ resistor divider on ECHO pin'],
-                  ['Bridge won\'t start', 'GPIO permission', 'Run with sudo or add pi to gpio group'],
-                  ['Can\'t reach bridge', 'Wrong URL / firewall', 'Check ROBOT_BRIDGE_URL, verify with curl'],
-                  ['Robot oscillates', 'Commands too rapid', 'Increase duration, reduce speed'],
-                  ['OrcBot loops', 'Task too vague', 'Be specific: "move forward 2 seconds"'],
-                  ['Motors overheat', 'Speed/duration too high', 'Lower MAX_SPEED, add cooling pauses'],
-                ].map((r, i) => (
+                  ['Motors don\'t spin', 'No battery power', 'Check battery connections & voltage with multimeter'], ['Wrong direction', 'Wires swapped', 'Swap motor wires on L298N output terminals'], ['Only one motor', 'Bad GPIO connection', 'Re-check IN/EN pin wiring, run test script'], ['Sensor reads -1', 'Timeout / bad wiring', 'Check TRIG/ECHO pins, verify voltage divider'], ['Wildly wrong readings', 'Missing voltage divider', 'Add 1kΩ + 2kΩ resistor divider on ECHO pin'], ['Bridge won\'t start', 'GPIO permission', 'Run with sudo or add pi to gpio group'], ['Can\'t reach bridge', 'Wrong URL / firewall', 'Check ROBOT_BRIDGE_URL, verify with curl'], ['Robot oscillates', 'Commands too rapid', 'Increase duration, reduce speed'], ['OrcBot loops', 'Task too vague', 'Be specific: "move forward 2 seconds"'], ['Motors overheat', 'Speed/duration too high', 'Lower MAX_SPEED, add cooling pauses'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -1230,11 +1009,7 @@ sudo python3 ~/test_motors.py`}</CodeBlock>
           <h3>Beginner</h3>
           <div className="resources-grid">
             {[
-              { title: 'Raspberry Pi Docs', desc: 'Pi setup, GPIO basics', url: 'https://www.raspberrypi.com/documentation/' },
-              { title: 'GPIO Zero Docs', desc: 'Simplified Python GPIO library', url: 'https://gpiozero.readthedocs.io/' },
-              { title: 'Flask Quickstart', desc: 'Building REST APIs in Python', url: 'https://flask.palletsprojects.com/' },
-              { title: 'L298N Tutorial', desc: 'Motor driver wiring and control', url: 'https://lastminuteengineers.com/l298n-dc-motor-arduino-tutorial/' },
-            ].map((r, i) => (
+              { title: 'Raspberry Pi Docs', desc: 'Pi setup, GPIO basics', url: 'https://www.raspberrypi.com/documentation/' }, { title: 'GPIO Zero Docs', desc: 'Simplified Python GPIO library', url: 'https://gpiozero.readthedocs.io/' }, { title: 'Flask Quickstart', desc: 'Building REST APIs in Python', url: 'https://flask.palletsprojects.com/' }, { title: 'L298N Tutorial', desc: 'Motor driver wiring and control', url: 'https://lastminuteengineers.com/l298n-dc-motor-arduino-tutorial/' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -1246,10 +1021,7 @@ sudo python3 ~/test_motors.py`}</CodeBlock>
           <h3>Intermediate</h3>
           <div className="resources-grid">
             {[
-              { title: 'ROS2 Tutorials', desc: 'Robot Operating System framework', url: 'https://docs.ros.org/en/humble/Tutorials.html' },
-              { title: 'MQTT Essentials', desc: 'Publish/subscribe messaging for IoT', url: 'https://www.hivemq.com/mqtt-essentials/' },
-              { title: 'OpenCV on Pi', desc: 'Computer vision on Raspberry Pi', url: 'https://pyimagesearch.com/category/raspberry-pi/' },
-            ].map((r, i) => (
+              { title: 'ROS2 Tutorials', desc: 'Robot Operating System framework', url: 'https://docs.ros.org/en/humble/Tutorials.html' }, { title: 'MQTT Essentials', desc: 'Publish/subscribe messaging for IoT', url: 'https://www.hivemq.com/mqtt-essentials/' }, { title: 'OpenCV on Pi', desc: 'Computer vision on Raspberry Pi', url: 'https://pyimagesearch.com/category/raspberry-pi/' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -1261,10 +1033,7 @@ sudo python3 ~/test_motors.py`}</CodeBlock>
           <h3>Advanced</h3>
           <div className="resources-grid">
             {[
-              { title: 'Navigation2 (ROS2)', desc: 'Autonomous path planning', url: 'https://navigation.ros.org/' },
-              { title: 'SLAM Toolbox', desc: 'Simultaneous Localization and Mapping', url: 'https://github.com/SteveMacenski/slam_toolbox' },
-              { title: 'Spinning Up (RL)', desc: 'Reinforcement learning for robotics', url: 'https://spinningup.openai.com/' },
-            ].map((r, i) => (
+              { title: 'Navigation2 (ROS2)', desc: 'Autonomous path planning', url: 'https://navigation.ros.org/' }, { title: 'SLAM Toolbox', desc: 'Simultaneous Localization and Mapping', url: 'https://github.com/SteveMacenski/slam_toolbox' }, { title: 'Spinning Up (RL)', desc: 'Reinforcement learning for robotics', url: 'https://spinningup.openai.com/' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -1328,15 +1097,8 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
           <p>From parts on a desk to an autonomous system you command with natural language. Here's what you now have:</p>
           <div className="summary-chips">
             {[
-              { icon: '🤖', label: 'Physical Robot' },
-              { icon: '🛡️', label: 'Safety Bridge' },
-              { icon: '🧠', label: 'AI Intelligence' },
-              { icon: '💬', label: 'Telegram Control' },
-              { icon: '📷', label: 'Camera Vision' },
-              { icon: '🔄', label: 'Fleet Ready' },
-            ].map((c, i) => (
+              { label: 'Physical Robot' }, { label: 'Safety Bridge' }, { label: 'AI Intelligence' }, { label: 'Telegram Control' }, { label: 'Camera Vision' }, { label: 'Fleet Ready' }, ].map((c, i) => (
               <span className="summary-chip" key={i}>
-                <span className="chip-icon">{c.icon}</span>
                 {c.label}
               </span>
             ))}
@@ -1355,7 +1117,7 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
         <section className="content-section" id="a-overview">
           <div className="content-section-label">Concept</div>
           <h2>How Arduino + OrcBot Work Together</h2>
-          <p>Your Arduino doesn't run OrcBot — it's a <strong>hardware bridge</strong>. OrcBot runs on your laptop (or a Raspberry Pi) and sends commands over USB serial to the Arduino. The Arduino receives those commands and controls LEDs, servos, motors, and sensors.</p>
+          <p>Your Arduino doesn't run OrcBot, it's a <strong>hardware bridge</strong>. OrcBot runs on your laptop (or a Raspberry Pi) and sends commands over USB serial to the Arduino. The Arduino receives those commands and controls LEDs, servos, motors, and sensors.</p>
 
           <div className="arch-diagram">
             <pre>{`  ┌───────────────────────────────────────────────────────┐
@@ -1379,18 +1141,14 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
   │  ├── Sensor reading    (analogRead / digitalRead)     │
   │  └── Response sender   (Serial.println JSON)          │
   │                                                       │
-  │  Pins: 5V native — no voltage dividers needed!        │
+  │  Pins: 5V native, no voltage dividers needed!        │
   └───────────────────────────────────────────────────────┘`}</pre>
           </div>
 
           <h3>Why Arduino + OrcBot?</h3>
           <div className="safety-layers" style={{ marginTop: 12 }}>
             {[
-              { title: 'Cheap', desc: 'Arduino starter kits are $25–60. Most include everything you need to get started.' },
-              { title: 'Simple', desc: '5V logic — no voltage dividers. Plug sensors and actuators straight into the pins.' },
-              { title: 'Real-Time', desc: 'Arduino handles precise timing for servos and PWM. OrcBot handles the thinking.' },
-              { title: 'Portable', desc: 'OrcBot runs on any computer. Connect the Arduino via USB and you\'re ready.' },
-            ].map((item, i) => (
+              { title: 'Cheap', desc: 'Arduino starter kits are $25–60. Most include everything you need to get started.' }, { title: 'Simple', desc: '5V logic, no voltage dividers. Plug sensors and actuators straight into the pins.' }, { title: 'Real-Time', desc: 'Arduino handles precise timing for servos and PWM. OrcBot handles the thinking.' }, { title: 'Portable', desc: 'OrcBot runs on any computer. Connect the Arduino via USB and you\'re ready.' }, ].map((item, i) => (
               <div className="safety-layer" key={i}>
                 <h4 style={{ margin: 0, marginBottom: 4 }}>{item.title}</h4>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.desc}</p>
@@ -1403,28 +1161,14 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
         <section className="content-section" id="a-kit">
           <div className="content-section-label">Inventory</div>
           <h2>What's in a Typical Starter Kit</h2>
-          <p>Most Arduino starter kits (Elegoo, SunFounder, official Arduino) include these components. Check your kit's inventory — you likely have everything listed below.</p>
+          <p>Most Arduino starter kits (Elegoo, SunFounder, official Arduino) include these components. Check your kit's inventory, you likely have everything listed below.</p>
 
           <div className="bom-table-wrap">
             <table className="bom-table">
               <thead><tr><th>#</th><th>Component</th><th>Qty</th><th>We'll Use For</th></tr></thead>
               <tbody>
                 {[
-                  ['1', 'Arduino Uno R3 (or Nano)', '1', 'Main controller board'],
-                  ['2', 'USB-A to USB-B cable', '1', 'Power + serial communication'],
-                  ['3', 'Breadboard (830 tie-points)', '1', 'Prototyping circuits'],
-                  ['4', 'Jumper wires (M-M, M-F)', '~65', 'All connections'],
-                  ['5', 'LEDs (red, green, yellow, blue)', '~15', 'Status indicators, smart lighting'],
-                  ['6', 'Resistors (220Ω, 1kΩ, 10kΩ)', '~30', 'Current limiting, pull-ups'],
-                  ['7', 'Push buttons', '~5', 'Manual triggers, e-stop'],
-                  ['8', 'Servo motor (SG90)', '1–2', 'Pan/tilt, arm joints'],
-                  ['9', 'HC-SR04 Ultrasonic sensor', '1', 'Distance measurement'],
-                  ['10', 'Piezo buzzer', '1', 'Audio feedback, alerts'],
-                  ['11', 'Potentiometer (10kΩ)', '1–2', 'Analog input, tuning'],
-                  ['12', 'Photoresistor (LDR)', '1–2', 'Light sensing'],
-                  ['13', 'RGB LED', '1', 'Multi-color status'],
-                  ['14', 'LCD display (16×2, optional)', '1', 'Status display'],
-                ].map(r => (
+                  ['1', 'Arduino Uno R3 (or Nano)', '1', 'Main controller board'], ['2', 'USB-A to USB-B cable', '1', 'Power + serial communication'], ['3', 'Breadboard (830 tie-points)', '1', 'Prototyping circuits'], ['4', 'Jumper wires (M-M, M-F)', '~65', 'All connections'], ['5', 'LEDs (red, green, yellow, blue)', '~15', 'Status indicators, smart lighting'], ['6', 'Resistors (220Ω, 1kΩ, 10kΩ)', '~30', 'Current limiting, pull-ups'], ['7', 'Push buttons', '~5', 'Manual triggers, e-stop'], ['8', 'Servo motor (SG90)', '1–2', 'Pan/tilt, arm joints'], ['9', 'HC-SR04 Ultrasonic sensor', '1', 'Distance measurement'], ['10', 'Piezo buzzer', '1', 'Audio feedback, alerts'], ['11', 'Potentiometer (10kΩ)', '1–2', 'Analog input, tuning'], ['12', 'Photoresistor (LDR)', '1–2', 'Light sensing'], ['13', 'RGB LED', '1', 'Multi-color status'], ['14', 'LCD display (16×2, optional)', '1', 'Status display'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>
                 ))}
               </tbody>
@@ -1432,7 +1176,6 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
           </div>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Don't have a kit yet?</strong> The <a href="https://store.arduino.cc/products/arduino-starter-kit-multi-language" target="_blank" rel="noopener noreferrer">Official Arduino Starter Kit</a> (~$80) or the <a href="https://www.elegoo.com/products/elegoo-uno-r3-project-super-starter-kit" target="_blank" rel="noopener noreferrer">Elegoo Super Starter Kit</a> (~$35) both work great.
           </div>
         </section>
@@ -1448,11 +1191,7 @@ Physical E-Stop → cuts battery power (overrides all)`}</pre>
               <thead><tr><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['Computer (laptop/desktop)', 'Runs OrcBot + Python serial bridge', 'You have this'],
-                  ['L293D Motor Shield (optional)', 'Drive DC motors for a wheeled robot', '$8–12'],
-                  ['DC motors + wheels (optional)', 'For a mobile robot project', '$10–15'],
-                  ['9V battery + snap connector', 'Portable Arduino power', '$3–5'],
-                ].map((r, i) => (
+                  ['Computer (laptop/desktop)', 'Runs OrcBot + Python serial bridge', 'You have this'], ['L293D Motor Shield (optional)', 'Drive DC motors for a wheeled robot', '$8–12'], ['DC motors + wheels (optional)', 'For a mobile robot project', '$10–15'], ['9V battery + snap connector', 'Portable Arduino power', '$3–5'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -1524,7 +1263,6 @@ pip install flask pyserial`}</CodeBlock>
           </div>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Why JSON?</strong> It's human-readable, easy to parse on both ends, and lets us add new commands without changing the protocol.
           </div>
         </section>
@@ -1532,7 +1270,7 @@ pip install flask pyserial`}</CodeBlock>
         {/* ── A6. Arduino Sketch ────────────────────────────── */}
         <section className="content-section" id="a-sketch">
           <div className="content-section-label">Arduino Code</div>
-          <h2>Arduino Sketch — Command Receiver</h2>
+          <h2>Arduino Sketch, Command Receiver</h2>
           <p>Upload this to your Arduino. It listens for JSON commands on serial and executes them.</p>
 
           <CodeBlock lang="cpp">{`/*
@@ -1704,7 +1442,6 @@ void cmdStatus() {
 }`}</CodeBlock>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚠️</span>
             <strong>Install ArduinoJson first!</strong> In Arduino IDE: Sketch → Include Library → Manage Libraries → search "ArduinoJson" by Benoit Blanchon → Install.
           </div>
         </section>
@@ -1732,15 +1469,14 @@ import glob
 
 app = Flask(__name__)
 log = logging.getLogger('arduino-bridge')
-logging.basicConfig(level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 # ── Auto-detect Arduino port ──
 def find_arduino():
     """Try common serial port patterns."""
     patterns = [
-        '/dev/ttyACM*', '/dev/ttyUSB*',       # Linux
-        '/dev/cu.usbmodem*', '/dev/cu.usbserial*',  # macOS
+        '/dev/ttyACM*', '/dev/ttyUSB*', # Linux
+        '/dev/cu.usbmodem*', '/dev/cu.usbserial*', # macOS
     ]
     for pattern in patterns:
         ports = glob.glob(pattern)
@@ -1766,7 +1502,7 @@ if not PORT:
 
 # ── Serial connection ──
 ser = serial.Serial(PORT, BAUD, timeout=2)
-time.sleep(2)  # Arduino resets on serial connect — wait for boot
+time.sleep(2)  # Arduino resets on serial connect, wait for boot
 lock = threading.Lock()
 
 # Read the "ready" message
@@ -1803,8 +1539,7 @@ def status():
 def led():
     d = request.json or {}
     return jsonify(**send_command('led', {
-        'pin': int(d.get('pin', 13)),
-        'state': int(d.get('state', 1))
+        'pin': int(d.get('pin', 13)), 'state': int(d.get('state', 1))
     }))
 
 @app.route('/led/all', methods=['POST'])
@@ -1825,8 +1560,7 @@ def servo():
 def buzz():
     d = request.json or {}
     return jsonify(**send_command('buzz', {
-        'freq': int(d.get('freq', 1000)),
-        'duration': int(d.get('duration', 200))
+        'freq': int(d.get('freq', 1000)), 'duration': int(d.get('duration', 200))
     }))
 
 @app.route('/distance')
@@ -1838,7 +1572,7 @@ def button():
     return jsonify(**send_command('button'))
 
 if __name__ == '__main__':
-    log.info(f"Arduino Bridge on :5050 — serial port {PORT}")
+    log.info(f"Arduino Bridge on :5050, serial port {PORT}")
     app.run(host='0.0.0.0', port=5050, debug=False)`}</CodeBlock>
 
           <h3>Test the Bridge</h3>
@@ -1880,61 +1614,32 @@ async function call(path, method = 'GET', body = null) {
 
 module.exports = [
   {
-    name: 'arduino_led',
-    description: 'Turn an LED on or off. Pin 13 = onboard LED, pins 2-7 = breadboard LEDs.',
-    usage: 'arduino_led(pin, state)  — state: 1=on, 0=off',
-    handler: async (args) => call('/led', 'POST', {
-      pin: parseInt(args.pin || '13'),
+    name: 'arduino_led', description: 'Turn an LED on or off. Pin 13 = onboard LED, pins 2-7 = breadboard LEDs.', usage: 'arduino_led(pin, state), state: 1=on, 0=off', handler: async (args) => call('/led', 'POST', {
+      pin: parseInt(args.pin || '13'), state: parseInt(args.state || '1')
+    })
+  }, {
+    name: 'arduino_led_all', description: 'Turn all breadboard LEDs on or off at once.', usage: 'arduino_led_all(state), state: 1=on, 0=off', handler: async (args) => call('/led/all', 'POST', {
       state: parseInt(args.state || '1')
     })
-  },
-  {
-    name: 'arduino_led_all',
-    description: 'Turn all breadboard LEDs on or off at once.',
-    usage: 'arduino_led_all(state)  — state: 1=on, 0=off',
-    handler: async (args) => call('/led/all', 'POST', {
-      state: parseInt(args.state || '1')
-    })
-  },
-  {
-    name: 'arduino_servo',
-    description: 'Move servo to angle (0–180 degrees).',
-    usage: 'arduino_servo(angle)',
-    handler: async (args) => call('/servo', 'POST', {
+  }, {
+    name: 'arduino_servo', description: 'Move servo to angle (0–180 degrees).', usage: 'arduino_servo(angle)', handler: async (args) => call('/servo', 'POST', {
       angle: parseInt(args.angle || '90')
     })
-  },
-  {
-    name: 'arduino_buzz',
-    description: 'Play a tone on the piezo buzzer.',
-    usage: 'arduino_buzz(freq?, duration?)  — freq in Hz, duration in ms',
-    handler: async (args) => call('/buzz', 'POST', {
-      freq: parseInt(args.freq || '1000'),
-      duration: parseInt(args.duration || '200')
+  }, {
+    name: 'arduino_buzz', description: 'Play a tone on the piezo buzzer.', usage: 'arduino_buzz(freq?, duration?), freq in Hz, duration in ms', handler: async (args) => call('/buzz', 'POST', {
+      freq: parseInt(args.freq || '1000'), duration: parseInt(args.duration || '200')
     })
-  },
-  {
-    name: 'arduino_distance',
-    description: 'Measure distance using the HC-SR04 ultrasonic sensor.',
-    usage: 'arduino_distance()',
-    handler: async () => call('/distance')
-  },
-  {
-    name: 'arduino_button',
-    description: 'Check if the push button is pressed.',
-    usage: 'arduino_button()',
-    handler: async () => call('/button')
-  },
-  {
-    name: 'arduino_status',
-    description: 'Get Arduino status: uptime and free memory.',
-    usage: 'arduino_status()',
-    handler: async () => call('/status')
+  }, {
+    name: 'arduino_distance', description: 'Measure distance using the HC-SR04 ultrasonic sensor.', usage: 'arduino_distance()', handler: async () => call('/distance')
+  }, {
+    name: 'arduino_button', description: 'Check if the push button is pressed.', usage: 'arduino_button()', handler: async () => call('/button')
+  }, {
+    name: 'arduino_status', description: 'Get Arduino status: uptime and free memory.', usage: 'arduino_status()', handler: async () => call('/status')
   }
 ];`}</CodeBlock>
         </section>
 
-        {/* ── A9. Project 1 — Smart LED ────────────────────── */}
+        {/* ── A9. Project 1, Smart LED ────────────────────── */}
         <section className="content-section" id="a-led">
           <div className="content-section-label">Project 1</div>
           <h2>Smart LED Controller</h2>
@@ -1946,13 +1651,7 @@ module.exports = [
               <thead><tr><th>Component</th><th>Arduino Pin</th><th>Notes</th></tr></thead>
               <tbody>
                 {[
-                  ['LED 1 (red)', 'Pin 2 → 220Ω → LED → GND', ''],
-                  ['LED 2 (red)', 'Pin 3 → 220Ω → LED → GND', ''],
-                  ['LED 3 (yellow)', 'Pin 4 → 220Ω → LED → GND', ''],
-                  ['LED 4 (yellow)', 'Pin 5 → 220Ω → LED → GND', ''],
-                  ['LED 5 (green)', 'Pin 6 → 220Ω → LED → GND', ''],
-                  ['LED 6 (green)', 'Pin 7 → 220Ω → LED → GND', ''],
-                ].map((r, i) => (
+                  ['LED 1 (red)', 'Pin 2 → 220Ω → LED → GND', ''], ['LED 2 (red)', 'Pin 3 → 220Ω → LED → GND', ''], ['LED 3 (yellow)', 'Pin 4 → 220Ω → LED → GND', ''], ['LED 4 (yellow)', 'Pin 5 → 220Ω → LED → GND', ''], ['LED 5 (green)', 'Pin 6 → 220Ω → LED → GND', ''], ['LED 6 (green)', 'Pin 7 → 220Ω → LED → GND', ''], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -1979,7 +1678,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
 # "Create a light sequence: turn on each LED one by one, then all off"`}</CodeBlock>
         </section>
 
-        {/* ── A10. Project 2 — Ultrasonic Sentry ──────────── */}
+        {/* ── A10. Project 2, Ultrasonic Sentry ──────────── */}
         <section className="content-section" id="a-sentry">
           <div className="content-section-label">Project 2</div>
           <h2>Ultrasonic Sentry</h2>
@@ -1990,32 +1689,31 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
             <table className="wiring-table">
               <thead><tr><th>HC-SR04 Pin</th><th>Arduino Pin</th><th>Notes</th></tr></thead>
               <tbody>
-                <tr><td>VCC</td><td>5V</td><td>Arduino supplies 5V natively — no divider!</td></tr>
+                <tr><td>VCC</td><td>5V</td><td>Arduino supplies 5V natively, no divider!</td></tr>
                 <tr><td>GND</td><td>GND</td><td></td></tr>
                 <tr><td>TRIG</td><td>Pin 10</td><td></td></tr>
-                <tr><td>ECHO</td><td>Pin 11</td><td>5V safe — Arduino is 5V logic</td></tr>
+                <tr><td>ECHO</td><td>Pin 11</td><td>5V safe, Arduino is 5V logic</td></tr>
               </tbody>
             </table>
           </div>
 
           <div className="callout callout-success">
-            <span className="callout-icon">✅</span>
             <strong>No voltage divider needed!</strong> Unlike the Raspberry Pi (3.3V logic), the Arduino Uno runs at 5V. The HC-SR04's ECHO output connects directly.
           </div>
 
           <h3>Try It</h3>
           <CodeBlock lang="bash">{`# Via Telegram:
 # "Check the distance sensor"
-# "Monitor the area — alert me if anything comes within 20cm"
+# "Monitor the area, alert me if anything comes within 20cm"
 # "Sound the buzzer for 1 second"
 # "Every 5 seconds, check the distance and report back"`}</CodeBlock>
         </section>
 
-        {/* ── A11. Project 3 — Servo Arm ──────────────────── */}
+        {/* ── A11. Project 3, Servo Arm ──────────────────── */}
         <section className="content-section" id="a-servo">
           <div className="content-section-label">Project 3</div>
           <h2>Servo Arm</h2>
-          <p>Mount the SG90 servo on top of your breadboard. OrcBot can point it at different angles — great for a camera pan, a pointer, or a mini robotic arm.</p>
+          <p>Mount the SG90 servo on top of your breadboard. OrcBot can point it at different angles, great for a camera pan, a pointer, or a mini robotic arm.</p>
 
           <h3>Wiring</h3>
           <div className="wiring-table-wrap">
@@ -2030,8 +1728,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           </div>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚠️</span>
-            <strong>Power note:</strong> A single SG90 is fine on USB power. If you add more servos, use an external 5V supply — USB can't deliver enough current for multiple servos.
+            <strong>Power note:</strong> A single SG90 is fine on USB power. If you add more servos, use an external 5V supply, USB can't deliver enough current for multiple servos.
           </div>
 
           <h3>Try It</h3>
@@ -2043,8 +1740,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
 
           <h3>Combine All Three!</h3>
           <div className="callout callout-success">
-            <span className="callout-icon">🧩</span>
-            <strong>Multi-project challenge:</strong> Tell OrcBot: <em>"Set up a security system — sweep the servo, check distance at each position. If anything is closer than 25cm, sound the buzzer and flash all LEDs. Report the distance reading to me."</em>
+            <strong>Multi-project challenge:</strong> Tell OrcBot: <em>"Set up a security system, sweep the servo, check distance at each position. If anything is closer than 25cm, sound the buzzer and flash all LEDs. Report the distance reading to me."</em>
           </div>
         </section>
 
@@ -2057,34 +1753,17 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
             {[
               {
                 num: 'Rule 1', title: 'Current Limits', items: [
-                  'Always use 220Ω resistors with LEDs — direct connection burns them out',
-                  'Arduino pins output max 40mA — don\'t drive motors directly from GPIO',
-                  'Use a motor shield (L293D) or transistor for anything that draws real current',
-                ]
-              },
-              {
+                  'Always use 220Ω resistors with LEDs, direct connection burns them out', 'Arduino pins output max 40mA, don\'t drive motors directly from GPIO', 'Use a motor shield (L293D) or transistor for anything that draws real current', ]
+              }, {
                 num: 'Rule 2', title: 'Serial Safety', items: [
-                  'The Arduino sketch validates every command — unknown commands are rejected',
-                  'The Python bridge adds a thread lock — no concurrent serial writes',
-                  'Servo angles are constrained to 0–180°; buzz duration capped at 3 seconds',
-                ]
-              },
-              {
+                  'The Arduino sketch validates every command, unknown commands are rejected', 'The Python bridge adds a thread lock, no concurrent serial writes', 'Servo angles are constrained to 0–180°; buzz duration capped at 3 seconds', ]
+              }, {
                 num: 'Rule 3', title: 'Power Management', items: [
-                  'USB power is fine for LEDs + 1 servo + sensor',
-                  'For DC motors: use external power supply through a motor shield',
-                  'Never connect 9V batteries directly to Arduino inputs — only to the barrel jack',
-                ]
-              },
-              {
+                  'USB power is fine for LEDs + 1 servo + sensor', 'For DC motors: use external power supply through a motor shield', 'Never connect 9V batteries directly to Arduino inputs, only to the barrel jack', ]
+              }, {
                 num: 'Rule 4', title: 'Testing Order', items: [
-                  '✅ Upload sketch, test via Serial Monitor in Arduino IDE first',
-                  '✅ Start Python bridge, test with curl',
-                  '✅ Then connect OrcBot and test via Telegram',
-                  '✅ Add complexity one component at a time',
-                ]
-              },
-            ].map((layer, i) => (
+                  ' Upload sketch, test via Serial Monitor in Arduino IDE first', ' Start Python bridge, test with curl', ' Then connect OrcBot and test via Telegram', ' Add complexity one component at a time', ]
+              }, ].map((layer, i) => (
               <div className="safety-layer" key={i}>
                 <div className="safety-layer-num">{layer.num}</div>
                 <h4>{layer.title}</h4>
@@ -2104,15 +1783,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
               <thead><tr><th>Problem</th><th>Cause</th><th>Fix</th></tr></thead>
               <tbody>
                 {[
-                  ['Port not found', 'Arduino not plugged in / drivers', 'Check USB cable, install CH340 drivers (clone boards)'],
-                  ['"No response" from bridge', 'Arduino reset on serial connect', 'Bridge waits 2s on startup — if still failing, increase delay'],
-                  ['JSON parse error on Arduino', 'Message too long / corrupted', 'Keep command JSON under 200 chars; check baud rate is 9600'],
-                  ['LED doesn\'t light', 'Wrong polarity / missing resistor', 'Long leg = +. Check 220Ω resistor is in series.'],
-                  ['Servo jitters', 'Insufficient power / noise', 'Add 100µF capacitor across servo VCC/GND; use external 5V'],
-                  ['Sensor reads 0', 'Wires swapped / too close', 'Swap TRIG/ECHO; min range is ~2cm'],
-                  ['OrcBot can\'t reach bridge', 'Bridge not running / wrong URL', 'Verify with curl http://localhost:5050/health'],
-                  ['Multiple Arduinos', 'Wrong COM port', 'Specify port: python arduino_bridge.py COM5'],
-                ].map((r, i) => (
+                  ['Port not found', 'Arduino not plugged in / drivers', 'Check USB cable, install CH340 drivers (clone boards)'], ['"No response" from bridge', 'Arduino reset on serial connect', 'Bridge waits 2s on startup, if still failing, increase delay'], ['JSON parse error on Arduino', 'Message too long / corrupted', 'Keep command JSON under 200 chars; check baud rate is 9600'], ['LED doesn\'t light', 'Wrong polarity / missing resistor', 'Long leg = +. Check 220Ω resistor is in series.'], ['Servo jitters', 'Insufficient power / noise', 'Add 100µF capacitor across servo VCC/GND; use external 5V'], ['Sensor reads 0', 'Wires swapped / too close', 'Swap TRIG/ECHO; min range is ~2cm'], ['OrcBot can\'t reach bridge', 'Bridge not running / wrong URL', 'Verify with curl http://localhost:5050/health'], ['Multiple Arduinos', 'Wrong COM port', 'Specify port: python arduino_bridge.py COM5'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -2128,11 +1799,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
 
           <div className="resources-grid">
             {[
-              { title: 'Add a Motor Shield', desc: 'Get an L293D shield and build a wheeled robot that OrcBot can drive around.' },
-              { title: 'LCD Status Display', desc: 'Show the current OrcBot command and sensor readings on a 16×2 LCD.' },
-              { title: 'Wireless with ESP32', desc: 'Replace USB serial with WiFi — run the bridge over the network using an ESP32.' },
-              { title: 'Full Pi Robot Build', desc: 'Ready for the next level? Switch to the Raspberry Pi Robot guide for GPIO, camera vision, and ROS2.' },
-            ].map((r, i) => (
+              { title: 'Add a Motor Shield', desc: 'Get an L293D shield and build a wheeled robot that OrcBot can drive around.' }, { title: 'LCD Status Display', desc: 'Show the current OrcBot command and sensor readings on a 16×2 LCD.' }, { title: 'Wireless with ESP32', desc: 'Replace USB serial with WiFi, run the bridge over the network using an ESP32.' }, { title: 'Full Pi Robot Build', desc: 'Ready for the next level? Switch to the Raspberry Pi Robot guide for GPIO, camera vision, and ROS2.' }, ].map((r, i) => (
               <div className="resource-card" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -2147,15 +1814,8 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           <p>With an Arduino starter kit and a few lines of code, you've built AI-controlled physical devices. Here's what you now have:</p>
           <div className="summary-chips">
             {[
-              { icon: '⚡', label: 'Arduino Bridge' },
-              { icon: '💡', label: 'Smart LEDs' },
-              { icon: '📡', label: 'Distance Sensor' },
-              { icon: '🔧', label: 'Servo Control' },
-              { icon: '🔊', label: 'Audio Feedback' },
-              { icon: '💬', label: 'Telegram Control' },
-            ].map((c, i) => (
+              { label: 'Arduino Bridge' }, { label: 'Smart LEDs' }, { label: 'Distance Sensor' }, { label: 'Servo Control' }, { label: 'Audio Feedback' }, { label: 'Telegram Control' }, ].map((c, i) => (
               <span className="summary-chip" key={i}>
-                <span className="chip-icon">{c.icon}</span>
                 {c.label}
               </span>
             ))}
@@ -2174,7 +1834,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
         <section className="content-section" id="h-overview">
           <div className="content-section-label">Concept</div>
           <h2>Vision &amp; Architecture</h2>
-          <p>This project builds a <strong>full-body humanoid robot</strong> — a bipedal companion with articulated arms, hands, a head with vision and hearing, and a voice. OrcBot serves as the cognitive brain: it perceives, reasons, plans, and acts through the robot's body.</p>
+          <p>This project builds a <strong>full-body humanoid robot</strong>, a bipedal companion with articulated arms, hands, a head with vision and hearing, and a voice. OrcBot serves as the cognitive brain: it perceives, reasons, plans, and acts through the robot's body.</p>
 
           <div className="arch-diagram">
             <pre>{`  ┌───────────────────────────────────────────────────────────┐
@@ -2220,11 +1880,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           <h3>How It All Connects</h3>
           <div className="safety-layers" style={{ marginTop: 12 }}>
             {[
-              { title: 'Cognition', desc: 'OrcBot receives goals (voice, text, vision), plans multi-step actions, and sends commands to the motion controller. It remembers what it sees and what it\'s done.' },
-              { title: 'Perception', desc: 'Camera for object/face recognition, microphone for speech understanding, touch/force sensors for grip feedback. All feed back into OrcBot\'s decision loop.' },
-              { title: 'Expression', desc: 'Text-to-speech for spoken responses, servo-driven hands for sign language, OLED or LED face for emotion display. The robot communicates naturally.' },
-              { title: 'Movement', desc: 'Servo bus controls 22+ degrees of freedom. An IMU provides balance feedback. Inverse kinematics translates "reach for the cup" into joint angles.' },
-            ].map((item, i) => (
+              { title: 'Cognition', desc: 'OrcBot receives goals (voice, text, vision), plans multi-step actions, and sends commands to the motion controller. It remembers what it sees and what it\'s done.' }, { title: 'Perception', desc: 'Camera for object/face recognition, microphone for speech understanding, touch/force sensors for grip feedback. All feed back into OrcBot\'s decision loop.' }, { title: 'Expression', desc: 'Text-to-speech for spoken responses, servo-driven hands for sign language, OLED or LED face for emotion display. The robot communicates naturally.' }, { title: 'Movement', desc: 'Servo bus controls 22+ degrees of freedom. An IMU provides balance feedback. Inverse kinematics translates "reach for the cup" into joint angles.' }, ].map((item, i) => (
               <div className="safety-layer" key={i}>
                 <h4 style={{ margin: 0, marginBottom: 4 }}>{item.title}</h4>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.desc}</p>
@@ -2244,12 +1900,7 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
               <thead><tr><th>Platform</th><th>DOF</th><th>Cost</th><th>Difficulty</th><th>Best For</th></tr></thead>
               <tbody>
                 {[
-                  ['3D-Printed (InMoov)', '22–30+', '$500–1,200', '★★★★★', 'Full customization, large scale (~1m tall)'],
-                  ['Robotis OP3 / Mini', '20', '$1,500–12,000', '★★★', 'Research-grade, ROS2-native, walk-ready'],
-                  ['LewanSoul / Hiwonder', '17–19', '$200–600', '★★', 'Pre-built frame, TTL servos, fast start'],
-                  ['SG90 Servo DIY Frame', '12–18', '$80–250', '★★★★', 'Cheapest, educational, no walking'],
-                  ['Unitree H1 / G1', '23–43', '$16,000+', '★★', 'Production-grade, advanced locomotion'],
-                ].map((r, i) => (
+                  ['3D-Printed (InMoov)', '22–30+', '$500–1,200', '★★★★★', 'Full customization, large scale (~1m tall)'], ['Robotis OP3 / Mini', '20', '$1,500–12,000', '★★★', 'Research-grade, ROS2-native, walk-ready'], ['LewanSoul / Hiwonder', '17–19', '$200–600', '★★', 'Pre-built frame, TTL servos, fast start'], ['SG90 Servo DIY Frame', '12–18', '$80–250', '★★★★', 'Cheapest, educational, no walking'], ['Unitree H1 / G1', '23–43', '$16,000+', '★★', 'Production-grade, advanced locomotion'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>
                 ))}
               </tbody>
@@ -2257,7 +1908,6 @@ ROBOT_BRIDGE_URL=http://localhost:5050 npm run dev
           </div>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Recommended starting point:</strong> The <a href="https://inmoov.fr/" target="_blank" rel="noopener noreferrer">InMoov project</a> (3D-printed, open-source) or a <strong>Hiwonder humanoid kit</strong> with serial bus servos. This guide uses a generic 17–22 DOF humanoid as the reference design. All code works with any servo-based platform.
           </div>
 
@@ -2296,13 +1946,7 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
               <thead><tr><th>#</th><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['1', 'Raspberry Pi 5 (8 GB) or Jetson Nano', 'Main brain — runs OrcBot + vision', '$80–150'],
-                  ['2', 'PCA9685 Servo Driver (×2) or Serial Bus Board', 'Controls 16+ servos per board', '$10–30'],
-                  ['3', 'MPU6050 / BNO055 IMU', 'Balance and orientation sensing', '$5–30'],
-                  ['4', 'Arduino Mega (optional)', 'Real-time servo coordination sub-controller', '$15–25'],
-                  ['5', 'MicroSD Card (64 GB+, A2)', 'OS + OrcBot + models', '$12–18'],
-                  ['6', 'USB-C Power Supply (5V 5A)', 'Desk power for brain', '$15'],
-                ].map(r => (
+                  ['1', 'Raspberry Pi 5 (8 GB) or Jetson Nano', 'Main brain, runs OrcBot + vision', '$80–150'], ['2', 'PCA9685 Servo Driver (×2) or Serial Bus Board', 'Controls 16+ servos per board', '$10–30'], ['3', 'MPU6050 / BNO055 IMU', 'Balance and orientation sensing', '$5–30'], ['4', 'Arduino Mega (optional)', 'Real-time servo coordination sub-controller', '$15–25'], ['5', 'MicroSD Card (64 GB+, A2)', 'OS + OrcBot + models', '$12–18'], ['6', 'USB-C Power Supply (5V 5A)', 'Desk power for brain', '$15'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>
                 ))}
               </tbody>
@@ -2315,10 +1959,7 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
               <thead><tr><th>#</th><th>Component</th><th>Qty</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['7', 'High-torque servos (MG996R / DS3218)', '12–16', 'Legs, shoulders, hips (20kg·cm+)', '$60–160'],
-                  ['8', 'Micro servos (SG90 / MG90S)', '6–10', 'Head, wrists, fingers', '$12–30'],
-                  ['9', 'Serial bus servos (LX-16A / STS3215)', '17–22', 'Alternative: daisy-chain, feedback', '$150–400'],
-                ].map(r => (
+                  ['7', 'High-torque servos (MG996R / DS3218)', '12–16', 'Legs, shoulders, hips (20kg·cm+)', '$60–160'], ['8', 'Micro servos (SG90 / MG90S)', '6–10', 'Head, wrists, fingers', '$12–30'], ['9', 'Serial bus servos (LX-16A / STS3215)', '17–22', 'Alternative: daisy-chain, feedback', '$150–400'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>
                 ))}
               </tbody>
@@ -2331,12 +1972,7 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
               <thead><tr><th>#</th><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['10', 'USB Camera (wide-angle) or Pi Camera', 'Object/face/gesture recognition', '$15–40'],
-                  ['11', 'USB Microphone (ReSpeaker or similar)', 'Speech recognition, voice commands', '$10–30'],
-                  ['12', 'Speaker (3W, amplified)', 'Text-to-speech voice output', '$5–15'],
-                  ['13', 'OLED Display 1.3" (SH1106) for face', 'Emotion display (eyes, expressions)', '$8–12'],
-                  ['14', 'LED Ring (NeoPixel, optional)', 'Status indicators, mood lighting', '$5–10'],
-                ].map(r => (
+                  ['10', 'USB Camera (wide-angle) or Pi Camera', 'Object/face/gesture recognition', '$15–40'], ['11', 'USB Microphone (ReSpeaker or similar)', 'Speech recognition, voice commands', '$10–30'], ['12', 'Speaker (3W, amplified)', 'Text-to-speech voice output', '$5–15'], ['13', 'OLED Display 1.3" (SH1106) for face', 'Emotion display (eyes, expressions)', '$8–12'], ['14', 'LED Ring (NeoPixel, optional)', 'Status indicators, mood lighting', '$5–10'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>
                 ))}
               </tbody>
@@ -2349,20 +1985,14 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
               <thead><tr><th>#</th><th>Component</th><th>Purpose</th><th>Est. Cost</th></tr></thead>
               <tbody>
                 {[
-                  ['15', '3D-printed frame or aluminum bracket kit', 'Skeleton / structure', '$50–300'],
-                  ['16', 'LiPo Battery (11.1V 2200mAh) + BMS', 'Portable power for servos', '$25–50'],
-                  ['17', 'Buck converter (5V 5A) for SBC', 'Regulated power from LiPo', '$5–10'],
-                  ['18', 'Power distribution board', 'Clean power to all subsystems', '$5–15'],
-                  ['19', 'Force-sensitive resistors (×2, feet)', 'Ground contact / balance feedback', '$5–10'],
-                  ['20', 'Wiring, connectors, standoffs, screws', 'Assembly hardware', '$15–25'],
-                ].map(r => (
+                  ['15', '3D-printed frame or aluminum bracket kit', 'Skeleton / structure', '$50–300'], ['16', 'LiPo Battery (11.1V 2200mAh) + BMS', 'Portable power for servos', '$25–50'], ['17', 'Buck converter (5V 5A) for SBC', 'Regulated power from LiPo', '$5–10'], ['18', 'Power distribution board', 'Clean power to all subsystems', '$5–15'], ['19', 'Force-sensitive resistors (×2, feet)', 'Ground contact / balance feedback', '$5–10'], ['20', 'Wiring, connectors, standoffs, screws', 'Assembly hardware', '$15–25'], ].map(r => (
                   <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          <div className="bom-total">💰 Estimated total range: $800–2,500 (varies by platform and servo choice)</div>
+          <div className="bom-total"> Estimated total range: $800–2,500 (varies by platform and servo choice)</div>
         </section>
 
         {/* ── H4. Assembly ─────────────────────────────────── */}
@@ -2374,14 +2004,7 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
           <h3>Assembly Order</h3>
           <div className="phase-steps">
             {[
-              { title: '1. Build the feet & ankles', desc: 'Each foot has 2 DOF (pitch + roll). Mount force-sensitive resistors under each sole. Use the largest servo brackets at the bottom for stability.' },
-              { title: '2. Build the legs', desc: 'Each leg: hip (3 DOF — pitch, roll, yaw) + knee (1 DOF pitch). Connect with aluminum U-brackets or 3D-printed links. Test balance at each joint.' },
-              { title: '3. Build the torso frame', desc: 'Mount the SBC (Pi/Jetson), IMU, battery, and power distribution here. This is the center of mass — keep it low and centered.' },
-              { title: '4. Build the arms', desc: 'Each arm: shoulder (2 DOF — pitch, roll) + elbow (1 DOF). Mount high-torque servos at shoulders. Wrist rotation is optional but adds expressiveness.' },
-              { title: '5. Build the hands', desc: 'Start simple: 2-finger gripper per hand (1 servo each). Upgrade to 5-finger later with tendon-driven design or micro servos.' },
-              { title: '6. Build the head', desc: 'Pan + tilt neck (2 servos). Mount camera, microphone, speaker, and OLED face display. Route all cables through the neck channel.' },
-              { title: '7. Final integration', desc: 'Connect all limbs to torso. Route servo cables. Mount battery with velcro for easy swap. Do a power-on test of every joint individually.' },
-            ].map((s, i) => (
+              { title: '1. Build the feet & ankles', desc: 'Each foot has 2 DOF (pitch + roll). Mount force-sensitive resistors under each sole. Use the largest servo brackets at the bottom for stability.' }, { title: '2. Build the legs', desc: 'Each leg: hip (3 DOF, pitch, roll, yaw) + knee (1 DOF pitch). Connect with aluminum U-brackets or 3D-printed links. Test balance at each joint.' }, { title: '3. Build the torso frame', desc: 'Mount the SBC (Pi/Jetson), IMU, battery, and power distribution here. This is the center of mass, keep it low and centered.' }, { title: '4. Build the arms', desc: 'Each arm: shoulder (2 DOF, pitch, roll) + elbow (1 DOF). Mount high-torque servos at shoulders. Wrist rotation is optional but adds expressiveness.' }, { title: '5. Build the hands', desc: 'Start simple: 2-finger gripper per hand (1 servo each). Upgrade to 5-finger later with tendon-driven design or micro servos.' }, { title: '6. Build the head', desc: 'Pan + tilt neck (2 servos). Mount camera, microphone, speaker, and OLED face display. Route all cables through the neck channel.' }, { title: '7. Final integration', desc: 'Connect all limbs to torso. Route servo cables. Mount battery with velcro for easy swap. Do a power-on test of every joint individually.' }, ].map((s, i) => (
               <div className="phase-step" key={i}>
                 <div className="phase-step-num">{i + 1}</div>
                 <div className="phase-step-content"><h5>{s.title}</h5><p>{s.desc}</p></div>
@@ -2390,7 +2013,6 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
           </div>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚠️</span>
             <strong>Test each joint before full assembly!</strong> It's much harder to debug a wiring issue once the frame is fully built. Connect each servo to the PCA9685, sweep it through its range, and mark the center position.
           </div>
         </section>
@@ -2425,21 +2047,14 @@ Total: 2 (head) + 6 (arms) + 12 (legs) = 20 DOF minimum
               <thead><tr><th>Channel</th><th>Servo</th><th>Location</th></tr></thead>
               <tbody>
                 {[
-                  ['Board 1, Ch 0–1', 'Head pan / tilt', 'Neck'],
-                  ['Board 1, Ch 2–4', 'Left shoulder pitch, roll + elbow', 'Left arm'],
-                  ['Board 1, Ch 5–7', 'Right shoulder pitch, roll + elbow', 'Right arm'],
-                  ['Board 1, Ch 8–9', 'Left hand + right hand grippers', 'Hands'],
-                  ['Board 1, Ch 10–15', 'Left leg (hip×3, knee, ankle×2)', 'Left leg'],
-                  ['Board 2, Ch 0–5', 'Right leg (hip×3, knee, ankle×2)', 'Right leg'],
-                  ['Board 2, Ch 6–7', 'Wrist rotation (optional)', 'Wrists'],
-                ].map((r, i) => (
+                  ['Board 1, Ch 0–1', 'Head pan / tilt', 'Neck'], ['Board 1, Ch 2–4', 'Left shoulder pitch, roll + elbow', 'Left arm'], ['Board 1, Ch 5–7', 'Right shoulder pitch, roll + elbow', 'Right arm'], ['Board 1, Ch 8–9', 'Left hand + right hand grippers', 'Hands'], ['Board 1, Ch 10–15', 'Left leg (hip×3, knee, ankle×2)', 'Left leg'], ['Board 2, Ch 0–5', 'Right leg (hip×3, knee, ankle×2)', 'Right leg'], ['Board 2, Ch 6–7', 'Wrist rotation (optional)', 'Wrists'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          <CodeBlock lang="python">{`# Test all servos — sweep each joint through its range
+          <CodeBlock lang="python">{`# Test all servos, sweep each joint through its range
 # Run this BEFORE mounting servos to verify channels
 
 import time
@@ -2491,8 +2106,7 @@ from dataclasses import dataclass, field
 
 app = Flask(__name__)
 log = logging.getLogger('humanoid')
-logging.basicConfig(level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 # ── Joint Configuration ──
 @dataclass
@@ -2508,32 +2122,11 @@ class Joint:
 
 JOINTS = {
     # Head
-    'head_pan':          Joint('head_pan',     0, 0, 30, 150, 90),
-    'head_tilt':         Joint('head_tilt',    1, 0, 60, 120, 90),
-    # Left arm
-    'l_shoulder_pitch':  Joint('l_shoulder_pitch', 2, 0, 0, 180, 90),
-    'l_shoulder_roll':   Joint('l_shoulder_roll',  3, 0, 30, 150, 90),
-    'l_elbow':           Joint('l_elbow',          4, 0, 30, 150, 90),
-    'l_hand':            Joint('l_hand',           8, 0, 30, 150, 90),
-    # Right arm
-    'r_shoulder_pitch':  Joint('r_shoulder_pitch', 5, 0, 0, 180, 90),
-    'r_shoulder_roll':   Joint('r_shoulder_roll',  6, 0, 30, 150, 90),
-    'r_elbow':           Joint('r_elbow',          7, 0, 30, 150, 90),
-    'r_hand':            Joint('r_hand',           9, 0, 30, 150, 90),
-    # Left leg
-    'l_hip_yaw':         Joint('l_hip_yaw',   10, 0, 60, 120, 90),
-    'l_hip_roll':        Joint('l_hip_roll',   11, 0, 60, 120, 90),
-    'l_hip_pitch':       Joint('l_hip_pitch',  12, 0, 30, 150, 90),
-    'l_knee':            Joint('l_knee',       13, 0, 30, 150, 90),
-    'l_ankle_pitch':     Joint('l_ankle_pitch',14, 0, 60, 120, 90),
-    'l_ankle_roll':      Joint('l_ankle_roll', 15, 0, 70, 110, 90),
-    # Right leg
-    'r_hip_yaw':         Joint('r_hip_yaw',    0, 1, 60, 120, 90),
-    'r_hip_roll':        Joint('r_hip_roll',    1, 1, 60, 120, 90),
-    'r_hip_pitch':       Joint('r_hip_pitch',   2, 1, 30, 150, 90),
-    'r_knee':            Joint('r_knee',        3, 1, 30, 150, 90),
-    'r_ankle_pitch':     Joint('r_ankle_pitch', 4, 1, 60, 120, 90),
-    'r_ankle_roll':      Joint('r_ankle_roll',  5, 1, 70, 110, 90),
+    'head_pan':          Joint('head_pan', 0, 0, 30, 150, 90), 'head_tilt':         Joint('head_tilt', 1, 0, 60, 120, 90), # Left arm
+    'l_shoulder_pitch':  Joint('l_shoulder_pitch', 2, 0, 0, 180, 90), 'l_shoulder_roll':   Joint('l_shoulder_roll', 3, 0, 30, 150, 90), 'l_elbow':           Joint('l_elbow', 4, 0, 30, 150, 90), 'l_hand':            Joint('l_hand', 8, 0, 30, 150, 90), # Right arm
+    'r_shoulder_pitch':  Joint('r_shoulder_pitch', 5, 0, 0, 180, 90), 'r_shoulder_roll':   Joint('r_shoulder_roll', 6, 0, 30, 150, 90), 'r_elbow':           Joint('r_elbow', 7, 0, 30, 150, 90), 'r_hand':            Joint('r_hand', 9, 0, 30, 150, 90), # Left leg
+    'l_hip_yaw':         Joint('l_hip_yaw', 10, 0, 60, 120, 90), 'l_hip_roll':        Joint('l_hip_roll', 11, 0, 60, 120, 90), 'l_hip_pitch':       Joint('l_hip_pitch', 12, 0, 30, 150, 90), 'l_knee':            Joint('l_knee', 13, 0, 30, 150, 90), 'l_ankle_pitch':     Joint('l_ankle_pitch',14, 0, 60, 120, 90), 'l_ankle_roll':      Joint('l_ankle_roll', 15, 0, 70, 110, 90), # Right leg
+    'r_hip_yaw':         Joint('r_hip_yaw', 0, 1, 60, 120, 90), 'r_hip_roll':        Joint('r_hip_roll', 1, 1, 60, 120, 90), 'r_hip_pitch':       Joint('r_hip_pitch', 2, 1, 30, 150, 90), 'r_knee':            Joint('r_knee', 3, 1, 30, 150, 90), 'r_ankle_pitch':     Joint('r_ankle_pitch', 4, 1, 60, 120, 90), 'r_ankle_roll':      Joint('r_ankle_roll', 5, 1, 70, 110, 90),
 }
 
 state = {'e_stopped': False, 'pose': 'stand', 'moving': False}
@@ -2571,25 +2164,11 @@ def move_joints(targets: dict, duration: float = 1.0, steps: int = 20):
 
 # ── Preset Poses ──
 POSES = {
-    'stand': {j: JOINTS[j].center for j in JOINTS},
-    'sit': {
-        **{j: JOINTS[j].center for j in JOINTS},
-        'l_hip_pitch': 45, 'r_hip_pitch': 45,
-        'l_knee': 90, 'r_knee': 90,
-    },
-    'wave': {
-        'r_shoulder_pitch': 150, 'r_shoulder_roll': 60,
-        'r_elbow': 45, 'r_hand': 150,
-    },
-    'arms_up': {
-        'l_shoulder_pitch': 170, 'r_shoulder_pitch': 170,
-        'l_elbow': 170, 'r_elbow': 170,
-    },
-    'bow': {
-        **{j: JOINTS[j].center for j in JOINTS},
-        'l_hip_pitch': 60, 'r_hip_pitch': 60,
-        'head_tilt': 70,
-    },
+    'stand': {j: JOINTS[j].center for j in JOINTS}, 'sit': {
+        **{j: JOINTS[j].center for j in JOINTS}, 'l_hip_pitch': 45, 'r_hip_pitch': 45, 'l_knee': 90, 'r_knee': 90, }, 'wave': {
+        'r_shoulder_pitch': 150, 'r_shoulder_roll': 60, 'r_elbow': 45, 'r_hand': 150, }, 'arms_up': {
+        'l_shoulder_pitch': 170, 'r_shoulder_pitch': 170, 'l_elbow': 170, 'r_elbow': 170, }, 'bow': {
+        **{j: JOINTS[j].center for j in JOINTS}, 'l_hip_pitch': 60, 'r_hip_pitch': 60, 'head_tilt': 70, },
 }
 
 # ── Endpoints ──
@@ -2640,37 +2219,15 @@ def joints():
 
 @app.route('/gesture', methods=['POST'])
 def gesture():
-    """Execute a gesture — a sequence of poses with timing."""
+    """Execute a gesture, a sequence of poses with timing."""
     d = request.json or {}
     name = d.get('name', 'wave')
     gestures = {
         'wave': [
-            ({'r_shoulder_pitch': 150, 'r_elbow': 45}, 0.5),
-            ({'r_hand': 150}, 0.3),
-            ({'r_hand': 30}, 0.3),
-            ({'r_hand': 150}, 0.3),
-            ({'r_hand': 30}, 0.3),
-            ({'r_shoulder_pitch': 90, 'r_elbow': 90, 'r_hand': 90}, 0.5),
-        ],
-        'nod': [
-            ({'head_tilt': 70}, 0.3),
-            ({'head_tilt': 110}, 0.3),
-            ({'head_tilt': 70}, 0.3),
-            ({'head_tilt': 90}, 0.3),
-        ],
-        'shake_head': [
-            ({'head_pan': 60}, 0.3),
-            ({'head_pan': 120}, 0.3),
-            ({'head_pan': 60}, 0.3),
-            ({'head_pan': 90}, 0.3),
-        ],
-        'shrug': [
-            ({'l_shoulder_pitch': 120, 'r_shoulder_pitch': 120,
-              'l_shoulder_roll': 60, 'r_shoulder_roll': 120}, 0.5),
-            ({j: JOINTS[j].center for j in ['l_shoulder_pitch', 'r_shoulder_pitch',
-              'l_shoulder_roll', 'r_shoulder_roll']}, 0.5),
-        ],
-    }
+            ({'r_shoulder_pitch': 150, 'r_elbow': 45}, 0.5), ({'r_hand': 150}, 0.3), ({'r_hand': 30}, 0.3), ({'r_hand': 150}, 0.3), ({'r_hand': 30}, 0.3), ({'r_shoulder_pitch': 90, 'r_elbow': 90, 'r_hand': 90}, 0.5), ], 'nod': [
+            ({'head_tilt': 70}, 0.3), ({'head_tilt': 110}, 0.3), ({'head_tilt': 70}, 0.3), ({'head_tilt': 90}, 0.3), ], 'shake_head': [
+            ({'head_pan': 60}, 0.3), ({'head_pan': 120}, 0.3), ({'head_pan': 60}, 0.3), ({'head_pan': 90}, 0.3), ], 'shrug': [
+            ({'l_shoulder_pitch': 120, 'r_shoulder_pitch': 120, 'l_shoulder_roll': 60, 'r_shoulder_roll': 120}, 0.5), ({j: JOINTS[j].center for j in ['l_shoulder_pitch', 'r_shoulder_pitch', 'l_shoulder_roll', 'r_shoulder_roll']}, 0.5), ], }
     if name not in gestures:
         return jsonify(error=f'Unknown gesture', available=list(gestures.keys())), 400
     for targets, dur in gestures[name]:
@@ -2691,7 +2248,7 @@ def e_stop_reset():
     return jsonify(status='reset')
 
 if __name__ == '__main__':
-    log.info(f"Humanoid Motion Controller — {len(JOINTS)} joints")
+    log.info(f"Humanoid Motion Controller, {len(JOINTS)} joints")
     app.run(host='0.0.0.0', port=5050, debug=False)`}</CodeBlock>
         </section>
 
@@ -2704,13 +2261,7 @@ if __name__ == '__main__':
           <h3>Walking Progression</h3>
           <div className="phase-steps">
             {[
-              { title: 'Static stand', desc: 'All joints at center, verify the robot balances without tipping. Adjust center-of-mass by repositioning the battery.' },
-              { title: 'Weight shift', desc: 'Shift weight to one foot by moving hip roll. The IMU provides feedback — stop when tilt exceeds ±5°.' },
-              { title: 'Single-leg lift', desc: 'While balanced on one foot, lift the other by bending knee and hip. Hold for 2 seconds.' },
-              { title: 'Step in place', desc: 'Alternate lifting left and right foot. This is the "march in place" gait — no forward movement yet.' },
-              { title: 'Forward step', desc: 'During leg lift, swing the hip forward (pitch). Plant foot, shift weight, repeat. This is a static walking gait.' },
-              { title: 'Dynamic gait (advanced)', desc: 'Use ZMP (Zero Moment Point) or preview control to generate smooth walking. This typically requires ROS2 + a walk engine like ROBOTIS framework.' },
-            ].map((s, i) => (
+              { title: 'Static stand', desc: 'All joints at center, verify the robot balances without tipping. Adjust center-of-mass by repositioning the battery.' }, { title: 'Weight shift', desc: 'Shift weight to one foot by moving hip roll. The IMU provides feedback, stop when tilt exceeds ±5°.' }, { title: 'Single-leg lift', desc: 'While balanced on one foot, lift the other by bending knee and hip. Hold for 2 seconds.' }, { title: 'Step in place', desc: 'Alternate lifting left and right foot. This is the "march in place" gait, no forward movement yet.' }, { title: 'Forward step', desc: 'During leg lift, swing the hip forward (pitch). Plant foot, shift weight, repeat. This is a static walking gait.' }, { title: 'Dynamic gait (advanced)', desc: 'Use ZMP (Zero Moment Point) or preview control to generate smooth walking. This typically requires ROS2 + a walk engine like ROBOTIS framework.' }, ].map((s, i) => (
               <div className="phase-step" key={i}>
                 <div className="phase-step-num">{i + 1}</div>
                 <div className="phase-step-content"><h5>{s.title}</h5><p>{s.desc}</p></div>
@@ -2718,22 +2269,16 @@ if __name__ == '__main__':
             ))}
           </div>
 
-          <CodeBlock lang="python">{`# Add to motion controller — basic static walk gait
+          <CodeBlock lang="python">{`# Add to motion controller, basic static walk gait
 # This is a simplified 4-phase walk cycle
 
 WALK_CYCLE = [
     # Phase 1: Shift weight to right foot
-    {'l_hip_roll': 80, 'r_hip_roll': 80, 'l_ankle_roll': 80, 'r_ankle_roll': 80},
-    # Phase 2: Lift left leg, swing forward
-    {'l_hip_pitch': 70, 'l_knee': 60, 'l_ankle_pitch': 70},
-    # Phase 3: Plant left foot, shift weight left
-    {'l_hip_pitch': 90, 'l_knee': 90, 'l_ankle_pitch': 90,
-     'l_hip_roll': 100, 'r_hip_roll': 100, 'l_ankle_roll': 100, 'r_ankle_roll': 100},
-    # Phase 4: Lift right leg, swing forward
-    {'r_hip_pitch': 70, 'r_knee': 60, 'r_ankle_pitch': 70},
-    # Phase 5: Plant right foot, return to center
-    {'r_hip_pitch': 90, 'r_knee': 90, 'r_ankle_pitch': 90,
-     'l_hip_roll': 90, 'r_hip_roll': 90, 'l_ankle_roll': 90, 'r_ankle_roll': 90},
+    {'l_hip_roll': 80, 'r_hip_roll': 80, 'l_ankle_roll': 80, 'r_ankle_roll': 80}, # Phase 2: Lift left leg, swing forward
+    {'l_hip_pitch': 70, 'l_knee': 60, 'l_ankle_pitch': 70}, # Phase 3: Plant left foot, shift weight left
+    {'l_hip_pitch': 90, 'l_knee': 90, 'l_ankle_pitch': 90, 'l_hip_roll': 100, 'r_hip_roll': 100, 'l_ankle_roll': 100, 'r_ankle_roll': 100}, # Phase 4: Lift right leg, swing forward
+    {'r_hip_pitch': 70, 'r_knee': 60, 'r_ankle_pitch': 70}, # Phase 5: Plant right foot, return to center
+    {'r_hip_pitch': 90, 'r_knee': 90, 'r_ankle_pitch': 90, 'l_hip_roll': 90, 'r_hip_roll': 90, 'l_ankle_roll': 90, 'r_ankle_roll': 90},
 ]
 
 @app.route('/walk', methods=['POST'])
@@ -2751,7 +2296,6 @@ def walk():
     return jsonify(status='walked', steps=steps)`}</CodeBlock>
 
           <div className="callout callout-warning">
-            <span className="callout-icon">⚠️</span>
             <strong>Always test walking with a safety harness or someone spotting!</strong> A falling humanoid robot can damage itself and its surroundings. Use a suspended bar or string through the torso during gait development.
           </div>
         </section>
@@ -2760,13 +2304,13 @@ def walk():
         <section className="content-section" id="h-arms">
           <div className="content-section-label">Manipulation</div>
           <h2>Arm &amp; Hand Control</h2>
-          <p>Arms use <strong>inverse kinematics</strong> (IK) — you tell OrcBot "reach this point in space" and IK calculates the required joint angles.</p>
+          <p>Arms use <strong>inverse kinematics</strong> (IK), you tell OrcBot "reach this point in space" and IK calculates the required joint angles.</p>
 
           <CodeBlock lang="python">{`# Simple 2-DOF arm IK (shoulder + elbow in the same plane)
 import math
 
-UPPER_ARM = 15.0  # cm — shoulder to elbow
-FOREARM   = 12.0  # cm — elbow to hand
+UPPER_ARM = 15.0  # cm, shoulder to elbow
+FOREARM   = 12.0  # cm, elbow to hand
 
 def arm_ik(x: float, y: float, side: str = 'right') -> dict:
     """
@@ -2791,9 +2335,7 @@ def arm_ik(x: float, y: float, side: str = 'right') -> dict:
 
     prefix = 'r' if side == 'right' else 'l'
     return {
-        f'{prefix}_shoulder_pitch': round(shoulder_angle, 1),
-        f'{prefix}_elbow': round(180 - elbow_angle, 1),
-    }
+        f'{prefix}_shoulder_pitch': round(shoulder_angle, 1), f'{prefix}_elbow': round(180 - elbow_angle, 1), }
 
 # Usage:
 # targets = arm_ik(20, 10, 'right')
@@ -2826,7 +2368,7 @@ def reach():
         {/* ── H9. Speech ───────────────────────────────────── */}
         <section className="content-section" id="h-speech">
           <div className="content-section-label">Communication</div>
-          <h2>Speech — Voice &amp; Hearing</h2>
+          <h2>Speech, Voice &amp; Hearing</h2>
           <p>Give your robot a voice and ears. OrcBot decides <strong>what</strong> to say; the speech system handles <strong>how</strong>.</p>
 
           <h3>Text-to-Speech (TTS)</h3>
@@ -2877,8 +2419,7 @@ def audio_callback(indata, frames, time_info, status):
     audio_queue.put(bytes(indata))
 
 # Start listening in background
-stream = sd.RawInputStream(samplerate=16000, blocksize=8000,
-    dtype='int16', channels=1, callback=audio_callback)
+stream = sd.RawInputStream(samplerate=16000, blocksize=8000, dtype='int16', channels=1, callback=audio_callback)
 
 @app.route('/listen', methods=['POST'])
 def listen():
@@ -2899,7 +2440,6 @@ def listen():
     return jsonify(status='heard', text=text)`}</CodeBlock>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Cloud alternative:</strong> For higher accuracy, pipe audio to OpenAI Whisper or Google Speech-to-Text. But Vosk works offline, which is crucial for a portable robot.
           </div>
         </section>
@@ -2918,42 +2458,17 @@ ASL_SIGNS = {
     # Simple signs using shoulder/elbow/hand
     'hello': [
         # Flat hand near forehead, move outward
-        ({'r_shoulder_pitch': 140, 'r_shoulder_roll': 70,
-          'r_elbow': 130, 'r_hand': 30}, 0.5),
-        ({'r_shoulder_pitch': 130, 'r_shoulder_roll': 90,
-          'r_elbow': 150, 'r_hand': 30}, 0.5),
-    ],
-    'thank_you': [
+        ({'r_shoulder_pitch': 140, 'r_shoulder_roll': 70, 'r_elbow': 130, 'r_hand': 30}, 0.5), ({'r_shoulder_pitch': 130, 'r_shoulder_roll': 90, 'r_elbow': 150, 'r_hand': 30}, 0.5), ], 'thank_you': [
         # Hand from chin forward
-        ({'r_shoulder_pitch': 130, 'r_elbow': 120, 'r_hand': 30}, 0.4),
-        ({'r_shoulder_pitch': 110, 'r_elbow': 140, 'r_hand': 60}, 0.4),
-    ],
-    'yes': [
+        ({'r_shoulder_pitch': 130, 'r_elbow': 120, 'r_hand': 30}, 0.4), ({'r_shoulder_pitch': 110, 'r_elbow': 140, 'r_hand': 60}, 0.4), ], 'yes': [
         # Fist nod (simulate with hand closed + head nod)
-        ({'r_hand': 150, 'head_tilt': 75}, 0.3),
-        ({'head_tilt': 105}, 0.3),
-        ({'head_tilt': 75}, 0.3),
-        ({'head_tilt': 90, 'r_hand': 90}, 0.3),
-    ],
-    'no': [
+        ({'r_hand': 150, 'head_tilt': 75}, 0.3), ({'head_tilt': 105}, 0.3), ({'head_tilt': 75}, 0.3), ({'head_tilt': 90, 'r_hand': 90}, 0.3), ], 'no': [
         # Index + middle finger snap to thumb (simplified: head shake)
-        ({'head_pan': 65}, 0.25),
-        ({'head_pan': 115}, 0.25),
-        ({'head_pan': 65}, 0.25),
-        ({'head_pan': 90}, 0.25),
-    ],
-    'please': [
+        ({'head_pan': 65}, 0.25), ({'head_pan': 115}, 0.25), ({'head_pan': 65}, 0.25), ({'head_pan': 90}, 0.25), ], 'please': [
         # Flat hand on chest, circular motion
-        ({'r_shoulder_pitch': 100, 'r_elbow': 80, 'r_hand': 30}, 0.4),
-        ({'r_shoulder_pitch': 110, 'r_elbow': 70}, 0.4),
-        ({'r_shoulder_pitch': 100, 'r_elbow': 80}, 0.4),
-    ],
-    'help': [
+        ({'r_shoulder_pitch': 100, 'r_elbow': 80, 'r_hand': 30}, 0.4), ({'r_shoulder_pitch': 110, 'r_elbow': 70}, 0.4), ({'r_shoulder_pitch': 100, 'r_elbow': 80}, 0.4), ], 'help': [
         # Fist on open palm, lift
-        ({'l_shoulder_pitch': 100, 'l_hand': 30,
-          'r_shoulder_pitch': 100, 'r_hand': 150}, 0.4),
-        ({'l_shoulder_pitch': 130, 'r_shoulder_pitch': 130}, 0.5),
-    ],
+        ({'l_shoulder_pitch': 100, 'l_hand': 30, 'r_shoulder_pitch': 100, 'r_hand': 150}, 0.4), ({'l_shoulder_pitch': 130, 'r_shoulder_pitch': 130}, 0.5), ],
 }
 
 @app.route('/sign', methods=['POST'])
@@ -2961,8 +2476,7 @@ def sign():
     d = request.json or {}
     word = d.get('word', '').lower()
     if word not in ASL_SIGNS:
-        return jsonify(error=f'Unknown sign: {word}',
-                       available=list(ASL_SIGNS.keys())), 400
+        return jsonify(error=f'Unknown sign: {word}', available=list(ASL_SIGNS.keys())), 400
     for targets, dur in ASL_SIGNS[word]:
         if not move_joints(targets, dur):
             return jsonify(status='interrupted'), 409
@@ -2978,8 +2492,7 @@ import mediapipe as mp
 import numpy as np
 
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2,
-                       min_detection_confidence=0.7)
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.7)
 
 @app.route('/read_sign')
 def read_sign():
@@ -3004,14 +2517,11 @@ def read_sign():
     # In production: feed landmarks into a trained sklearn/tflite classifier
     # For now, return the raw landmarks for OrcBot to interpret via LLM
     return jsonify(
-        status='detected',
-        hands=len(result.multi_hand_landmarks),
-        landmarks=landmarks[:63],  # First hand only
+        status='detected', hands=len(result.multi_hand_landmarks), landmarks=landmarks[:63], # First hand only
         note='Feed to classifier or LLM for interpretation'
     )`}</CodeBlock>
 
           <div className="callout callout-info">
-            <span className="callout-icon">💡</span>
             <strong>Expanding the vocabulary:</strong> Record landmark data for each sign you want the robot to recognize, train a simple KNN or SVM classifier with scikit-learn, and load it in the <code>/read_sign</code> endpoint.
           </div>
         </section>
@@ -3022,7 +2532,7 @@ def read_sign():
           <h2>Computer Vision &amp; Face</h2>
 
           <h3>Object &amp; Face Detection</h3>
-          <CodeBlock lang="python">{`# Vision module — YOLO + face recognition
+          <CodeBlock lang="python">{`# Vision module, YOLO + face recognition
 # pip install ultralytics opencv-python face-recognition
 
 from ultralytics import YOLO
@@ -3047,12 +2557,10 @@ def detect():
         conf = float(box.conf)
         x1, y1, x2, y2 = [int(v) for v in box.xyxy[0]]
         detections.append({
-            'object': cls, 'confidence': round(conf, 2),
-            'bbox': [x1, y1, x2, y2]
+            'object': cls, 'confidence': round(conf, 2), 'bbox': [x1, y1, x2, y2]
         })
 
-    return jsonify(status='detected', objects=detections,
-                   count=len(detections))
+    return jsonify(status='detected', objects=detections, count=len(detections))
 
 @app.route('/vision/faces')
 def detect_faces():
@@ -3072,9 +2580,7 @@ def detect_faces():
     for loc, enc in zip(locations, encodings):
         top, right, bottom, left = loc
         faces.append({
-            'bbox': [left, top, right, bottom],
-            'encoding_hash': hash(enc.tobytes()) % (10**8),
-        })
+            'bbox': [left, top, right, bottom], 'encoding_hash': hash(enc.tobytes()) % (10**8), })
 
     return jsonify(status='detected', faces=faces, count=len(faces))`}</CodeBlock>
 
@@ -3094,14 +2600,7 @@ def draw_face(expression='neutral'):
     draw = ImageDraw.Draw(img)
 
     faces = {
-        'neutral':  {'l_eye': (30, 20, 15), 'r_eye': (85, 20, 15), 'mouth': 'line'},
-        'happy':    {'l_eye': (30, 22, 13), 'r_eye': (85, 22, 13), 'mouth': 'smile'},
-        'sad':      {'l_eye': (30, 18, 13), 'r_eye': (85, 18, 13), 'mouth': 'frown'},
-        'surprised':{'l_eye': (30, 18, 18), 'r_eye': (85, 18, 18), 'mouth': 'o'},
-        'angry':    {'l_eye': (30, 22, 12), 'r_eye': (85, 22, 12), 'mouth': 'line'},
-        'thinking': {'l_eye': (30, 20, 15), 'r_eye': (85, 20, 8),  'mouth': 'squiggle'},
-        'sleeping': {'l_eye': (30, 24, 0),  'r_eye': (85, 24, 0),  'mouth': 'line'},
-    }
+        'neutral':  {'l_eye': (30, 20, 15), 'r_eye': (85, 20, 15), 'mouth': 'line'}, 'happy':    {'l_eye': (30, 22, 13), 'r_eye': (85, 22, 13), 'mouth': 'smile'}, 'sad':      {'l_eye': (30, 18, 13), 'r_eye': (85, 18, 13), 'mouth': 'frown'}, 'surprised':{'l_eye': (30, 18, 18), 'r_eye': (85, 18, 18), 'mouth': 'o'}, 'angry':    {'l_eye': (30, 22, 12), 'r_eye': (85, 22, 12), 'mouth': 'line'}, 'thinking': {'l_eye': (30, 20, 15), 'r_eye': (85, 20, 8), 'mouth': 'squiggle'}, 'sleeping': {'l_eye': (30, 24, 0), 'r_eye': (85, 24, 0), 'mouth': 'line'}, }
     f = faces.get(expression, faces['neutral'])
 
     # Eyes
@@ -3137,8 +2636,8 @@ def face():
         {/* ── H12. Cognition ───────────────────────────────── */}
         <section className="content-section" id="h-cognition">
           <div className="content-section-label">Brain</div>
-          <h2>Cognition — The OrcBot Brain</h2>
-          <p>This is where it all comes together. OrcBot's decision engine coordinates all subsystems — it sees via the camera, hears via the mic, thinks via the LLM, and acts through the motion controller.</p>
+          <h2>Cognition, The OrcBot Brain</h2>
+          <p>This is where it all comes together. OrcBot's decision engine coordinates all subsystems, it sees via the camera, hears via the mic, thinks via the LLM, and acts through the motion controller.</p>
 
           <h3>Cognitive Loop</h3>
           <div className="arch-diagram">
@@ -3175,11 +2674,7 @@ def face():
           <h3>Behavior Modes</h3>
           <div className="safety-layers">
             {[
-              { title: 'Companion Mode', desc: 'The robot follows conversations, responds to voice, makes eye contact (tracks faces with head pan/tilt), and uses appropriate gestures. This is the default interactive mode.' },
-              { title: 'Patrol Mode', desc: 'The robot walks a defined path, scans for objects/people with the camera, and reports findings via Telegram. Useful for surveillance or exploration.' },
-              { title: 'Assistant Mode', desc: 'Wait for voice commands, execute tasks (fetch, point, guide), report completion. Ideal for structured environments like labs or classrooms.' },
-              { title: 'Learning Mode', desc: 'OrcBot observes demonstrations (via camera + speech), forms episodic memories, and can reproduce learned sequences. This is how you teach it new gestures or routines.' },
-            ].map((item, i) => (
+              { title: 'Companion Mode', desc: 'The robot follows conversations, responds to voice, makes eye contact (tracks faces with head pan/tilt), and uses appropriate gestures. This is the default interactive mode.' }, { title: 'Patrol Mode', desc: 'The robot walks a defined path, scans for objects/people with the camera, and reports findings via Telegram. Useful for surveillance or exploration.' }, { title: 'Assistant Mode', desc: 'Wait for voice commands, execute tasks (fetch, point, guide), report completion. Ideal for structured environments like labs or classrooms.' }, { title: 'Learning Mode', desc: 'OrcBot observes demonstrations (via camera + speech), forms episodic memories, and can reproduce learned sequences. This is how you teach it new gestures or routines.' }, ].map((item, i) => (
               <div className="safety-layer" key={i}>
                 <h4 style={{ margin: 0, marginBottom: 4 }}>{item.title}</h4>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.desc}</p>
@@ -3192,7 +2687,7 @@ def face():
         <section className="content-section" id="h-skills">
           <div className="content-section-label">Integration</div>
           <h2>OrcBot Humanoid Skills Plugin</h2>
-          <p>Save as <code>~/.orcbot/plugins/humanoid-control.ts</code> — this gives OrcBot full control of the humanoid body.</p>
+          <p>Save as <code>~/.orcbot/plugins/humanoid-control.ts</code>, this gives OrcBot full control of the humanoid body.</p>
 
           <CodeBlock lang="typescript">{`/**
  * OrcBot Humanoid Companion Skills
@@ -3220,129 +2715,80 @@ async function call(path: string, method = 'GET', body?: any): Promise<BridgeRes
 
 // ── Movement & Posture ──
 export const humanoid_pose = {
-  name: 'humanoid_pose',
-  description: 'Set a body pose: stand, sit, wave, arms_up, bow.',
-  usage: 'humanoid_pose(name, duration?)',
-  handler: async (args: any) => call('/pose', 'POST', {
-    name: args.name || 'stand',
-    duration: parseFloat(args.duration || '1.5')
+  name: 'humanoid_pose', description: 'Set a body pose: stand, sit, wave, arms_up, bow.', usage: 'humanoid_pose(name, duration?)', handler: async (args: any) => call('/pose', 'POST', {
+    name: args.name || 'stand', duration: parseFloat(args.duration || '1.5')
   })
 };
 
 export const humanoid_joint = {
-  name: 'humanoid_joint',
-  description: 'Move a single joint to an angle. Joints: head_pan, head_tilt, l/r_shoulder_pitch, l/r_shoulder_roll, l/r_elbow, l/r_hand, l/r_hip_yaw/roll/pitch, l/r_knee, l/r_ankle_pitch/roll.',
-  usage: 'humanoid_joint(name, angle, duration?)',
-  handler: async (args: any) => call('/joint', 'POST', {
-    name: args.name, angle: parseFloat(args.angle || '90'),
-    duration: parseFloat(args.duration || '0.5')
+  name: 'humanoid_joint', description: 'Move a single joint to an angle. Joints: head_pan, head_tilt, l/r_shoulder_pitch, l/r_shoulder_roll, l/r_elbow, l/r_hand, l/r_hip_yaw/roll/pitch, l/r_knee, l/r_ankle_pitch/roll.', usage: 'humanoid_joint(name, angle, duration?)', handler: async (args: any) => call('/joint', 'POST', {
+    name: args.name, angle: parseFloat(args.angle || '90'), duration: parseFloat(args.duration || '0.5')
   })
 };
 
 export const humanoid_gesture = {
-  name: 'humanoid_gesture',
-  description: 'Perform a gesture: wave, nod, shake_head, shrug.',
-  usage: 'humanoid_gesture(name)',
-  handler: async (args: any) => call('/gesture', 'POST', { name: args.name || 'wave' })
+  name: 'humanoid_gesture', description: 'Perform a gesture: wave, nod, shake_head, shrug.', usage: 'humanoid_gesture(name)', handler: async (args: any) => call('/gesture', 'POST', { name: args.name || 'wave' })
 };
 
 export const humanoid_walk = {
-  name: 'humanoid_walk',
-  description: 'Walk forward a number of steps.',
-  usage: 'humanoid_walk(steps?, speed?)',
-  handler: async (args: any) => call('/walk', 'POST', {
-    steps: parseInt(args.steps || '2'),
-    speed: parseFloat(args.speed || '0.5')
+  name: 'humanoid_walk', description: 'Walk forward a number of steps.', usage: 'humanoid_walk(steps?, speed?)', handler: async (args: any) => call('/walk', 'POST', {
+    steps: parseInt(args.steps || '2'), speed: parseFloat(args.speed || '0.5')
   })
 };
 
 export const humanoid_reach = {
-  name: 'humanoid_reach',
-  description: 'Reach a hand to a position (x=forward cm, y=height cm). Optionally grip open/close.',
-  usage: 'humanoid_reach(x, y, side?, grip?)',
-  handler: async (args: any) => call('/reach', 'POST', {
-    x: parseFloat(args.x || '20'), y: parseFloat(args.y || '0'),
-    side: args.side || 'right', grip: args.grip
+  name: 'humanoid_reach', description: 'Reach a hand to a position (x=forward cm, y=height cm). Optionally grip open/close.', usage: 'humanoid_reach(x, y, side?, grip?)', handler: async (args: any) => call('/reach', 'POST', {
+    x: parseFloat(args.x || '20'), y: parseFloat(args.y || '0'), side: args.side || 'right', grip: args.grip
   })
 };
 
 // ── Speech ──
 export const humanoid_speak = {
-  name: 'humanoid_speak',
-  description: 'Speak text aloud through the robot\\'s speaker.',
-  usage: 'humanoid_speak(text)',
-  handler: async (args: any) => call('/speak', 'POST', { text: args.text })
+  name: 'humanoid_speak', description: 'Speak text aloud through the robot\\'s speaker.', usage: 'humanoid_speak(text)', handler: async (args: any) => call('/speak', 'POST', { text: args.text })
 };
 
 export const humanoid_listen = {
-  name: 'humanoid_listen',
-  description: 'Listen for speech and transcribe it.',
-  usage: 'humanoid_listen(timeout?)',
-  handler: async (args: any) => call('/listen', 'POST', {
+  name: 'humanoid_listen', description: 'Listen for speech and transcribe it.', usage: 'humanoid_listen(timeout?)', handler: async (args: any) => call('/listen', 'POST', {
     timeout: parseFloat(args.timeout || '5')
   })
 };
 
 // ── Sign Language ──
 export const humanoid_sign = {
-  name: 'humanoid_sign',
-  description: 'Perform a sign language gesture: hello, thank_you, yes, no, please, help.',
-  usage: 'humanoid_sign(word)',
-  handler: async (args: any) => call('/sign', 'POST', { word: args.word })
+  name: 'humanoid_sign', description: 'Perform a sign language gesture: hello, thank_you, yes, no, please, help.', usage: 'humanoid_sign(word)', handler: async (args: any) => call('/sign', 'POST', { word: args.word })
 };
 
 export const humanoid_read_sign = {
-  name: 'humanoid_read_sign',
-  description: 'Use the camera to read and interpret a hand sign.',
-  usage: 'humanoid_read_sign()',
-  handler: async () => call('/read_sign')
+  name: 'humanoid_read_sign', description: 'Use the camera to read and interpret a hand sign.', usage: 'humanoid_read_sign()', handler: async () => call('/read_sign')
 };
 
 // ── Vision ──
 export const humanoid_see = {
-  name: 'humanoid_see',
-  description: 'Detect objects in the robot\\'s camera view using YOLO.',
-  usage: 'humanoid_see()',
-  handler: async () => call('/vision/detect')
+  name: 'humanoid_see', description: 'Detect objects in the robot\\'s camera view using YOLO.', usage: 'humanoid_see()', handler: async () => call('/vision/detect')
 };
 
 export const humanoid_faces = {
-  name: 'humanoid_faces',
-  description: 'Detect faces in camera view.',
-  usage: 'humanoid_faces()',
-  handler: async () => call('/vision/faces')
+  name: 'humanoid_faces', description: 'Detect faces in camera view.', usage: 'humanoid_faces()', handler: async () => call('/vision/faces')
 };
 
 // ── Expression ──
 export const humanoid_face = {
-  name: 'humanoid_face',
-  description: 'Change facial expression: neutral, happy, sad, surprised, angry, thinking, sleeping.',
-  usage: 'humanoid_face(expression)',
-  handler: async (args: any) => call('/face', 'POST', {
+  name: 'humanoid_face', description: 'Change facial expression: neutral, happy, sad, surprised, angry, thinking, sleeping.', usage: 'humanoid_face(expression)', handler: async (args: any) => call('/face', 'POST', {
     expression: args.expression || 'neutral'
   })
 };
 
 // ── Safety ──
 export const humanoid_status = {
-  name: 'humanoid_status',
-  description: 'Get robot status: pose, joint positions, e-stop state.',
-  usage: 'humanoid_status()',
-  handler: async () => call('/status')
+  name: 'humanoid_status', description: 'Get robot status: pose, joint positions, e-stop state.', usage: 'humanoid_status()', handler: async () => call('/status')
 };
 
 export const humanoid_e_stop = {
-  name: 'humanoid_e_stop',
-  description: 'EMERGENCY STOP — freeze all joints immediately.',
-  usage: 'humanoid_e_stop()',
-  handler: async () => call('/e-stop', 'POST')
+  name: 'humanoid_e_stop', description: 'EMERGENCY STOP, freeze all joints immediately.', usage: 'humanoid_e_stop()', handler: async () => call('/e-stop', 'POST')
 };
 
 export const humanoid_e_stop_reset = {
-  name: 'humanoid_e_stop_reset',
-  description: 'Reset emergency stop to allow movement again.',
-  usage: 'humanoid_e_stop_reset()',
-  handler: async () => call('/e-stop/reset', 'POST')
+  name: 'humanoid_e_stop_reset', description: 'Reset emergency stop to allow movement again.', usage: 'humanoid_e_stop_reset()', handler: async () => call('/e-stop/reset', 'POST')
 };`}</CodeBlock>
         </section>
 
@@ -3356,40 +2802,17 @@ export const humanoid_e_stop_reset = {
             {[
               {
                 num: 'Layer 1', title: 'Hardware Safety', items: [
-                  'Physical E-stop button — cuts servo power, SBC stays on for logging',
-                  'Current-limiting fuses on each servo bus',
-                  'Torque limits in firmware — servos can\'t apply more than configured force',
-                  'Collision padding — foam on hands, arms, and head',
-                  'Tether/harness during walking development',
-                ]
-              },
-              {
+                  'Physical E-stop button, cuts servo power, SBC stays on for logging', 'Current-limiting fuses on each servo bus', 'Torque limits in firmware, servos can\'t apply more than configured force', 'Collision padding, foam on hands, arms, and head', 'Tether/harness during walking development', ]
+              }, {
                 num: 'Layer 2', title: 'Motion Controller Safety', items: [
-                  'All joint angles clamped to mechanical limits — impossible to self-damage',
-                  'Speed limiting — smooth interpolation, no sudden jerks',
-                  'Watchdog timer — motors relax if no command for 10 seconds',
-                  'IMU tilt guard — auto-sit if body tilt exceeds 15°',
-                  'Obstacle distance check before walking',
-                ]
-              },
-              {
+                  'All joint angles clamped to mechanical limits, impossible to self-damage', 'Speed limiting, smooth interpolation, no sudden jerks', 'Watchdog timer, motors relax if no command for 10 seconds', 'IMU tilt guard, auto-sit if body tilt exceeds 15°', 'Obstacle distance check before walking', ]
+              }, {
                 num: 'Layer 3', title: 'OrcBot Guard Rails', items: [
-                  'Skill frequency limits — can\'t spam walk commands',
-                  'Step limit per action — prevents runaway movement',
-                  'Termination review — second LLM pass confirms task completion',
-                  'Communication cooldown — prevents infinite movement loops',
-                ]
-              },
-              {
+                  'Skill frequency limits, can\'t spam walk commands', 'Step limit per action, prevents runaway movement', 'Termination review, second LLM pass confirms task completion', 'Communication cooldown, prevents infinite movement loops', ]
+              }, {
                 num: 'Layer 4', title: 'Ethical Guidelines', items: [
-                  'The robot must announce itself — never pretend to be human',
-                  'Voice interactions must be logged for accountability',
-                  'Camera data is processed locally — never streamed without consent',
-                  'No autonomous decisions about physical contact with humans',
-                  'Operator must be reachable via Telegram during autonomous operation',
-                ]
-              },
-            ].map((layer, i) => (
+                  'The robot must announce itself, never pretend to be human', 'Voice interactions must be logged for accountability', 'Camera data is processed locally, never streamed without consent', 'No autonomous decisions about physical contact with humans', 'Operator must be reachable via Telegram during autonomous operation', ]
+              }, ].map((layer, i) => (
               <div className="safety-layer" key={i}>
                 <div className="safety-layer-num">{layer.num}</div>
                 <h4>{layer.title}</h4>
@@ -3407,20 +2830,14 @@ export const humanoid_e_stop_reset = {
 
           <h3>Mock Motion Controller</h3>
           <CodeBlock lang="python">{`#!/usr/bin/env python3
-"""Mock humanoid bridge — no real hardware needed."""
+"""Mock humanoid bridge, no real hardware needed."""
 
 from flask import Flask, request, jsonify
 import time, random
 
 app = Flask(__name__)
 joints = {name: 90.0 for name in [
-    'head_pan', 'head_tilt',
-    'l_shoulder_pitch', 'l_shoulder_roll', 'l_elbow', 'l_hand',
-    'r_shoulder_pitch', 'r_shoulder_roll', 'r_elbow', 'r_hand',
-    'l_hip_yaw', 'l_hip_roll', 'l_hip_pitch', 'l_knee',
-    'l_ankle_pitch', 'l_ankle_roll',
-    'r_hip_yaw', 'r_hip_roll', 'r_hip_pitch', 'r_knee',
-    'r_ankle_pitch', 'r_ankle_roll',
+    'head_pan', 'head_tilt', 'l_shoulder_pitch', 'l_shoulder_roll', 'l_elbow', 'l_hand', 'r_shoulder_pitch', 'r_shoulder_roll', 'r_elbow', 'r_hand', 'l_hip_yaw', 'l_hip_roll', 'l_hip_pitch', 'l_knee', 'l_ankle_pitch', 'l_ankle_roll', 'r_hip_yaw', 'r_hip_roll', 'r_hip_pitch', 'r_knee', 'r_ankle_pitch', 'r_ankle_roll',
 ]}
 state = {'e_stopped': False, 'pose': 'stand', 'moving': False}
 
@@ -3452,8 +2869,7 @@ def multi():
 
 @app.route('/gesture', methods=['POST'])
 def gesture():
-    return jsonify(status='completed',
-                   gesture=(request.json or {}).get('name', 'wave'))
+    return jsonify(status='completed', gesture=(request.json or {}).get('name', 'wave'))
 
 @app.route('/walk', methods=['POST'])
 def walk():
@@ -3463,7 +2879,7 @@ def walk():
 @app.route('/speak', methods=['POST'])
 def speak():
     text = (request.json or {}).get('text', '')
-    print(f"🔊 Robot says: {text}")
+    print(f" Robot says: {text}")
     return jsonify(status='speaking', text=text[:100])
 
 @app.route('/listen', methods=['POST'])
@@ -3472,8 +2888,7 @@ def listen():
 
 @app.route('/sign', methods=['POST'])
 def sign():
-    return jsonify(status='signed',
-                   word=(request.json or {}).get('word', 'hello'))
+    return jsonify(status='signed', word=(request.json or {}).get('word', 'hello'))
 
 @app.route('/read_sign')
 def read_sign():
@@ -3482,9 +2897,7 @@ def read_sign():
 @app.route('/vision/detect')
 def detect():
     return jsonify(status='detected', objects=[
-        {'object': 'person', 'confidence': 0.92, 'bbox': [100, 50, 300, 400]},
-        {'object': 'cup', 'confidence': 0.85, 'bbox': [400, 200, 450, 300]},
-    ])
+        {'object': 'person', 'confidence': 0.92, 'bbox': [100, 50, 300, 400]}, {'object': 'cup', 'confidence': 0.85, 'bbox': [400, 200, 450, 300]}, ])
 
 @app.route('/vision/faces')
 def faces():
@@ -3494,8 +2907,7 @@ def faces():
 
 @app.route('/face', methods=['POST'])
 def face():
-    return jsonify(status='set',
-                   expression=(request.json or {}).get('expression', 'neutral'))
+    return jsonify(status='set', expression=(request.json or {}).get('expression', 'neutral'))
 
 @app.route('/reach', methods=['POST'])
 def reach():
@@ -3582,13 +2994,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
           <h3>Daily Operation Checklist</h3>
           <div className="test-checklist">
             {[
-              'Check battery voltage — charge if below 10.5V (for 3S LiPo)',
-              'Inspect servo connections — no loose wires',
-              'Run curl http://localhost:5050/health — confirm bridge is up',
-              'Test E-stop button — verify it cuts servo power',
-              'Run a simple pose test: curl -X POST localhost:5050/pose -d \'{"name":"wave"}\'',
-              'Verify Telegram connection — send a test message to the bot',
-            ].map((item, i) => (
+              'Check battery voltage, charge if below 10.5V (for 3S LiPo)', 'Inspect servo connections, no loose wires', 'Run curl http://localhost:5050/health, confirm bridge is up', 'Test E-stop button, verify it cuts servo power', 'Run a simple pose test: curl -X POST localhost:5050/pose -d \'{"name":"wave"}\'', 'Verify Telegram connection, send a test message to the bot', ].map((item, i) => (
               <div className="test-check" key={i}>
                 <span className="test-check-icon">✓</span>
                 <span>{item}</span>
@@ -3607,17 +3013,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
               <thead><tr><th>Problem</th><th>Cause</th><th>Fix</th></tr></thead>
               <tbody>
                 {[
-                  ['Servo jitters/buzzes', 'Insufficient power or noisy supply', 'Use dedicated servo power supply, add 100µF capacitor per servo group'],
-                  ['Robot tips over', 'Center of mass too high', 'Move battery lower, add ankle weights, reduce walk speed'],
-                  ['Servos overheat', 'Holding heavy load at extreme angle', 'Reduce hold time, add counterweights, use higher-torque servos'],
-                  ['PCA9685 not detected', 'I2C not enabled or wrong address', 'Run i2cdetect -y 1, enable I2C in raspi-config, check A0 solder bridge'],
-                  ['Speech unclear', 'Speaker too quiet or distorted', 'Add amplifier module, reduce TTS speed, use pico2wave over espeak'],
-                  ['Vosk slow on Pi', 'Model too large', 'Use vosk-model-small-en-us (~40MB), upgrade to Pi 5 or Jetson'],
-                  ['YOLO too slow', 'Pi 4 can\'t run fast enough', 'Use yolov8n (nano), drop to 320px input, or use Jetson Nano with GPU'],
-                  ['Walk is unstable', 'Gait timing or weight shift wrong', 'Slow down, increase weight-shift phase, add foot force sensors'],
-                  ['Sign is incorrect', 'Wrong servo mapping', 'Recalibrate joint centers, test each arm joint range individually'],
-                  ['E-stop doesn\'t work', 'Switch not wired correctly', 'E-stop must be in series with servo power, NOT the SBC power'],
-                ].map((r, i) => (
+                  ['Servo jitters/buzzes', 'Insufficient power or noisy supply', 'Use dedicated servo power supply, add 100µF capacitor per servo group'], ['Robot tips over', 'Center of mass too high', 'Move battery lower, add ankle weights, reduce walk speed'], ['Servos overheat', 'Holding heavy load at extreme angle', 'Reduce hold time, add counterweights, use higher-torque servos'], ['PCA9685 not detected', 'I2C not enabled or wrong address', 'Run i2cdetect -y 1, enable I2C in raspi-config, check A0 solder bridge'], ['Speech unclear', 'Speaker too quiet or distorted', 'Add amplifier module, reduce TTS speed, use pico2wave over espeak'], ['Vosk slow on Pi', 'Model too large', 'Use vosk-model-small-en-us (~40MB), upgrade to Pi 5 or Jetson'], ['YOLO too slow', 'Pi 4 can\'t run fast enough', 'Use yolov8n (nano), drop to 320px input, or use Jetson Nano with GPU'], ['Walk is unstable', 'Gait timing or weight shift wrong', 'Slow down, increase weight-shift phase, add foot force sensors'], ['Sign is incorrect', 'Wrong servo mapping', 'Recalibrate joint centers, test each arm joint range individually'], ['E-stop doesn\'t work', 'Switch not wired correctly', 'E-stop must be in series with servo power, NOT the SBC power'], ].map((r, i) => (
                   <tr key={i}><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td></tr>
                 ))}
               </tbody>
@@ -3633,10 +3029,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
           <h3>Humanoid Platforms</h3>
           <div className="resources-grid">
             {[
-              { title: 'InMoov', desc: 'Open-source 3D-printable humanoid robot', url: 'https://inmoov.fr/' },
-              { title: 'Robotis OP3', desc: 'Research-grade humanoid kit with ROS support', url: 'https://emanual.robotis.com/docs/en/platform/op3/introduction/' },
-              { title: 'Hiwonder TonyPi', desc: 'Affordable humanoid kit with serial bus servos', url: 'https://www.hiwonder.com/' },
-            ].map((r, i) => (
+              { title: 'InMoov', desc: 'Open-source 3D-printable humanoid robot', url: 'https://inmoov.fr/' }, { title: 'Robotis OP3', desc: 'Research-grade humanoid kit with ROS support', url: 'https://emanual.robotis.com/docs/en/platform/op3/introduction/' }, { title: 'Hiwonder TonyPi', desc: 'Affordable humanoid kit with serial bus servos', url: 'https://www.hiwonder.com/' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -3648,11 +3041,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
           <h3>Software Libraries</h3>
           <div className="resources-grid">
             {[
-              { title: 'MediaPipe', desc: 'Google\'s ML for hand/pose/face detection', url: 'https://mediapipe.dev/' },
-              { title: 'Vosk STT', desc: 'Offline speech recognition', url: 'https://alphacephei.com/vosk/' },
-              { title: 'Ultralytics YOLO', desc: 'State-of-the-art object detection', url: 'https://docs.ultralytics.com/' },
-              { title: 'face_recognition', desc: 'Simple and accurate face recognition', url: 'https://github.com/ageitgey/face_recognition' },
-            ].map((r, i) => (
+              { title: 'MediaPipe', desc: 'Google\'s ML for hand/pose/face detection', url: 'https://mediapipe.dev/' }, { title: 'Vosk STT', desc: 'Offline speech recognition', url: 'https://alphacephei.com/vosk/' }, { title: 'Ultralytics YOLO', desc: 'State-of-the-art object detection', url: 'https://docs.ultralytics.com/' }, { title: 'face_recognition', desc: 'Simple and accurate face recognition', url: 'https://github.com/ageitgey/face_recognition' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -3664,10 +3053,7 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
           <h3>Learning &amp; Community</h3>
           <div className="resources-grid">
             {[
-              { title: 'Robotics StackExchange', desc: 'Q&A for robotics engineering', url: 'https://robotics.stackexchange.com/' },
-              { title: 'ROS2 Docs', desc: 'Robot Operating System framework', url: 'https://docs.ros.org/en/humble/' },
-              { title: 'Adafruit Learning', desc: 'Electronics and servo tutorials', url: 'https://learn.adafruit.com/' },
-            ].map((r, i) => (
+              { title: 'Robotics StackExchange', desc: 'Q&A for robotics engineering', url: 'https://robotics.stackexchange.com/' }, { title: 'ROS2 Docs', desc: 'Robot Operating System framework', url: 'https://docs.ros.org/en/humble/' }, { title: 'Adafruit Learning', desc: 'Electronics and servo tutorials', url: 'https://learn.adafruit.com/' }, ].map((r, i) => (
               <a className="resource-card" href={r.url} target="_blank" rel="noopener noreferrer" key={i}>
                 <h5>{r.title}</h5>
                 <p>{r.desc}</p>
@@ -3680,18 +3066,11 @@ sudo journalctl -u orcbot-humanoid -f`}</CodeBlock>
         {/* ── Humanoid Summary Banner ───────────────────────── */}
         <div className="summary-banner">
           <h2>You built a humanoid robotic companion.</h2>
-          <p>A robot that walks, talks, sees, signs, and thinks — powered by OrcBot's AI brain. Here's what you now have:</p>
+          <p>A robot that walks, talks, sees, signs, and thinks, powered by OrcBot's AI brain. Here's what you now have:</p>
           <div className="summary-chips">
             {[
-              { icon: '🦾', label: '22+ DOF Body' },
-              { icon: '🗣️', label: 'Speech & Voice' },
-              { icon: '🤟', label: 'Sign Language' },
-              { icon: '👁️', label: 'Computer Vision' },
-              { icon: '🧠', label: 'AI Cognition' },
-              { icon: '🚶', label: 'Bipedal Walking' },
-            ].map((c, i) => (
+              { label: '22+ DOF Body' }, { label: 'Speech & Voice' }, { label: 'Sign Language' }, { label: 'Computer Vision' }, { label: 'AI Cognition' }, { label: 'Bipedal Walking' }, ].map((c, i) => (
               <span className="summary-chip" key={i}>
-                <span className="chip-icon">{c.icon}</span>
                 {c.label}
               </span>
             ))}

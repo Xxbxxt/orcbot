@@ -12,7 +12,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="index.html" class="sidebar-logo">
-          <div class="sidebar-logo-icon">🤖</div>
+          <div class="sidebar-logo-icon">OB</div>
           OrcBot
         </a>
         <span class="sidebar-version">v1.0.0</span>
@@ -22,35 +22,35 @@
         <div class="nav-section">
           <div class="nav-section-title">Getting Started</div>
           <ul class="nav-links">
-            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
-            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
-            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+            <li><a href="index.html" class="nav-link">Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link">Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link">Configuration</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Core Concepts</div>
           <ul class="nav-links">
-            <li><a href="architecture.html" class="nav-link"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
-            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
-            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
-            <li><a href="local-models.html" class="nav-link"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+            <li><a href="architecture.html" class="nav-link">Architecture</a></li>
+            <li><a href="skills.html" class="nav-link">Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link">Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link">Local Models</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Deployment</div>
           <ul class="nav-links">
-            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
-            <li><a href="gateway.html" class="nav-link active"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
-            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+            <li><a href="docker.html" class="nav-link">Docker</a></li>
+            <li><a href="gateway.html" class="nav-link active">Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link">Operations</a></li>
           </ul>
         </div>
       </nav>
       
       <div class="sidebar-footer">
-        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
-        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+        <a href="https://github.com/fredabila/orcbot" target="_blank">GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">Community</a>
       </div>
     </aside>
 
@@ -64,19 +64,19 @@
           <span>Web Gateway</span>
         </div>
         <div class="header-actions">
-          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">Star</a>
         </div>
       </header>
 
       <div class="page-content">
         <div class="page-header">
-          <span class="page-badge">🌐 Features</span>
+          <span class="page-badge"> Features</span>
           <h1 class="page-title">Web Gateway</h1>
           <p class="page-description">Remote management via REST API and WebSocket for real-time monitoring.</p>
         </div>
 
         <div class="card">
-          <h2>🚀 Quick Start</h2>
+          <h2> Quick Start</h2>
           <pre><code># Start gateway server
 orcbot gateway
 
@@ -88,7 +88,7 @@ orcbot gateway -p 8080 -s ./apps/dashboard</code></pre>
         </div>
 
         <div class="card">
-          <h2>📡 REST API Endpoints</h2>
+          <h2> REST API Endpoints</h2>
           <table>
             <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
             <tr><td>GET</td><td><code>/api/status</code></td><td>Agent status and current action</td></tr>
@@ -106,7 +106,7 @@ orcbot gateway -p 8080 -s ./apps/dashboard</code></pre>
         </div>
 
         <div class="card">
-          <h2>🔌 WebSocket Events</h2>
+          <h2> WebSocket Events</h2>
           <p>Connect to <code>ws://localhost:3100</code> for real-time updates:</p>
           
           <h4>Incoming Events</h4>
@@ -131,7 +131,7 @@ orcbot gateway -p 8080 -s ./apps/dashboard</code></pre>
         </div>
 
         <div class="card">
-          <h2>🔐 Authentication</h2>
+          <h2> Authentication</h2>
           <p>Set an API key for authentication:</p>
           <pre><code># In config
 gatewayApiKey: your-secret-key
@@ -141,7 +141,7 @@ curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status</code></pr
         </div>
 
         <div class="card">
-          <h2>🛡️ Security Model</h2>
+          <h2> Security Model</h2>
           <ul>
             <li>The gateway is an operator-facing control plane, not a public chat endpoint. Do not expose it on a public interface without <code>gatewayApiKey</code> and restricted CORS.</li>
             <li>Clients should send a stable <code>sourceId</code> or <code>clientId</code> so OrcBot can keep messages in the correct session scope and route follow-ups deterministically.</li>
@@ -151,7 +151,7 @@ curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status</code></pr
         </div>
 
         <div class="card">
-          <h2>🧭 Gateway Chat Routing</h2>
+          <h2> Gateway Chat Routing</h2>
           <p>Inbound gateway chat follows the same deterministic routing rules as other channels:</p>
           <ol>
             <li>Resolve a stable thread scope from <code>sourceId</code> or <code>clientId</code></li>
@@ -164,7 +164,7 @@ curl -H "X-Api-Key: your-secret-key" http://localhost:3100/api/status</code></pr
         </div>
 
         <div class="card">
-          <h2>📊 Dashboard</h2>
+          <h2> Dashboard</h2>
           <p>Serve the built-in dashboard for a visual interface:</p>
           <pre><code>orcbot gateway -s ./apps/dashboard</code></pre>
           <p>Then open <code>http://localhost:3100</code> in your browser.</p>

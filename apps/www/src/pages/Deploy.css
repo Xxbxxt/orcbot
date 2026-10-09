@@ -54,8 +54,6 @@
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
   padding: 28px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
 }
 
 .deploy-card-header {
@@ -117,7 +115,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  animation: pulse-dot 2s ease-in-out infinite;
 }
 
 @keyframes pulse-dot {
@@ -177,15 +174,12 @@
 .provider-card.selected {
   border-color: var(--accent);
   background: rgba(92, 255, 179, 0.06);
-  box-shadow: 0 12px 26px rgba(92, 255, 179, 0.15);
 }
 
 .provider-card.coming-soon {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
-.provider-icon { font-size: 1.8rem; }
 .provider-name { font-weight: 600; font-size: 0.85rem; }
 
 .coming-soon-badge {
@@ -422,7 +416,7 @@
   margin-top: 60px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
-  background: linear-gradient(120deg, rgba(92, 255, 179, 0.12), rgba(255, 179, 71, 0.12));
+  background: rgba(92, 255, 179, 0.06);
 }
 
 .cta-section-inner {
@@ -439,20 +433,7 @@
   margin-top: 60px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-subtle);
-  background: linear-gradient(135deg, rgba(92, 255, 179, 0.08) 0%, rgba(92, 201, 255, 0.08) 100%);
-  position: relative;
-  overflow: hidden;
-}
-
-.deploy-cta-section::before {
-  content: '';
-  position: absolute;
-  top: -40%;
-  right: -20%;
-  width: 300px;
-  height: 300px;
-  background: radial-gradient(circle, rgba(92, 255, 179, 0.06) 0%, transparent 70%);
-  pointer-events: none;
+  background: rgba(92, 255, 179, 0.06);
 }
 
 .deploy-cta-inner {

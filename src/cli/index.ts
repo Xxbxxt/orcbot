@@ -26,6 +26,10 @@ dotenv.config(); // Local .env
 dotenv.config({ path: resolveDataHomePath('.env') }); // Global .env
 
 // ── ANSI color helpers (zero deps) ─────────────────────────────────────
+// Palette roles come from DESIGN.md. Keep this restrained: one accent
+// (cyan) plus neutrals, and green/yellow/red only where they mark real
+// state. The remaining hues are legacy and are being retired screen by
+// screen; do not introduce new decorative uses of them.
 const c = {
     reset: '\x1b[0m',
     bold: '\x1b[1m',
@@ -91,14 +95,14 @@ function box(lines: string[], opts: { title?: string; width?: number; color?: st
         title: opts.title,
         width: opts.width,
         paddingX: opts.padding,
-        borderColor: opts.color,
+        borderColor: opts.color ?? c.gray,
     });
 }
 
 async function showToolsManagerMenu() {
     console.clear();
     banner();
-    sectionHeader('🧰', 'Tools Manager');
+    sectionHeader('Tools Manager');
 
     const tools = agent.tools.listTools();
     const activeCount = tools.filter(t => t.active).length;
@@ -110,7 +114,7 @@ async function showToolsManagerMenu() {
         `${c.white}Active${c.reset}      ${activeCount > 0 ? `${c.brightGreen}${c.bold}${String(activeCount)}${c.reset}` : `${c.gray}0${c.reset}`}`,
         `${c.white}Approved${c.reset}    ${approvedCount > 0 ? `${c.brightGreen}${c.bold}${String(approvedCount)}${c.reset}` : `${c.gray}0${c.reset}`}`,
     ];
-    box(summaryLines, { title: '🧰 TOOL INVENTORY', width: 40, color: c.magenta });
+    box(summaryLines, { title: 'TOOL INVENTORY', width: 40 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -119,13 +123,13 @@ async function showToolsManagerMenu() {
             name: 'action',
             message: cyan('Tools Options:'),
             choices: [
-                { name: `  ➕ ${bold('Install Tool')}`, value: 'install' },
-                { name: `  ✅ ${bold('Approve Tool')}`, value: 'approve' },
-                { name: `  ⚡ ${bold('Activate / Deactivate Tool')}`, value: 'activate' },
-                { name: `  ▶️  ${bold('Run Tool Command')}`, value: 'run' },
-                { name: `  📖 ${bold('Read Tool README')}`, value: 'readme' },
-                { name: `  🗑️  ${bold('Uninstall Tool')}`, value: 'uninstall' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.magenta, c.gray])),
+                { name: `   ${bold('Install Tool')}`, value: 'install' },
+                { name: `   ${bold('Approve Tool')}`, value: 'approve' },
+                { name: `   ${bold('Activate / Deactivate Tool')}`, value: 'activate' },
+                { name: `  ▶  ${bold('Run Tool Command')}`, value: 'run' },
+                { name: `   ${bold('Read Tool README')}`, value: 'readme' },
+                { name: `    ${bold('Uninstall Tool')}`, value: 'uninstall' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -136,10 +140,10 @@ async function showToolsManagerMenu() {
     const pickToolName = async (label: string): Promise<string> => {
         if (tools.length > 0) {
             const choices = tools.map(t => ({
-                name: `${t.active ? green('●') : gray('○')} ${t.name} ${t.approved ? green('✔') : red('✖')}${t.description ? dim(` — ${t.description.slice(0, 40)}`) : ''}`,
+                name: `${t.active ? green('●') : gray('○')} ${t.name} ${t.approved ? green('✓') : red('✗')}${t.description ? dim(` — ${t.description.slice(0, 40)}`) : ''}`,
                 value: t.name
             }));
-            choices.push({ name: dim('  ✏️  Enter name manually'), value: '__manual__' });
+            choices.push({ name: dim('    Enter name manually'), value: '__manual__' });
             const { selected } = await inquirer.prompt([
                 { type: 'list', name: 'selected', message: label, choices }
             ]);
@@ -154,7 +158,7 @@ async function showToolsManagerMenu() {
     switch (action) {
         case 'install': {
             if (agent.config.get('safeMode')) {
-                console.log('\n🔒 Safe mode is enabled. Tool installation is disabled.');
+                console.log('\nSafe mode is enabled. Tool installation is disabled.');
                 break;
             }
             const { source } = await inquirer.prompt([
@@ -177,7 +181,7 @@ async function showToolsManagerMenu() {
             if (result.success && result.name) {
                 agent.tools.activateTool(result.name, true);
             }
-            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            console.log(`\n${result.success ? green('✓') : red('✗')} ${result.message}`);
             break;
         }
         case 'approve': {
@@ -188,7 +192,7 @@ async function showToolsManagerMenu() {
             ]);
             const allowedCommands = allowed ? allowed.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
             const result = agent.tools.approveTool(name, allowedCommands);
-            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            console.log(`\n${result.success ? green('✓') : red('✗')} ${result.message}`);
             break;
         }
         case 'activate': {
@@ -196,19 +200,19 @@ async function showToolsManagerMenu() {
             if (!name) break;
             const tool = agent.tools.getTool(name);
             if (!tool) {
-                console.log('\n❌ Tool not found.');
+                console.log('\nTool not found.');
                 break;
             }
             const { active } = await inquirer.prompt([
                 { type: 'confirm', name: 'active', message: `Set "${name}" active?`, default: !tool.active }
             ]);
             const result = agent.tools.activateTool(name, active);
-            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            console.log(`\n${result.success ? green('✓') : red('✗')} ${result.message}`);
             break;
         }
         case 'run': {
             if (agent.config.get('safeMode')) {
-                console.log('\n🔒 Safe mode is enabled. Tool execution is disabled.');
+                console.log('\nSafe mode is enabled. Tool execution is disabled.');
                 break;
             }
             const name = await pickToolName('Select tool to run');
@@ -223,19 +227,19 @@ async function showToolsManagerMenu() {
                 { type: 'input', name: 'cwd', message: 'Working dir relative to tool (optional):' }
             ]);
             const result = await agent.tools.runToolCommand(name, command, args || undefined, cwd || undefined);
-            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            console.log(`\n${result.success ? green('✓') : red('✗')} ${result.message}`);
             break;
         }
         case 'readme': {
             const name = await pickToolName('Select tool to read README');
             if (!name) break;
             const result = agent.tools.readToolReadme(name);
-            console.log(`\n${result.success ? '' : '❌ '}${result.message}`);
+            console.log(`\n${result.message}`);
             break;
         }
         case 'uninstall': {
             if (agent.config.get('safeMode')) {
-                console.log('\n🔒 Safe mode is enabled. Tool uninstall is disabled.');
+                console.log('\nSafe mode is enabled. Tool uninstall is disabled.');
                 break;
             }
             const name = await pickToolName('Select tool to uninstall');
@@ -245,7 +249,7 @@ async function showToolsManagerMenu() {
             ]);
             if (!confirm) break;
             const result = agent.tools.uninstallTool(name);
-            console.log(`\n${result.success ? '✅' : '❌'} ${result.message}`);
+            console.log(`\n${result.success ? green('✓') : red('✗')} ${result.message}`);
             break;
         }
     }
@@ -312,16 +316,6 @@ function sparkline(values: number[]): string {
     }).join('');
 }
 
-/** Gradient text effect (cycles through colors) */
-function gradient(text: string, colors: string[] = [c.brightCyan, c.cyan, c.brightMagenta, c.magenta, c.brightBlue]): string {
-    let result = '';
-    for (let i = 0; i < text.length; i++) {
-        const color = colors[i % colors.length];
-        result += `${color}${text[i]}`;
-    }
-    return result + c.reset;
-}
-
 /** Big block-letter OrcBot logo */
 function renderLogo() {
     const logoLines = [
@@ -332,10 +326,10 @@ function renderLogo() {
         ' ╚██████╔╝██║  ██║╚██████╗██████╔╝╚██████╔╝   ██║   ',
         '  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═════╝  ╚═════╝    ╚═╝   ',
     ];
-    // Bright top-half, slightly dimmer bottom-half — readable on dark and light terminals
-    const gradientColors = [c.brightCyan, c.brightCyan, c.cyan, c.cyan, c.brightMagenta, c.magenta];
-    for (let i = 0; i < logoLines.length; i++) {
-        console.log(`  ${gradientColors[i]}${logoLines[i]}${c.reset}`);
+    // The wordmark is the single accent on this screen. A uniform color keeps
+    // it an identity motif; the cyan-to-magenta rainbow it used to carry did not.
+    for (const line of logoLines) {
+        console.log(`  ${c.brightCyan}${line}${c.reset}`);
     }
 }
 
@@ -346,20 +340,18 @@ function banner() {
     const pkg = (() => { try { return JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')); } catch { return { version: '2.1.0' }; } })();
     const ver = pkg.version || '2.1.0';
     console.log(`  ${c.white}Autonomous AI Agent Framework${c.reset}  ${c.gray}│${c.reset}  ${c.brightCyan}v${ver}${c.reset}`);
-    console.log(`  ${c.white}by${c.reset} ${c.brightCyan}${c.bold}Frederick Abila${c.reset}  ${c.gray}│${c.reset}  ${c.cyan}github.com/fredabila/orcbot${c.reset}`);
+    console.log(`  ${c.white}by${c.reset} ${c.bold}${c.white}Frederick Abila${c.reset}  ${c.gray}│${c.reset}  ${c.gray}github.com/fredabila/orcbot${c.reset}`);
     console.log(`  ${c.gray}${'─'.repeat(54)}${c.reset}`);
     console.log('');
 }
 
-function sectionHeader(emoji: string, title: string) {
-    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
-    const titleText = `${emoji}  ${title}`;
-    const w = Math.max(48, stripAnsi(titleText).length + 4);
+function sectionHeader(title: string) {
+    // One accent on the title (the screen's focal element) and a dim rule under
+    // it. The old triple-line double box framed every screen the same way and
+    // carried a decorative emoji; neither is needed to mark a section.
     console.log('');
-    // Filled background strip: accent color border + bold white text for maximum legibility
-    console.log(`  ${c.brightCyan}╔${'═'.repeat(w)}╗${c.reset}`);
-    console.log(`  ${c.brightCyan}║${c.reset} ${c.bold}${c.brightWhite}${titleText}${c.reset}${' '.repeat(Math.max(0, w - stripAnsi(titleText).length - 1))}${c.brightCyan}║${c.reset}`);
-    console.log(`  ${c.brightCyan}╚${'═'.repeat(w)}╝${c.reset}`);
+    console.log(`  ${c.brightCyan}${c.bold}${title}${c.reset}`);
+    console.log(`  ${c.gray}${'─'.repeat(Math.max(8, title.length))}${c.reset}`);
 }
 
 function kvLine(key: string, value: string, indent = '  ') {
@@ -367,10 +359,10 @@ function kvLine(key: string, value: string, indent = '  ') {
     console.log(`${indent}  ${c.white}${c.bold}${key}${c.reset}  ${value}`);
 }
 
+/** State label. Color is the signal (DESIGN.md): green when the thing is
+ *  really on, gray when it is off. No filled background block. */
 function statusBadge(ok: boolean, onLabel = 'ON', offLabel = 'OFF'): string {
-    return ok
-        ? `${c.bgGreen}${c.bold}${c.white} ${onLabel} ${c.reset}`
-        : `${c.bgGray}${c.bold}${c.white} ${offLabel} ${c.reset}`;
+    return ok ? `${c.brightGreen}${onLabel}${c.reset}` : `${c.gray}${offLabel}${c.reset}`;
 }
 
 /** Status dot with label */
@@ -391,10 +383,10 @@ process.on('uncaughtException', (err) => {
 /** Connect the global event bus to the CLI for real-time feedback. */
 function setupEventSubscriptions() {
     let currentLlmStream = '';
-    
+
     eventBus.on('llm:token', (data: any) => {
         if (!currentLlmStream) {
-            process.stdout.write(`\n${c.brightCyan}🤖 Agent:${c.reset} `);
+            process.stdout.write(`\n${c.brightCyan}Agent:${c.reset} `);
         }
         currentLlmStream += data.token;
         process.stdout.write(data.token);
@@ -412,11 +404,11 @@ function setupEventSubscriptions() {
     });
 
     eventBus.on('task:step:start', (data: any) => {
-        console.log(`\n${c.brightYellow}🧭 Step ${data.step}:${c.reset} ${c.bold}${data.description}${c.reset}`);
+        console.log(`\n${c.brightYellow}Step ${data.step}:${c.reset} ${c.bold}${data.description}${c.reset}`);
     });
 
     eventBus.on('tool:call', (data: any) => {
-        console.log(`${c.magenta}⚡ Tool:${c.reset} ${c.bold}${data.name}${c.reset} ${c.dim}${JSON.stringify(data.arguments || {})}${c.reset}`);
+        console.log(`${c.magenta}Tool:${c.reset} ${c.bold}${data.name}${c.reset} ${c.dim}${JSON.stringify(data.arguments || {})}${c.reset}`);
     });
 }
 
@@ -485,13 +477,13 @@ skillCmd
         );
 
         if (source.startsWith('http://') || source.startsWith('https://')) {
-            console.log(`📦 Installing skill from ${source}...`);
+            console.log(`Installing skill from ${source}...`);
             const result = await sm.installSkillFromUrl(source);
-            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            console.log(result.success ? `${result.message}` : `${result.message}`);
         } else {
-            console.log(`📦 Installing skill from ${source}...`);
+            console.log(`Installing skill from ${source}...`);
             const result = await sm.installSkillFromPath(source);
-            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            console.log(result.success ? `${result.message}` : `${result.message}`);
         }
     });
 
@@ -509,7 +501,7 @@ skillCmd
         );
 
         const result = sm.initSkill(name, options.description);
-        console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+        console.log(result.success ? `${result.message}` : `${result.message}`);
         if (result.success) {
             console.log(`\nNext steps:`);
             console.log(`  1. Edit ${path.join(result.path, 'SKILL.md')}`);
@@ -540,7 +532,7 @@ skillCmd
 
         console.log(`\n${skills.length} Agent Skills installed:\n`);
         for (const s of skills) {
-            const status = s.activated ? '🟢 Active' : '⚪ Inactive';
+            const status = s.activated ? 'Active' : 'Inactive';
             console.log(`${status} ${s.meta.name}`);
             console.log(`  ${s.meta.description}`);
             if (s.scripts.length > 0) console.log(`  Scripts: ${s.scripts.join(', ')}`);
@@ -574,9 +566,9 @@ skillCmd
 
         const result = sm.validateSkill(skillDir);
         if (result.valid) {
-            console.log(`✅ Skill "${name}" is valid.`);
+            console.log(`Skill "${name}" is valid.`);
         } else {
-            console.log(`❌ ${result.errors.length} issue(s):`);
+            console.log(`${result.errors.length} issue(s):`);
             result.errors.forEach((e: string) => console.log(`  - ${e}`));
             process.exitCode = 1;
         }
@@ -615,7 +607,7 @@ program
             }
             try {
                 process.kill(pid, 'SIGTERM');
-                console.log(`   ✅ Sent SIGTERM to ${label} (PID: ${pid})`);
+                console.log(`    Sent SIGTERM to ${label} (PID: ${pid})`);
 
                 // If --force, also send SIGKILL after a short wait
                 if (options.force) {
@@ -623,18 +615,18 @@ program
                         try {
                             process.kill(pid, 0);
                             process.kill(pid, 'SIGKILL');
-                            console.log(`   🔪 Force-killed ${label} (PID: ${pid})`);
+                            console.log(`    Force-killed ${label} (PID: ${pid})`);
                         } catch { }
                     }, 2000);
                 }
                 return true;
             } catch (e: any) {
-                console.log(`   ❌ Failed to stop ${label} (PID: ${pid}): ${e.message}`);
+                console.log(`    Failed to stop ${label} (PID: ${pid}): ${e.message}`);
                 return false;
             }
         };
 
-        console.log('\n🛑 Stopping all OrcBot processes...\n');
+        console.log('\nStopping all OrcBot processes...\n');
 
         // 1. Lock file (main agent / background / gateway processes)
         const lockPath = path.join(dataDir, 'orcbot.lock');
@@ -719,7 +711,7 @@ program
                         if (e?.code === 'ESRCH') {
                             // Process doesn't exist, stale lock - remove it
                             fs.unlinkSync(lockPath);
-                            console.log('🧹 Cleaned up stale lock file from previous crashed instance.');
+                            console.log('Cleaned up stale lock file from previous crashed instance.');
                         }
                     }
                 }
@@ -730,7 +722,7 @@ program
 
         // Block if existing instance found
         if (existingInstance && !options.daemonChild && !options.backgroundChild) {
-            console.error('\n❌ OrcBot is already running!');
+            console.error('\nOrcBot is already running!');
             console.error(`   PID: ${existingInstance.pid}`);
             console.error(`   Started: ${existingInstance.startedAt}`);
             console.error(`   Host: ${existingInstance.host}`);
@@ -764,7 +756,7 @@ program
             );
 
             child.unref();
-            console.log('\n✅ OrcBot is running in the background.');
+            console.log('\nOrcBot is running in the background.');
             console.log(`   Log file: ${logPath}`);
             console.log('   Stop with: orcbot stop');
             return;
@@ -788,7 +780,7 @@ program
             await gateway.start();
             gateway.setAgentLoopStarted(true);
             logger.info(`Gateway server started on ${host}:${port} (auto-start via run command)`);
-            console.log(`🌐 Gateway server listening on http://${host}:${port}`);
+            console.log(`Gateway server listening on http://${host}:${port}`);
             process.on('SIGINT', () => { gateway.stop(); process.exit(0); });
         };
 
@@ -801,7 +793,7 @@ program
         } else {
             // Foreground mode - check if daemon is already running
             if (status.running) {
-                console.error('\n❌ Cannot start in foreground mode: OrcBot daemon is already running');
+                console.error('\nCannot start in foreground mode: OrcBot daemon is already running');
                 console.error(`   Daemon PID: ${status.pid}`);
                 console.error(`   PID file: ${daemonManager.getPidFile()}`);
                 console.error('\n   To stop the daemon first, run:');
@@ -826,7 +818,7 @@ program
     .argument('[id]', 'Agent ID (required for start/stop/restart/terminate)')
     .action(async (action, id) => {
         const cmd = String(action).toLowerCase();
-        
+
         if (cmd === 'list') {
             const agents = agent.orchestrator.getAgents();
             if (agents.length === 0) {
@@ -846,13 +838,13 @@ program
         }
 
         if (!id) {
-            console.error(`❌ Error: Agent ID is required for action '${cmd}'`);
+            console.error(`Error: Agent ID is required for action '${cmd}'`);
             return;
         }
 
         const agentInstance = agent.orchestrator.getAgent(id);
         if (!agentInstance) {
-            console.error(`❌ Error: Agent '${id}' not found.`);
+            console.error(`Error: Agent '${id}' not found.`);
             return;
         }
 
@@ -863,7 +855,7 @@ program
                 } else {
                     console.log(`Starting agent ${id}... (Requires primary OrcBot to be running)`);
                     const success = agent.orchestrator.startWorkerProcess(agentInstance);
-                    console.log(success ? `✅ Agent ${id} started.` : `❌ Failed to start agent ${id}.`);
+                    console.log(success ? `Agent ${id} started.` : `Failed to start agent ${id}.`);
                 }
                 break;
             case 'stop':
@@ -871,7 +863,7 @@ program
                     console.log(`Agent ${id} is not running.`);
                 } else {
                     const success = agent.orchestrator.stopWorkerProcess(id);
-                    console.log(success ? `✅ Agent ${id} stopped.` : `❌ Failed to stop agent ${id}.`);
+                    console.log(success ? `Agent ${id} stopped.` : `Failed to stop agent ${id}.`);
                 }
                 break;
             case 'restart':
@@ -879,7 +871,7 @@ program
                 agent.orchestrator.stopWorkerProcess(id);
                 setTimeout(() => {
                     const success = agent.orchestrator.startWorkerProcess(agentInstance);
-                    console.log(success ? `✅ Agent ${id} restarted.` : `❌ Failed to restart agent ${id}.`);
+                    console.log(success ? `Agent ${id} restarted.` : `Failed to restart agent ${id}.`);
                 }, 3000);
                 break;
             case 'terminate':
@@ -891,11 +883,11 @@ program
                 }]);
                 if (confirm) {
                     const success = agent.orchestrator.terminateAgent(id);
-                    console.log(success ? `✅ Agent ${id} terminated.` : `❌ Failed to terminate agent ${id}.`);
+                    console.log(success ? `Agent ${id} terminated.` : `Failed to terminate agent ${id}.`);
                 }
                 break;
             default:
-                console.error(`❌ Unknown action: ${cmd}`);
+                console.error(`Unknown action: ${cmd}`);
         }
     });
 
@@ -939,7 +931,7 @@ program
         const daemon = DaemonManager.createDefault();
         const daemonStatus = daemon.isRunning();
         if (daemonStatus.running) {
-            console.error(`\n  ${c.red}${c.bold}❌ Cannot reset: OrcBot daemon is currently running (PID: ${daemonStatus.pid}).${c.reset}`);
+            console.error(`\n  ${c.red}${c.bold}Cannot reset: OrcBot daemon is currently running (PID: ${daemonStatus.pid}).${c.reset}`);
             console.error(`     Please stop it first: ${c.white}orcbot stop${c.reset}\n`);
             return;
         }
@@ -947,7 +939,7 @@ program
         if (isFullReset) {
             console.log('');
             box([
-                `${c.red}${c.bold}⚠  This will clear EVERYTHING:${c.reset}`,
+                `${c.red}${c.bold}This will clear EVERYTHING:${c.reset}`,
                 '',
                 `  ${c.yellow}●${c.reset} Memory & action queue`,
                 `  ${c.yellow}●${c.reset} Identity files (USER.md, .AI.md, JOURNAL, LEARNING)`,
@@ -967,7 +959,7 @@ program
             ]);
             if (confirm) {
                 await agent.resetMemory();
-                console.log(`\n  ${c.green}✔${c.reset} Agent has been ${c.bold}fully reset${c.reset} to factory settings.\n`);
+                console.log(`\n  ${c.green}✓${c.reset} Agent has been ${c.bold}fully reset${c.reset} to factory settings.\n`);
             }
         } else {
             const selected = Object.entries({
@@ -996,7 +988,7 @@ program
                     bootstrap: opts.bootstrap,
                     schedules: opts.schedules,
                 });
-                console.log(`\n  ${c.green}✔${c.reset} Reset complete for: ${selected.join(', ')}\n`);
+                console.log(`\n  ${c.green}✓${c.reset} Reset complete for: ${selected.join(', ')}\n`);
             }
         }
     });
@@ -1032,22 +1024,22 @@ program
                 }
 
                 if (isRunning) {
-                    console.log('🟢 OrcBot is RUNNING');
+                    console.log('OrcBot is RUNNING');
                     console.log(`   PID: ${lockData.pid}`);
                     console.log(`   Started: ${lockData.startedAt}`);
                     console.log(`   Host: ${lockData.host}`);
                     console.log(`   Working Dir: ${lockData.cwd}`);
                     console.log('\n   To stop: orcbot stop');
                 } else {
-                    console.log('🔴 OrcBot is NOT running (stale lock file found)');
+                    console.log('OrcBot is NOT running (stale lock file found)');
                     fs.unlinkSync(lockPath);
-                    console.log('   🧹 Cleaned up stale lock file.');
+                    console.log('    Cleaned up stale lock file.');
                 }
             } catch (e) {
-                console.log('🔴 OrcBot is NOT running');
+                console.log('OrcBot is NOT running');
             }
         } else {
-            console.log('🔴 OrcBot is NOT running');
+            console.log('OrcBot is NOT running');
             console.log('\n   To start: orcbot run  OR  systemctl start orcbot');
         }
 
@@ -1102,7 +1094,7 @@ program
                 `${c.white}Active${c.reset}      ${brightCyan(llm.activeProvider)} ${dim(`(${llm.activeModel})`)}`,
                 `${c.white}pi-ai${c.reset}       ${llm.usePiAI ? brightGreen('enabled') : gray('disabled')}`,
                 `${c.white}Schema${c.reset}      ${llm.schemaContractOk ? brightGreen('valid') : brightRed('broken')}`,
-            ], { title: '🧠 LLM COMPATIBILITY', width: 72, color: llm.schemaContractOk ? c.green : c.red });
+            ], { title: 'LLM COMPATIBILITY', width: 72, color: llm.schemaContractOk ? c.green : c.red });
             console.log('');
             table(rows, { headerColor: brightWhite });
             console.log('');
@@ -1123,7 +1115,7 @@ program
             `${c.white}Warnings${c.reset}  ${report.summary.warn > 0 ? brightYellow(bold(String(report.summary.warn))) : green('0')}`,
             `${c.white}Info${c.reset}      ${report.summary.info > 0 ? brightCyan(String(report.summary.info)) : gray('0')}`,
         ];
-        box(summaryLines, { title: '🩺 DOCTOR SUMMARY', width: 40, color: report.summary.critical > 0 ? c.red : (report.summary.warn > 0 ? c.yellow : c.green) });
+        box(summaryLines, { title: 'DOCTOR SUMMARY', width: 40, color: report.summary.critical > 0 ? c.red : (report.summary.warn > 0 ? c.yellow : c.green) });
         console.log('');
 
         if (report.findings.length === 0) {
@@ -1289,9 +1281,9 @@ program
                 if (status.running && status.pid) {
                     try {
                         process.kill(status.pid, 'SIGTERM');
-                        console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
+                        console.log(`Sent stop signal to daemon (PID: ${status.pid})`);
                     } catch (error) {
-                        console.error(`❌ Failed to stop daemon: ${error}`);
+                        console.error(`Failed to stop daemon: ${error}`);
                         process.exit(1);
                     }
                 }
@@ -1305,11 +1297,11 @@ program
                 if (status.running && status.pid) {
                     try {
                         process.kill(status.pid, 'SIGTERM');
-                        console.log(`✅ Sent stop signal to daemon (PID: ${status.pid})`);
+                        console.log(`Sent stop signal to daemon (PID: ${status.pid})`);
                         console.log('   Use "orcbot daemon status" to verify it stopped');
                         console.log('   Or use "orcbot stop" to stop all OrcBot processes');
                     } catch (error) {
-                        console.error(`❌ Failed to stop daemon: ${error}`);
+                        console.error(`Failed to stop daemon: ${error}`);
                         process.exit(1);
                     }
                 } else {
@@ -1362,7 +1354,7 @@ program
             });
 
             child.unref();
-            console.log('\n✅ OrcBot Gateway is running in the background.');
+            console.log('\nOrcBot Gateway is running in the background.');
             console.log(`   Port: ${options.port || 3100}`);
             console.log(`   Log file: ${logPath}`);
             console.log('   Stop with: pkill -f "orcbot gateway --background-child"');
@@ -1381,10 +1373,10 @@ program
 
         const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
 
-        console.log('\n🌐 Starting OrcBot Web Gateway...');
+        console.log('\nStarting OrcBot Web Gateway...');
         await gateway.start();
 
-        console.log(`\n📡 Gateway is ready!`);
+        console.log(`\nGateway is ready!`);
         console.log(`   REST API: http://${gatewayConfig.host}:${gatewayConfig.port}/api`);
         console.log(`   WebSocket: ws://${gatewayConfig.host}:${gatewayConfig.port}`);
         if (gatewayConfig.apiKey) {
@@ -1401,11 +1393,11 @@ program
         console.log('\n   Press Ctrl+C to stop\n');
 
         if (options.withAgent) {
-            console.log('🤖 Also starting agent loop...\n');
+            console.log('Also starting agent loop...\n');
             gateway.setAgentLoopStarted(true);
             agent.start().catch(err => logger.error(`Agent error: ${err}`));
         } else {
-            console.log('💡 Tip: Add --with-agent to also run the agent loop\n');
+            console.log('Tip: Add --with-agent to also run the agent loop\n');
         }
 
         if (options.withMcp) {
@@ -1419,7 +1411,7 @@ program
                 startAgentLoop: false // agent loop managed by gateway
             });
             await mcp.startHttp(resolved);
-            console.log(`🔌 MCP HTTP server running at http://${resolved.host}:${resolved.port}${resolved.path}`);
+            console.log(`MCP HTTP server running at http://${resolved.host}:${resolved.port}${resolved.path}`);
             console.log(`   Health check: http://${resolved.host === '0.0.0.0' ? 'localhost' : resolved.host}:${resolved.port}/health`);
             process.on('SIGINT', async () => { await mcp.close(); });
         }
@@ -1532,7 +1524,7 @@ lightpandaCommand
         const platform = process.platform;
         const arch = process.arch;
 
-        console.log('\n🐼 Installing Lightpanda browser...\n');
+        console.log('\nInstalling Lightpanda browser...\n');
 
         // Determine download URL based on platform
         let downloadUrl: string;
@@ -1543,7 +1535,7 @@ lightpandaCommand
         } else if (platform === 'darwin' && arch === 'arm64') {
             downloadUrl = 'https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-aarch64-macos';
         } else if (platform === 'win32') {
-            console.error('❌ Lightpanda is not available natively on Windows.');
+            console.error('Lightpanda is not available natively on Windows.');
             console.log('\n   Use WSL2 instead:');
             console.log('   1. Open WSL terminal');
             console.log('   2. Run: curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux');
@@ -1552,13 +1544,13 @@ lightpandaCommand
             console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
             process.exit(1);
         } else if (platform === 'darwin' && arch === 'x64') {
-            console.error('❌ Lightpanda is not yet available for macOS Intel (x64).');
+            console.error('Lightpanda is not yet available for macOS Intel (x64).');
             console.log('\n   Only macOS ARM64 (Apple Silicon) is supported.');
             console.log('\n   Alternative: Use Docker:');
             console.log('   docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly');
             process.exit(1);
         } else {
-            console.error(`❌ Lightpanda is not available for ${platform}/${arch}`);
+            console.error(`Lightpanda is not available for ${platform}/${arch}`);
             console.log('\n   Supported platforms:');
             console.log('   - Linux x64');
             console.log('   - macOS ARM64 (Apple Silicon)');
@@ -1630,7 +1622,7 @@ lightpandaCommand
             // Make executable
             fs.chmodSync(binaryPath, 0o755);
 
-            console.log('✅ Lightpanda installed successfully!\n');
+            console.log('Lightpanda installed successfully!\n');
             console.log('   Next steps:');
             console.log(`   1. Start Lightpanda: orcbot lightpanda start`);
             console.log(`   2. Enable in config: orcbot config set browserEngine lightpanda`);
@@ -1641,7 +1633,7 @@ lightpandaCommand
             console.log(`   ✓ Config updated: lightpandaPath = ${binaryPath}`);
 
         } catch (error: any) {
-            console.error(`\n❌ Installation failed: ${error.message}`);
+            console.error(`\nInstallation failed: ${error.message}`);
             console.log('\n   Manual installation (Linux):');
             console.log('   curl -L -o lightpanda https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-x86_64-linux');
             console.log('   chmod a+x ./lightpanda');
@@ -1663,14 +1655,14 @@ lightpandaCommand
         const lightpandaPath = agent.config.get('lightpandaPath') || resolveDataHomePath('lightpanda', 'lightpanda');
 
         if (!fs.existsSync(lightpandaPath)) {
-            console.error('❌ Lightpanda not found. Run: orcbot lightpanda install');
+            console.error('Lightpanda not found. Run: orcbot lightpanda install');
             process.exit(1);
         }
 
         const { spawn } = require('child_process');
         const args = ['serve', '--host', options.host, '--port', options.port, '--timeout', options.timeout];
 
-        console.log(`\n🐼 Starting Lightpanda browser...`);
+        console.log(`\nStarting Lightpanda browser...`);
         console.log(`   Binary: ${lightpandaPath}`);
         console.log(`   Endpoint: ws://${options.host}:${options.port}\n`);
 
@@ -1688,7 +1680,7 @@ lightpandaCommand
             fs.writeFileSync(pidPath, String(child.pid));
             child.unref();
 
-            console.log('✅ Lightpanda running in background');
+            console.log('Lightpanda running in background');
             console.log(`   PID: ${child.pid}`);
             console.log(`   Log: ${logPath}`);
             console.log(`   Stop with: orcbot lightpanda stop\n`);
@@ -1705,7 +1697,7 @@ lightpandaCommand
             });
 
             child.on('error', (err: Error) => {
-                console.error(`❌ Failed to start: ${err.message}`);
+                console.error(`Failed to start: ${err.message}`);
             });
 
             child.on('exit', (code: number) => {
@@ -1729,13 +1721,13 @@ lightpandaCommand
             const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
             process.kill(pid, 'SIGTERM');
             fs.unlinkSync(pidPath);
-            console.log(`✅ Stopped Lightpanda (PID: ${pid})`);
+            console.log(`Stopped Lightpanda (PID: ${pid})`);
         } catch (e: any) {
             if (e.code === 'ESRCH') {
                 fs.unlinkSync(pidPath);
                 console.log('Lightpanda was not running (stale PID file cleaned up)');
             } else {
-                console.error(`❌ Failed to stop: ${e.message}`);
+                console.error(`Failed to stop: ${e.message}`);
             }
         }
     });
@@ -1749,13 +1741,13 @@ lightpandaCommand
         const endpoint = agent.config.get('lightpandaEndpoint') || 'ws://127.0.0.1:9222';
         const engineSetting = agent.config.get('browserEngine') || 'puppeteer';
 
-        console.log('\n🐼 Lightpanda Status\n');
+        console.log('\nLightpanda Status\n');
 
         // Installation status
         if (lightpandaPath && fs.existsSync(lightpandaPath)) {
-            console.log(`   ✅ Installed: ${lightpandaPath}`);
+            console.log(`    Installed: ${lightpandaPath}`);
         } else {
-            console.log('   ❌ Not installed (run: orcbot lightpanda install)');
+            console.log('    Not installed (run: orcbot lightpanda install)');
         }
 
         // Running status
@@ -1763,21 +1755,21 @@ lightpandaCommand
             try {
                 const pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);
                 process.kill(pid, 0); // Check if running
-                console.log(`   ✅ Running: PID ${pid}`);
+                console.log(`    Running: PID ${pid}`);
             } catch {
                 fs.unlinkSync(pidPath);
-                console.log('   ⚪ Not running');
+                console.log('    Not running');
             }
         } else {
-            console.log('   ⚪ Not running');
+            console.log('    Not running');
         }
 
         // Config status
-        console.log(`   📡 Endpoint: ${endpoint}`);
-        console.log(`   ⚙️  Browser engine: ${engineSetting}`);
+        console.log(`    Endpoint: ${endpoint}`);
+        console.log(`     Browser engine: ${engineSetting}`);
 
         if (engineSetting !== 'lightpanda') {
-            console.log('\n   💡 To enable: orcbot config set browserEngine lightpanda');
+            console.log('\n    To enable: orcbot config set browserEngine lightpanda');
         }
 
         console.log('');
@@ -1788,7 +1780,7 @@ lightpandaCommand
     .description('Enable Lightpanda as the default browser engine')
     .action(() => {
         agent.config.set('browserEngine', 'lightpanda');
-        console.log('✅ Browser engine set to Lightpanda');
+        console.log('Browser engine set to Lightpanda');
         console.log('   Make sure Lightpanda is running: orcbot lightpanda start -b');
     });
 
@@ -1797,7 +1789,7 @@ lightpandaCommand
     .description('Switch back to Puppeteer (Chrome)')
     .action(() => {
         agent.config.set('browserEngine', 'puppeteer');
-        console.log('✅ Browser engine set to Puppeteer (Chrome)');
+        console.log('Browser engine set to Puppeteer (Chrome)');
     });
 
 // ── Latency Benchmark ──────────────────────────────────────────────────
@@ -1826,7 +1818,7 @@ async function runLatencyBenchmark(opts: { includeLLM?: boolean; interactive?: b
     const { performance } = await import('perf_hooks');
     const results: BenchmarkResult[] = [];
 
-    sectionHeader('⏱️', 'Latency Benchmark');
+    sectionHeader('Latency Benchmark');
     console.log(dim('  Measuring key subsystem latencies...\n'));
 
     // ── 1. Bootstrap file loading (cold) ────────────────────────────────
@@ -2031,7 +2023,7 @@ async function runLatencyBenchmark(opts: { includeLLM?: boolean; interactive?: b
         summaryLines.push(`${dim(nameStr)}${red('FAILED'.padStart(24))}  ${dim(r.error?.slice(0, 40) || '')}`);
     }
 
-    box(summaryLines, { title: 'BENCHMARK RESULTS', width: 78, color: c.brightCyan });
+    box(summaryLines, { title: 'BENCHMARK RESULTS', width: 78 });
 
     // ── Totals and ratings ──────────────────────────────────────────────
     const totalLocal = successResults
@@ -2296,13 +2288,13 @@ function renderWorldView(
 ): void {
     console.clear();
     banner();
-    sectionHeader('🌍', 'World Events');
+    sectionHeader('World Events');
 
     if (error) {
         box([
             red('Data fetch failed'),
             dim(error)
-        ], { title: '⚠️  DATA ERROR', width: 74, color: c.red });
+        ], { title: 'DATA ERROR', width: 74, color: c.red });
         console.log('');
     }
 
@@ -2322,7 +2314,7 @@ function renderWorldView(
         `${dim('Top roots')} ${topRoots}`
     ];
 
-    box(signalLines, { title: '📈 SIGNALS', width: 74, color: c.green });
+    box(signalLines, { title: 'SIGNALS', width: 74 });
     console.log('');
 
     const legendLines = [
@@ -2338,7 +2330,7 @@ function renderWorldView(
                     : `${dim('Renderer')} Flat map with overlay points`
     ];
     const topLines = getTopEventLines(events, 6);
-    box([...legendLines, '', dim('Top events:'), ...topLines], { title: '🧭 LEGEND & TOP EVENTS', width: 74, color: c.brightCyan });
+    box([...legendLines, '', dim('Top events:'), ...topLines], { title: 'LEGEND & TOP EVENTS', width: 74 });
     console.log('');
 
     let viewLines: string[] | null = null;
@@ -2351,13 +2343,13 @@ function renderWorldView(
             : renderMapFrame(events, 68, 18);
     }
     const title = globeMode === 'ascii'
-        ? '🌐 LIVE GLOBE'
+        ? 'LIVE GLOBE'
         : globeMode === 'external'
-            ? '🌐 EXTERNAL GLOBE'
+            ? 'EXTERNAL GLOBE'
             : globeMode === 'mapscii'
-                ? '🗺️ MAPSCII'
-                : '🗺️ LIVE MAP';
-    box(viewLines, { title, width: 74, color: c.cyan });
+                ? 'MAPSCII'
+                : 'LIVE MAP';
+    box(viewLines, { title, width: 74 });
     console.log('');
     console.log(dim(`  Updated: ${new Date().toLocaleTimeString()}  |  Showing ${Math.min(events.length, 250)} points`));
 }
@@ -2827,7 +2819,7 @@ Rules:
     async function showAiTunerMenu() {
         console.clear();
         banner();
-        sectionHeader('🎛️', 'AI Tuner');
+        sectionHeader('AI Tuner');
 
         const profilesDir = tunerProfilesDir();
         if (!fs.existsSync(profilesDir)) fs.mkdirSync(profilesDir, { recursive: true });
@@ -2839,7 +2831,7 @@ Rules:
             `${dim('Profiles')} ${brightCyan(bold(String(profiles.length)))} saved preset(s)`,
             `${dim('Writes')} IDENTITY.md, SOUL.md, AGENTS.md ${dim('+ optional SKILL.md scaffolds')}`,
             `${dim('Smart Mode')} ${hasConnectedLlmForTuner() ? green('LLM available') : yellow('fallback mode only')}`
-        ], { title: 'AI TUNER STATUS', width: 72, color: c.cyan });
+        ], { title: 'AI TUNER STATUS', width: 72 });
         console.log('');
 
         const { action } = await inquirer.prompt([
@@ -2848,9 +2840,9 @@ Rules:
                 name: 'action',
                 message: cyan('AI Tuner Options:'),
                 choices: [
-                    { name: `  🧭 ${bold('Run Guided Questionnaire')}`, value: 'guided' },
-                    { name: `  ♻️  ${bold('Apply Saved Profile')}`, value: 'apply_saved' },
-                    { name: `  📚 ${bold('List Saved Profiles')}`, value: 'list' },
+                    { name: `   ${bold('Run Guided Questionnaire')}`, value: 'guided' },
+                    { name: `    ${bold('Apply Saved Profile')}`, value: 'apply_saved' },
+                    { name: `   ${bold('List Saved Profiles')}`, value: 'list' },
                     { name: dim('  ← Back'), value: 'back' }
                 ]
             }
@@ -2907,7 +2899,7 @@ Rules:
             const result = applyTunerPreset(preset, { writeSkills, overwriteSkills, artifacts: artifacts || undefined });
             const peerSync = applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
             const okCount = result.fileResults.filter(r => r.ok).length;
-            console.log(`\n✅ Applied profile ${bold(preset.profileName)} (${okCount}/${result.fileResults.length} bootstrap files updated).`);
+            console.log(`\nApplied profile ${bold(preset.profileName)} (${okCount}/${result.fileResults.length} bootstrap files updated).`);
             if (smartMode) {
                 console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
             }
@@ -3041,7 +3033,7 @@ Rules:
         const peerSync = answers.applyToPeers ? applyPresetToPeerInstances(preset, artifacts || undefined) : { updated: [], failed: [] };
 
         const okCount = result.fileResults.filter(r => r.ok).length;
-        console.log(`\n✅ AI tuning applied for ${bold(preset.profileName)}.`);
+        console.log(`\nAI tuning applied for ${bold(preset.profileName)}.`);
         console.log(`   Bootstrap updates: ${okCount}/${result.fileResults.length}`);
         if (preset.llmAssisted) {
             console.log(`   Smart mode: ${artifacts ? green('LLM-guided artifacts used') : yellow('fallback templates used')}`);
@@ -3077,21 +3069,23 @@ async function showMainMenu() {
     const agentName = agent.config.get('agentName') || 'OrcBot';
     const sudoMode = agent.config.get('sudoMode');
 
-    const channelDots = [
-        hasTelegram ? `${c.brightCyan}TG${c.reset}` : `${c.gray}TG${c.reset}`,
-        hasWhatsapp ? `${c.brightGreen}WA${c.reset}` : `${c.gray}WA${c.reset}`,
-        hasDiscord ? `${c.brightMagenta}DC${c.reset}` : `${c.gray}DC${c.reset}`,
-        hasSlack ? `${c.brightYellow}SL${c.reset}` : `${c.gray}SL${c.reset}`,
-    ].join(dim(' │ '));
+    // Connected-or-not is the signal, not which channel it is: one state color,
+    // not four accents. Email is listed here too so the tokens match the count.
+    const channelTags: Array<[string, boolean]> = [
+        ['TG', hasTelegram], ['WA', hasWhatsapp], ['DC', hasDiscord], ['SL', hasSlack], ['EM', hasEmail],
+    ];
+    const channelDots = channelTags
+        .map(([tag, on]) => `${on ? c.brightGreen : c.gray}${tag}${c.reset}`)
+        .join(dim(' │ '));
 
     const auActive = agent.agenticUser?.isActive();
     const auEnabled = !!agent.config.get('agenticUserEnabled');
 
     // Use white for key labels so they're legible; reserve dim only for secondary info
     box([
-        `${c.white}Agent${c.reset}    ${c.bold}${c.brightWhite}${agentName}${c.reset}${sudoMode ? `  ${c.bgRed}${c.bold}${c.white} SUDO ${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.bgRed}${c.bold}${c.white} OVERRIDE ${c.reset}` : ''}`,
+        `${c.white}Agent${c.reset}    ${c.bold}${c.brightWhite}${agentName}${c.reset}${sudoMode ? `  ${c.brightRed}${c.bold}SUDO${c.reset}` : ''}${agent.config.get('overrideMode') ? `  ${c.brightRed}${c.bold}OVERRIDE${c.reset}` : ''}`,
         `${c.white}Model${c.reset}    ${brightCyan(bold(model))} ${dim('via')} ${c.white}${provider}${c.reset}`,
-        `${c.white}Channels${c.reset} ${channelDots} ${hasEmail ? '📧 ' : ''} ${dim(`(${channelCount}/5 active)`)}`,
+        `${c.white}Channels${c.reset} ${channelDots} ${dim(`(${channelCount}/5 active)`)}`,
         `${c.white}HITL${c.reset}     ${auActive ? `${c.brightGreen}${c.bold}● Active${c.reset}` : auEnabled ? `${c.yellow}● Standby${c.reset}` : `${c.gray}○ Off${c.reset}`}`,
         `${c.gray}${'─'.repeat(52)}${c.reset}`,
         `${c.white}Queue${c.reset}    ${pendingCount > 0 ? `${c.yellow}${c.bold}${String(pendingCount)}${c.reset} ${c.white}active${c.reset}` : `${c.brightGreen}● idle${c.reset}`}${queueLen > pendingCount ? `  ${dim(`${queueLen - pendingCount} completed`)}` : ''}`,
@@ -3103,34 +3097,34 @@ async function showMainMenu() {
         message: `${c.bold}${c.brightWhite}What would you like to do?${c.reset}`,
         maxItems: 24,
         options: [
-            { label: `── RUN ───────────────────────────────────`, value: 'separator_run', disabled: true },
-            { label: `  ${c.brightGreen}▶${c.reset}  ${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
-            { label: `  ${c.yellow}📋${c.reset}  Push Task`, value: 'push' },
-            { label: `  ${c.cyan}📊${c.reset}  View Status`, value: 'status' },
-            { label: `── CONFIGURE ─────────────────────────────`, value: 'separator_config', disabled: true },
-            { label: `  ${c.magenta}🧠${c.reset}  Manage AI Models`, value: 'models' },
-            { label: `  ${c.brightCyan}🧪${c.reset}  Self-Training`, value: 'self_training' },
-            { label: `  ${c.brightBlue}🔌${c.reset}  Manage Connections`, value: 'connections' },
-            { label: `  ${c.brightMagenta}🎛️${c.reset}  AI Tuner ${c.gray}(persona + skills questionnaire)${c.reset}`, value: 'ai_tuner' },
-            { label: `  ${c.brightCyan}⚡${c.reset}  Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
-            { label: `  ${c.brightBlue}🌍${c.reset}  World Governance`, value: 'world' },
-            { label: `  ${c.brightMagenta}🧰${c.reset}  Manage Tools   ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
-            { label: `  ${c.yellow}🔧${c.reset}  Tooling & APIs`, value: 'tooling' },
-            { label: `── ADVANCED ──────────────────────────────`, value: 'separator_adv', disabled: true },
-            { label: `  ${c.brightGreen}🌐${c.reset}  Web Gateway`, value: 'gateway' },
-            { label: `  ${c.brightMagenta}🪪${c.reset}   Worker Profile`, value: 'worker' },
-            { label: `  ${c.brightCyan}🐙${c.reset}  Multi-Agent Orchestration`, value: 'orchestration' },
-            { label: `  ${c.brightYellow}🤖${c.reset}  Agentic User ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
-            { label: `  ${c.brightRed}🔒${c.reset}  Security & Permissions`, value: 'security' },
-            { label: `  ${c.brightGreen}📈${c.reset}  Token Usage`, value: 'tokens' },
-            { label: `  ${c.cyan}🧪${c.reset}  Guardrail Metrics`, value: 'metrics' },
-            { label: `  ${c.brightBlue}🌍${c.reset}  World Events Live`, value: 'world_events' },
-            { label: `  ${c.brightCyan}⏱️${c.reset}   Latency Benchmark`, value: 'latency' },
-            { label: `── SYSTEM ────────────────────────────────`, value: 'separator_sys', disabled: true },
-            { label: `  ${c.white}📂${c.reset}  Open Build Workspace`, value: 'open_build_workspace' },
-            { label: `  ${c.white}⚙️${c.reset}   Configure Agent`, value: 'config' },
-            { label: `  ${c.white}⬆️${c.reset}   Update OrcBot`, value: 'update' },
-            { label: `  ${c.gray}← Exit${c.reset}`, value: 'exit' },
+            { label: dim('── RUN'), value: 'separator_run', disabled: true },
+            { label: `  ${c.brightCyan}▶${c.reset}  ${c.brightCyan}${c.bold}Start Agent Loop${c.reset}`, value: 'start' },
+            { label: `     Push Task`, value: 'push' },
+            { label: `     View Status`, value: 'status' },
+            { label: dim('── CONFIGURE'), value: 'separator_config', disabled: true },
+            { label: `     Manage AI Models`, value: 'models' },
+            { label: `     Self-Training`, value: 'self_training' },
+            { label: `     Manage Connections`, value: 'connections' },
+            { label: `     AI Tuner  ${c.gray}(persona + skills questionnaire)${c.reset}`, value: 'ai_tuner' },
+            { label: `     Manage Skills  ${c.gray}(${agent.skills.getAgentSkills().length} installed)${c.reset}`, value: 'skills' },
+            { label: `     World Governance`, value: 'world' },
+            { label: `     Manage Tools  ${c.gray}(${agent.tools.listTools().length} installed)${c.reset}`, value: 'tools' },
+            { label: `     Tooling & APIs`, value: 'tooling' },
+            { label: dim('── ADVANCED'), value: 'separator_adv', disabled: true },
+            { label: `     Web Gateway`, value: 'gateway' },
+            { label: `     Worker Profile`, value: 'worker' },
+            { label: `     Multi-Agent Orchestration`, value: 'orchestration' },
+            { label: `     Agentic User  ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
+            { label: `     Security & Permissions`, value: 'security' },
+            { label: `     Token Usage`, value: 'tokens' },
+            { label: `     Guardrail Metrics`, value: 'metrics' },
+            { label: `     World Events Live`, value: 'world_events' },
+            { label: `     Latency Benchmark`, value: 'latency' },
+            { label: dim('── SYSTEM'), value: 'separator_sys', disabled: true },
+            { label: `     Open Build Workspace`, value: 'open_build_workspace' },
+            { label: `     Configure Agent`, value: 'config' },
+            { label: `     Update OrcBot`, value: 'update' },
+            { label: `     Exit`, value: 'exit' },
         ]
     });
 
@@ -3232,9 +3226,9 @@ async function openBuildWorkspaceFolder() {
     try {
         if (!fs.existsSync(workspacePath)) {
             fs.mkdirSync(workspacePath, { recursive: true });
-            console.log(`\n✅ Created build workspace: ${workspacePath}`);
+            console.log(`\nCreated build workspace: ${workspacePath}`);
         } else {
-            console.log(`\n📁 Build workspace: ${workspacePath}`);
+            console.log(`\nBuild workspace: ${workspacePath}`);
         }
 
         let opened = false;
@@ -3250,13 +3244,13 @@ async function openBuildWorkspaceFolder() {
         }
 
         if (opened) {
-            console.log('✅ Opened build workspace in file explorer.');
+            console.log('Opened build workspace in file explorer.');
         } else {
-            console.log('⚠️ Could not open file explorer automatically.');
+            console.log('Could not open file explorer automatically.');
             console.log(`   Open manually: ${workspacePath}`);
         }
     } catch (error: any) {
-        console.log(`\n❌ Failed to open build workspace: ${error?.message || error}`);
+        console.log(`\nFailed to open build workspace: ${error?.message || error}`);
     }
 }
 
@@ -3284,13 +3278,13 @@ async function showBrowserMenu() {
 
     console.clear();
     banner();
-    sectionHeader('🐼', 'Browser Engine');
+    sectionHeader('Browser Engine');
     console.log('');
     const computerUseEnabled = !!agent.config.get('googleComputerUseEnabled');
     const computerUseModel = agent.config.get('googleComputerUseModel') || 'gemini-2.5-computer-use-preview-10-2025';
     const hasGoogleKey = !!agent.config.get('googleApiKey');
     const browserLines = [
-        `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('🐼 Lightpanda')) : currentEngine === 'puppeteer' ? cyan(bold('🌐 Puppeteer (Chrome)')) : cyan(bold('🌐 Puppeteer (Chrome)'))}`,
+        `${dim('Engine')}     ${currentEngine === 'lightpanda' ? brightCyan(bold('Lightpanda')) : currentEngine === 'puppeteer' ? cyan(bold('Puppeteer (Chrome)')) : cyan(bold('Puppeteer (Chrome)'))}`,
         `${dim('Installed')}  ${isInstalled ? green('● Yes') : gray('○ No')}`,
         ...(isInstalled ? [
             `${dim('Server')}     ${isRunning ? green(`● Running ${dim(`(PID: ${runningPid})`)}`) : gray('○ Stopped')}`,
@@ -3298,22 +3292,22 @@ async function showBrowserMenu() {
         ] : []),
         `${dim('Gemini CU')}  ${computerUseEnabled ? green('● Enabled') : gray('○ Disabled')}${computerUseEnabled ? ` ${dim(computerUseModel)}` : ''}`,
     ];
-    box(browserLines, { title: '🌐 BROWSER STATUS', width: 50, color: c.cyan });
+    box(browserLines, { title: 'BROWSER STATUS', width: 50 });
     console.log('');
 
     const choices = [
-        { name: currentEngine === 'puppeteer' ? '🐼 Switch to Lightpanda (9x less RAM)' : '🌐 Switch to Puppeteer (Chrome)', value: 'toggle' },
+        { name: currentEngine === 'puppeteer' ? 'Switch to Lightpanda (9x less RAM)' : 'Switch to Puppeteer (Chrome)', value: 'toggle' },
 
-        { name: computerUseEnabled ? `🤖 ${bold('Disable')} Gemini Computer Use` : `🤖 ${bold('Enable')} Gemini Computer Use ${dim('(vision-based browser control)')}`, value: 'computeruse' },
+        { name: computerUseEnabled ? `${bold('Disable')} Gemini Computer Use` : `${bold('Enable')} Gemini Computer Use ${dim('(vision-based browser control)')}`, value: 'computeruse' },
     ];
 
     if (!isInstalled) {
-        choices.push({ name: '📦 Install Lightpanda', value: 'install' });
+        choices.push({ name: 'Install Lightpanda', value: 'install' });
     } else {
         if (isRunning) {
-            choices.push({ name: '🛑 Stop Lightpanda Server', value: 'stop' });
+            choices.push({ name: 'Stop Lightpanda Server', value: 'stop' });
         } else {
-            choices.push({ name: '🚀 Start Lightpanda Server', value: 'start' });
+            choices.push({ name: 'Start Lightpanda Server', value: 'start' });
         }
     }
 
@@ -3333,45 +3327,45 @@ async function showBrowserMenu() {
     if (action === 'toggle') {
         if (currentEngine === 'puppeteer') {
             if (!isInstalled) {
-                console.log('\n⚠️  Lightpanda is not installed.');
+                console.log('\nLightpanda is not installed.');
                 const { install } = await inquirer.prompt([
                     { type: 'confirm', name: 'install', message: 'Would you like to install it now?', default: true }
                 ]);
                 if (install) {
-                    console.log('\n📦 Installing Lightpanda...');
+                    console.log('\nInstalling Lightpanda...');
                     console.log('   Run: orcbot lightpanda install\n');
                 }
             } else {
                 agent.config.set('browserEngine', 'lightpanda');
-                console.log('\n✅ Switched to Lightpanda');
+                console.log('\nSwitched to Lightpanda');
                 if (!isRunning) {
-                    console.log('   ⚠️  Remember to start the server: orcbot lightpanda start -b');
+                    console.log('     Remember to start the server: orcbot lightpanda start -b');
                 }
             }
         } else {
             agent.config.set('browserEngine', 'puppeteer');
-            console.log('\n✅ Switched to Playwright (Chrome)');
+            console.log('\nSwitched to Playwright (Chrome)');
         }
     } else if (action === 'computeruse') {
         if (computerUseEnabled) {
             agent.config.set('googleComputerUseEnabled', false);
-            console.log('\n✅ Gemini Computer Use disabled');
+            console.log('\nGemini Computer Use disabled');
             console.log('   Browser actions will use DOM-based selectors only.');
         } else {
             if (!hasGoogleKey) {
-                console.log('\n⚠️  Google API key is not set. Computer Use requires a Google API key.');
+                console.log('\nGoogle API key is not set. Computer Use requires a Google API key.');
                 const { key } = await inquirer.prompt([
                     { type: 'input', name: 'key', message: 'Enter Google API Key (or press Enter to skip):' }
                 ]);
                 if (key) {
                     agent.config.set('googleApiKey', key);
-                    console.log('   ✅ Google API key saved.');
+                    console.log('    Google API key saved.');
                 } else {
-                    console.log('   ⚠️  Skipped. Computer Use may not work without a Google API key.');
+                    console.log('     Skipped. Computer Use may not work without a Google API key.');
                 }
             }
             agent.config.set('googleComputerUseEnabled', true);
-            console.log(`\n✅ Gemini Computer Use enabled`);
+            console.log(`\nGemini Computer Use enabled`);
             console.log(`   Model: ${computerUseModel}`);
             console.log('   All browser_* actions will prefer vision-based control with DOM fallback.');
             const { changeModel } = await inquirer.prompt([
@@ -3383,12 +3377,12 @@ async function showBrowserMenu() {
                 ]);
                 if (model) {
                     agent.config.set('googleComputerUseModel', model);
-                    console.log(`   ✅ Model set to: ${model}`);
+                    console.log(`    Model set to: ${model}`);
                 }
             }
         }
     } else if (action === 'install') {
-        console.log('\n📦 To install Lightpanda, run:');
+        console.log('\nTo install Lightpanda, run:');
         console.log('   orcbot lightpanda install\n');
     } else if (action === 'start') {
         const { spawn } = require('child_process');
@@ -3405,16 +3399,16 @@ async function showBrowserMenu() {
         fs.writeFileSync(pidPath, String(child.pid));
         child.unref();
 
-        console.log('\n✅ Lightpanda started');
+        console.log('\nLightpanda started');
         console.log(`   PID: ${child.pid}`);
         console.log(`   Endpoint: ws://127.0.0.1:9222`);
     } else if (action === 'stop') {
         try {
             process.kill(runningPid!, 'SIGTERM');
             fs.unlinkSync(pidPath);
-            console.log('\n✅ Lightpanda stopped');
+            console.log('\nLightpanda stopped');
         } catch (e: any) {
-            console.error(`\n❌ Failed to stop: ${e.message}`);
+            console.error(`\nFailed to stop: ${e.message}`);
         }
     }
 
@@ -3425,7 +3419,7 @@ async function showBrowserMenu() {
 async function showToolingMenu() {
     console.clear();
     banner();
-    sectionHeader('🔧', 'Tooling & APIs');
+    sectionHeader('Tooling & APIs');
 
     const hasSerper = !!agent.config.get('serperApiKey');
     const hasBrave = !!agent.config.get('braveSearchApiKey');
@@ -3452,7 +3446,7 @@ async function showToolingMenu() {
 
     console.log('');
     const toolLines = [
-        `${statusDot(true, '')} ${bold('Browser')}       ${browserEngine === 'lightpanda' ? cyan('🐼 Lightpanda') : cyan('🌐 Playwright')}${computerUseOn ? ` + ${green('Gemini CU')}` : ''}`,
+        `${statusDot(true, '')} ${bold('Browser')}       ${browserEngine === 'lightpanda' ? cyan('Lightpanda') : cyan('Playwright')}${computerUseOn ? ` + ${green('Gemini CU')}` : ''}`,
         `${statusDot(hasSerper, '')} ${bold('Serper')}        ${hasSerper ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasBrave, '')} ${bold('Brave Search')}  ${hasBrave ? green('Configured') : gray('Not set')}`,
         `${statusDot(hasSearxng, '')} ${bold('SearxNG')}       ${hasSearxng ? green('Configured') : gray('Not set')}`,
@@ -3462,7 +3456,7 @@ async function showToolingMenu() {
         `${statusDot(hasGoogleWorkspace, '')} ${bold('Google Workspace')} ${hasGoogleWorkspace ? green(googleWorkspaceLabel) : gray(googleWorkspaceLabel)}`,
         `${statusDot(hasGitHubCli, '')} ${bold('GitHub CLI')}   ${hasGitHubCli ? green(githubCliLabel) : gray(githubCliLabel)}`,
     ];
-    box(toolLines, { title: '🛠️  TOOL STATUS', width: 52, color: c.yellow });
+    box(toolLines, { title: 'TOOL STATUS', width: 52 });
     console.log('');
 
     const { tool } = await inquirer.prompt([
@@ -3471,19 +3465,19 @@ async function showToolingMenu() {
             name: 'tool',
             message: cyan('Select tool to configure:'),
             choices: [
-                { name: `  🐼 ${bold('Browser Engine')} ${dim('(Lightpanda / Chrome)')}`, value: 'browser' },
-                new inquirer.Separator(gradient('  ─── Search Providers ─────────────', [c.yellow, c.gray])),
+                { name: `   ${bold('Browser Engine')} ${dim('(Lightpanda / Chrome)')}`, value: 'browser' },
+                new inquirer.Separator(dim('  ─── Search Providers ─────────────')),
                 { name: `  ${statusDot(hasSerper, '')} Serper ${dim('(Web Search API)')}`, value: 'serper' },
                 { name: `  ${statusDot(hasBrave, '')} Brave Search`, value: 'brave' },
                 { name: `  ${statusDot(hasSearxng, '')} SearxNG ${dim('(Self-hosted)')}`, value: 'searxng' },
-                { name: `  🔀 ${bold('Search Provider Order')}`, value: 'searchOrder' },
-                new inquirer.Separator(gradient('  ─── Other ────────────────────────', [c.yellow, c.gray])),
+                { name: `   ${bold('Search Provider Order')}`, value: 'searchOrder' },
+                new inquirer.Separator(dim('  ─── Other ────────────────────────')),
                 { name: `  ${statusDot(hasCaptcha, '')} 2Captcha ${dim('(CAPTCHA Solver)')}`, value: 'captcha' },
-                { name: `  ${statusDot(hasImageGen, '')} 🎨 ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
-                { name: `  ${statusDot(hasGoogleIdentity, '')} 🔐 ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
-                { name: `  ${statusDot(hasGoogleWorkspace, '')} 🏢 ${bold('Google Workspace CLI')} ${dim(`(${googleWorkspaceLabel})`)}`, value: 'google_workspace' },
-                { name: `  ${statusDot(hasGitHubCli, '')} 🐙 ${bold('GitHub CLI')} ${dim(`(${githubCliLabel})`)}`, value: 'github_cli' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])),
+                { name: `  ${statusDot(hasImageGen, '')}  ${bold('Image Generation')} ${dim(`(${imageGenLabel})`)}`, value: 'imagegen' },
+                { name: `  ${statusDot(hasGoogleIdentity, '')}  ${bold('Google Identity')} ${dim('(OAuth + Gmail OTP)')}`, value: 'google_identity' },
+                { name: `  ${statusDot(hasGoogleWorkspace, '')}  ${bold('Google Workspace CLI')} ${dim(`(${googleWorkspaceLabel})`)}`, value: 'google_workspace' },
+                { name: `  ${statusDot(hasGitHubCli, '')}  ${bold('GitHub CLI')} ${dim(`(${githubCliLabel})`)}`, value: 'github_cli' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -3545,7 +3539,7 @@ async function showToolingMenu() {
             '',
             `${dim('Reuses your existing LLM API keys!')}`,
         ];
-        box(imgLines, { title: '🎨 IMAGE GENERATION', width: 52, color: c.magenta });
+        box(imgLines, { title: 'IMAGE GENERATION', width: 52 });
         console.log('');
 
         const { imgAction } = await inquirer.prompt([
@@ -3554,11 +3548,11 @@ async function showToolingMenu() {
                 name: 'imgAction',
                 message: cyan('Image Generation Options:'),
                 choices: [
-                    { name: `  🔌 ${bold('Set Provider')} ${dim('(openai / google / auto)')}`, value: 'provider' },
-                    { name: `  🤖 ${bold('Set Model')} ${dim('(dall-e-3 / gemini-2.5-flash-image / ...)')}`, value: 'model' },
-                    { name: `  📐 ${bold('Set Default Size')} ${dim(`(current: ${agent.config.get('imageGenSize') || '1024x1024'})`)}`, value: 'size' },
-                    { name: `  ✨ ${bold('Set Default Quality')} ${dim(`(current: ${agent.config.get('imageGenQuality') || 'medium'})`)}`, value: 'quality' },
-                    new inquirer.Separator(gradient('  ──────────────────────────────────', [c.magenta, c.gray])),
+                    { name: `   ${bold('Set Provider')} ${dim('(openai / google / auto)')}`, value: 'provider' },
+                    { name: `   ${bold('Set Model')} ${dim('(dall-e-3 / gemini-2.5-flash-image / ...)')}`, value: 'model' },
+                    { name: `   ${bold('Set Default Size')} ${dim(`(current: ${agent.config.get('imageGenSize') || '1024x1024'})`)}`, value: 'size' },
+                    { name: `   ${bold('Set Default Quality')} ${dim(`(current: ${agent.config.get('imageGenQuality') || 'medium'})`)}`, value: 'quality' },
+                    new inquirer.Separator(dim('  ──────────────────────────────────')),
                     { name: dim('  ← Back'), value: 'back' }
                 ]
             }
@@ -3646,7 +3640,7 @@ async function showToolingMenu() {
 async function showGoogleIdentityMenu() {
     console.clear();
     banner();
-    sectionHeader('🔐', 'Google Identity (OAuth + Gmail)');
+    sectionHeader('Google Identity (OAuth + Gmail)');
 
     const status = agent.googleIdentity.getStatus();
     const email = status.email || '(unknown)';
@@ -3669,12 +3663,12 @@ async function showGoogleIdentityMenu() {
             name: 'action',
             message: cyan('Google Identity Options:'),
             choices: [
-                { name: `  🧩 ${bold('Set OAuth Client Credentials')}`, value: 'set_credentials' },
-                { name: `  🔗 ${bold('Generate Authorization URL')}`, value: 'auth_url' },
-                { name: `  ✅ ${bold('Exchange Auth Code / Redirect URL')}`, value: 'exchange_code' },
-                { name: `  📬 ${bold('Test Gmail Search')}`, value: 'test_search' },
-                { name: `  🔢 ${bold('Test OTP Extraction')}`, value: 'test_otp' },
-                { name: `  🚪 ${bold('Disconnect (remove refresh token)')}`, value: 'disconnect' },
+                { name: `   ${bold('Set OAuth Client Credentials')}`, value: 'set_credentials' },
+                { name: `   ${bold('Generate Authorization URL')}`, value: 'auth_url' },
+                { name: `   ${bold('Exchange Auth Code / Redirect URL')}`, value: 'exchange_code' },
+                { name: `   ${bold('Test Gmail Search')}`, value: 'test_search' },
+                { name: `   ${bold('Test OTP Extraction')}`, value: 'test_otp' },
+                { name: `   ${bold('Disconnect (remove refresh token)')}`, value: 'disconnect' },
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -3714,14 +3708,14 @@ async function showGoogleIdentityMenu() {
         const clientId = String(ans.clientId || '').trim() || currentClientId;
         const clientSecret = String(ans.clientSecret || '').trim() || String(agent.config.get('googleOAuthClientSecret') || '');
         if (!clientId || !clientSecret) {
-            console.log('\n❌ Client ID and Client Secret are required.');
+            console.log('\nClient ID and Client Secret are required.');
             await waitKeyPress();
             return showGoogleIdentityMenu();
         }
 
         agent.googleIdentity.setCredentials({ clientId, clientSecret, email: String(ans.email || '').trim() || undefined });
         agent.config.set('googleOAuthRedirectUri' as any, String(ans.redirectUri || 'http://localhost').trim() || 'http://localhost');
-        console.log('\n✅ Google OAuth credentials saved.');
+        console.log('\nGoogle OAuth credentials saved.');
     } else if (action === 'auth_url') {
         try {
             const url = agent.googleIdentity.getAuthorizationUrl();
@@ -3729,7 +3723,7 @@ async function showGoogleIdentityMenu() {
             console.log(cyan(url));
             console.log(dim('\nThen choose "Exchange Auth Code / Redirect URL" and paste either the code or full redirect URL.'));
         } catch (e) {
-            console.log(`\n❌ ${e}`);
+            console.log(`\n${e}`);
         }
     } else if (action === 'exchange_code') {
         const { codeOrUrl } = await inquirer.prompt([
@@ -3742,9 +3736,9 @@ async function showGoogleIdentityMenu() {
         try {
             await agent.googleIdentity.exchangeAuthorizationCode(String(codeOrUrl || '').trim());
             const nextStatus = agent.googleIdentity.getStatus();
-            console.log(`\n✅ Connected Google identity${nextStatus.email ? `: ${nextStatus.email}` : ''}`);
+            console.log(`\nConnected Google identity${nextStatus.email ? `: ${nextStatus.email}` : ''}`);
         } catch (e) {
-            console.log(`\n❌ ${e}`);
+            console.log(`\n${e}`);
         }
     } else if (action === 'test_search') {
         const { query } = await inquirer.prompt([
@@ -3752,13 +3746,13 @@ async function showGoogleIdentityMenu() {
         ]);
         try {
             const msgs = await agent.googleIdentity.searchInbox(String(query || '').trim(), 5);
-            console.log(`\n✅ Found ${msgs.length} message(s).`);
+            console.log(`\nFound ${msgs.length} message(s).`);
             msgs.slice(0, 5).forEach((m, idx) => {
                 console.log(`${idx + 1}. ${m.subject || '(no subject)'} ${dim(`| from: ${m.from || 'unknown'}`)}`);
                 if (m.snippet) console.log(`   ${dim(m.snippet.slice(0, 140))}`);
             });
         } catch (e) {
-            console.log(`\n❌ ${e}`);
+            console.log(`\n${e}`);
         }
     } else if (action === 'test_otp') {
         const ans = await inquirer.prompt([
@@ -3772,13 +3766,13 @@ async function showGoogleIdentityMenu() {
                 subjectContains: String(ans.subjectContains || '').trim() || undefined
             });
             if (res.code) {
-                console.log(`\n✅ OTP found: ${bold(res.code)}`);
+                console.log(`\nOTP found: ${bold(res.code)}`);
                 if (res.message?.subject) console.log(`   ${dim('From message:')} ${res.message.subject}`);
             } else {
-                console.log('\n⚠️ No OTP code found in recent matching messages.');
+                console.log('\nNo OTP code found in recent matching messages.');
             }
         } catch (e) {
-            console.log(`\n❌ ${e}`);
+            console.log(`\n${e}`);
         }
     } else if (action === 'disconnect') {
         const { ok } = await inquirer.prompt([
@@ -3786,7 +3780,7 @@ async function showGoogleIdentityMenu() {
         ]);
         if (ok) {
             agent.googleIdentity.disconnect();
-            console.log('\n✅ Google identity disconnected.');
+            console.log('\nGoogle identity disconnected.');
         }
     }
 
@@ -3797,7 +3791,7 @@ async function showGoogleIdentityMenu() {
 async function showGoogleWorkspaceCliMenu() {
     console.clear();
     banner();
-    sectionHeader('🏢', 'Google Workspace CLI (gws)');
+    sectionHeader('Google Workspace CLI (gws)');
 
     const status = await agent.googleWorkspaceCli.getStatus();
     const configuredPath = String(agent.config.get('googleWorkspaceCliPath') || '').trim();
@@ -3819,12 +3813,12 @@ async function showGoogleWorkspaceCliMenu() {
             name: 'action',
             message: cyan('Google Workspace CLI Options:'),
             choices: [
-                { name: `  📦 ${bold('Install / Update gws')}`, value: 'install' },
-                { name: `  ⚙️ ${bold('Set Binary Path / Default Account')}`, value: 'configure' },
-                { name: `  🔐 ${bold('Run gws auth setup')}`, value: 'auth_setup' },
-                { name: `  🔑 ${bold('Run gws auth login')}`, value: 'auth_login' },
-                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
-                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: `   ${bold('Install / Update gws')}`, value: 'install' },
+                { name: `   ${bold('Set Binary Path / Default Account')}`, value: 'configure' },
+                { name: `   ${bold('Run gws auth setup')}`, value: 'auth_setup' },
+                { name: `   ${bold('Run gws auth login')}`, value: 'auth_login' },
+                { name: `   ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `   ${bold('Show Setup Help')}`, value: 'help' },
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -3835,17 +3829,17 @@ async function showGoogleWorkspaceCliMenu() {
     const runInteractiveGws = (args: string[]) => {
         const binary = agent.googleWorkspaceCli.findBinary() || configuredPath;
         if (!binary) {
-            console.log('\n❌ gws is not installed or not configured yet.');
+            console.log('\ngws is not installed or not configured yet.');
             return;
         }
 
         const result = spawnSync(binary, args, { stdio: 'inherit' });
         if (result.error) {
-            console.log(`\n❌ ${result.error.message}`);
+            console.log(`\n${result.error.message}`);
             return;
         }
         if (typeof result.status === 'number' && result.status !== 0) {
-            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+            console.log(`\nCommand exited with status ${result.status}.`);
         }
     };
 
@@ -3857,11 +3851,11 @@ async function showGoogleWorkspaceCliMenu() {
             const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm';
             const result = spawnSync(npmBinary, ['install', '-g', '@googleworkspace/cli'], { stdio: 'inherit' });
             if (result.error) {
-                console.log(`\n❌ ${result.error.message}`);
+                console.log(`\n${result.error.message}`);
             } else if (typeof result.status === 'number' && result.status !== 0) {
-                console.log(`\n⚠️ npm exited with status ${result.status}.`);
+                console.log(`\nnpm exited with status ${result.status}.`);
             } else {
-                console.log('\n✅ gws install/update completed.');
+                console.log('\ngws install/update completed.');
             }
         }
     } else if (action === 'configure') {
@@ -3885,7 +3879,7 @@ async function showGoogleWorkspaceCliMenu() {
         agent.config.set('googleWorkspaceCliPath' as any, binaryPath || undefined);
         agent.config.set('googleWorkspaceCliAccount' as any, account || undefined);
         agent.googleWorkspaceCli.invalidateBinaryCache();
-        console.log('\n✅ Google Workspace CLI configuration updated.');
+        console.log('\nGoogle Workspace CLI configuration updated.');
     } else if (action === 'auth_setup') {
         runInteractiveGws(['auth', 'setup']);
     } else if (action === 'auth_login') {
@@ -3927,7 +3921,7 @@ async function showGoogleWorkspaceCliMenu() {
 async function showGitHubCliMenu() {
     console.clear();
     banner();
-    sectionHeader('🐙', 'GitHub CLI (gh)');
+    sectionHeader('GitHub CLI (gh)');
 
     const status = await agent.githubCli.getStatus();
     const configuredPath = String(agent.config.get('githubCliPath') || '').trim();
@@ -3951,31 +3945,31 @@ async function showGitHubCliMenu() {
             name: 'action',
             message: cyan('GitHub CLI Options:'),
             choices: [
-                { name: `  ⚙️ ${bold('Set Binary Path Override')}`, value: 'configure' },
-                { name: `  🧭 ${bold('Use Auto-Detect From PATH')}`, value: 'auto_detect' },
-                { name: `  🔑 ${bold('Run gh auth login')}`, value: 'auth_login' },
-                { name: `  📋 ${bold('Show Auth Status Details')}`, value: 'auth_status' },
-                { name: `  🌿 ${bold('List Pull Requests')}`, value: 'pr_list' },
-                { name: `  🌱 ${bold('List Branches')}`, value: 'branch_list' },
-                { name: `  🏷️ ${bold('List Labels')}`, value: 'label_list' },
-                { name: `  ➕ ${bold('Create Label')}`, value: 'label_create' },
-                { name: `  🗑️ ${bold('Delete Label')}`, value: 'label_delete' },
-                { name: `  ✅ ${bold('Show PR Checks')}`, value: 'pr_checks' },
-                { name: `  📝 ${bold('Review Pull Request')}`, value: 'pr_review' },
-                { name: `  💬 ${bold('Comment On Pull Request')}`, value: 'pr_comment' },
-                { name: `  🔀 ${bold('Merge Pull Request')}`, value: 'pr_merge' },
-                { name: `  🏷️ ${bold('List Releases')}`, value: 'release_list' },
-                { name: `  📦 ${bold('Upload Release Asset')}`, value: 'release_upload_asset' },
-                { name: `  📋 ${bold('List Variables')}`, value: 'variable_list' },
-                { name: `  ✏️ ${bold('Set Variable')}`, value: 'variable_set' },
-                { name: `  ❌ ${bold('Delete Variable')}`, value: 'variable_delete' },
-                { name: `  🧪 ${bold('List Workflow Runs')}`, value: 'workflow_runs' },
-                { name: `  ▶️ ${bold('Dispatch Workflow')}`, value: 'workflow_dispatch' },
-                { name: `  🔁 ${bold('Rerun Workflow Run')}`, value: 'workflow_rerun' },
-                { name: `  🐞 ${bold('Create Issue')}`, value: 'issue_create' },
-                { name: `  💭 ${bold('Comment On Issue')}`, value: 'issue_comment' },
-                { name: `  🚀 ${bold('Create Release')}`, value: 'release_create' },
-                { name: `  ℹ️ ${bold('Show Setup Help')}`, value: 'help' },
+                { name: `   ${bold('Set Binary Path Override')}`, value: 'configure' },
+                { name: `   ${bold('Use Auto-Detect From PATH')}`, value: 'auto_detect' },
+                { name: `   ${bold('Run gh auth login')}`, value: 'auth_login' },
+                { name: `   ${bold('Show Auth Status Details')}`, value: 'auth_status' },
+                { name: `   ${bold('List Pull Requests')}`, value: 'pr_list' },
+                { name: `   ${bold('List Branches')}`, value: 'branch_list' },
+                { name: `   ${bold('List Labels')}`, value: 'label_list' },
+                { name: `   ${bold('Create Label')}`, value: 'label_create' },
+                { name: `   ${bold('Delete Label')}`, value: 'label_delete' },
+                { name: `   ${bold('Show PR Checks')}`, value: 'pr_checks' },
+                { name: `   ${bold('Review Pull Request')}`, value: 'pr_review' },
+                { name: `   ${bold('Comment On Pull Request')}`, value: 'pr_comment' },
+                { name: `   ${bold('Merge Pull Request')}`, value: 'pr_merge' },
+                { name: `   ${bold('List Releases')}`, value: 'release_list' },
+                { name: `   ${bold('Upload Release Asset')}`, value: 'release_upload_asset' },
+                { name: `   ${bold('List Variables')}`, value: 'variable_list' },
+                { name: `   ${bold('Set Variable')}`, value: 'variable_set' },
+                { name: `   ${bold('Delete Variable')}`, value: 'variable_delete' },
+                { name: `   ${bold('List Workflow Runs')}`, value: 'workflow_runs' },
+                { name: `  ▶ ${bold('Dispatch Workflow')}`, value: 'workflow_dispatch' },
+                { name: `   ${bold('Rerun Workflow Run')}`, value: 'workflow_rerun' },
+                { name: `   ${bold('Create Issue')}`, value: 'issue_create' },
+                { name: `   ${bold('Comment On Issue')}`, value: 'issue_comment' },
+                { name: `   ${bold('Create Release')}`, value: 'release_create' },
+                { name: `   ${bold('Show Setup Help')}`, value: 'help' },
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -3986,17 +3980,17 @@ async function showGitHubCliMenu() {
     const runInteractiveGh = (args: string[], cwd?: string) => {
         const binary = agent.githubCli.findBinary() || configuredPath;
         if (!binary) {
-            console.log('\n❌ GitHub CLI is not installed or not configured yet.');
+            console.log('\nGitHub CLI is not installed or not configured yet.');
             return;
         }
 
         const result = spawnSync(binary, args, { stdio: 'inherit', cwd: cwd || defaultCwd });
         if (result.error) {
-            console.log(`\n❌ ${result.error.message}`);
+            console.log(`\n${result.error.message}`);
             return;
         }
         if (typeof result.status === 'number' && result.status !== 0) {
-            console.log(`\n⚠️ Command exited with status ${result.status}.`);
+            console.log(`\nCommand exited with status ${result.status}.`);
         }
     };
 
@@ -4013,12 +4007,12 @@ async function showGitHubCliMenu() {
         const binaryPath = String(ans.binaryPath || '').trim();
         agent.config.set('githubCliPath' as any, binaryPath || undefined);
         agent.githubCli.invalidateBinaryCache();
-        console.log(`\n✅ GitHub CLI override ${binaryPath ? 'updated' : 'cleared; auto-detect will be used'}.`);
+        console.log(`\nGitHub CLI override ${binaryPath ? 'updated' : 'cleared; auto-detect will be used'}.`);
     } else if (action === 'auto_detect') {
         agent.config.set('githubCliPath' as any, undefined);
         agent.githubCli.invalidateBinaryCache();
         const refreshed = await agent.githubCli.getStatus();
-        console.log(`\n✅ Auto-detect enabled.${refreshed.binary ? ` Found: ${refreshed.binary}` : ' gh was not found on PATH.'}`);
+        console.log(`\nAuto-detect enabled.${refreshed.binary ? ` Found: ${refreshed.binary}` : ' gh was not found on PATH.'}`);
     } else if (action === 'auth_login') {
         runInteractiveGh(['auth', 'login']);
     } else if (action === 'auth_status') {
@@ -4052,10 +4046,10 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const pullRequests = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${pullRequests.length} pull request(s).`);
+            console.log(`\nFound ${pullRequests.length} pull request(s).`);
             for (const pr of pullRequests) {
                 console.log(`${pr.number}. ${pr.title} ${dim(`| ${pr.state}${pr.isDraft ? ', draft' : ''}`)}`);
                 console.log(`   ${dim(`${pr.headRefName} → ${pr.baseRefName}`)}`);
@@ -4078,11 +4072,11 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const branches = Array.isArray(result.data?.branches) ? result.data.branches : [];
             const defaultBranch = result.data?.defaultBranch;
-            console.log(`\n✅ Found ${branches.length} branch(es).`);
+            console.log(`\nFound ${branches.length} branch(es).`);
             if (defaultBranch) console.log(`${dim('Default branch:')} ${cyan(defaultBranch)}`);
             for (const branch of branches) {
                 const isDefault = defaultBranch && branch?.name === defaultBranch;
@@ -4105,10 +4099,10 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const labels = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${labels.length} label(s).`);
+            console.log(`\nFound ${labels.length} label(s).`);
             for (const label of labels) {
                 console.log(`${label.name} ${dim(`#${label.color || 'unknown'}`)}`);
                 if (label.description) console.log(`   ${dim(label.description)}`);
@@ -4134,9 +4128,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Label command submitted.');
+            console.log('\nLabel command submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'label_delete') {
@@ -4153,9 +4147,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Label delete command submitted.');
+            console.log('\nLabel delete command submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'pr_checks') {
@@ -4172,10 +4166,10 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const checks = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${checks.length} check(s).`);
+            console.log(`\nFound ${checks.length} check(s).`);
             for (const check of checks) {
                 console.log(`${check.name} ${dim(`| ${check.state}${check.bucket ? `, ${check.bucket}` : ''}`)}`);
                 if (check.description) console.log(`   ${dim(check.description)}`);
@@ -4200,9 +4194,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Pull request review submitted.');
+            console.log('\nPull request review submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'pr_comment') {
@@ -4221,9 +4215,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Pull request comment submitted.');
+            console.log('\nPull request comment submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'pr_merge') {
@@ -4254,9 +4248,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Pull request merge command submitted.');
+            console.log('\nPull request merge command submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'release_list') {
@@ -4272,10 +4266,10 @@ async function showGitHubCliMenu() {
             limit: Number(ans.limit) || 10,
         });
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const releases = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${releases.length} release(s).`);
+            console.log(`\nFound ${releases.length} release(s).`);
             for (const release of releases) {
                 const title = release.name || release.tagName;
                 const status = release.isDraft ? 'draft' : release.isPrerelease ? 'prerelease' : 'published';
@@ -4303,9 +4297,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Release asset upload requested.');
+            console.log('\nRelease asset upload requested.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'variable_list') {
@@ -4322,10 +4316,10 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const variables = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${variables.length} variable(s).`);
+            console.log(`\nFound ${variables.length} variable(s).`);
             for (const variable of variables) {
                 console.log(`${variable.name} ${dim(`| ${variable.visibility || 'repo'}`)}`);
                 if (variable.value) console.log(`   ${dim(variable.value)}`);
@@ -4354,9 +4348,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Variable set command submitted.');
+            console.log('\nVariable set command submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'variable_delete') {
@@ -4373,9 +4367,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Variable delete command submitted.');
+            console.log('\nVariable delete command submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'workflow_runs') {
@@ -4398,10 +4392,10 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
             const runs = Array.isArray(result.data) ? result.data : [];
-            console.log(`\n✅ Found ${runs.length} workflow run(s).`);
+            console.log(`\nFound ${runs.length} workflow run(s).`);
             for (const run of runs) {
                 const name = run.workflowName || run.name || 'Workflow';
                 console.log(`${run.databaseId}. ${name} ${dim(`| ${run.status}${run.conclusion ? `, ${run.conclusion}` : ''}`)}`);
@@ -4426,12 +4420,12 @@ async function showGitHubCliMenu() {
                 if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
                     fields = parsed as Record<string, string | number | boolean>;
                 } else {
-                    console.log('\n❌ Fields JSON must be an object.');
+                    console.log('\nFields JSON must be an object.');
                     await waitKeyPress();
                     return showGitHubCliMenu();
                 }
             } catch (e: any) {
-                console.log(`\n❌ Invalid fields JSON: ${e.message}`);
+                console.log(`\nInvalid fields JSON: ${e.message}`);
                 await waitKeyPress();
                 return showGitHubCliMenu();
             }
@@ -4446,9 +4440,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Workflow dispatch requested.');
+            console.log('\nWorkflow dispatch requested.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'workflow_rerun') {
@@ -4467,9 +4461,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ Workflow rerun requested.');
+            console.log('\nWorkflow rerun requested.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'issue_create') {
@@ -4492,9 +4486,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ GitHub issue created.');
+            console.log('\nGitHub issue created.');
             if (result.data?.url) console.log(cyan(result.data.url));
         }
     } else if (action === 'issue_comment') {
@@ -4513,9 +4507,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ GitHub issue comment submitted.');
+            console.log('\nGitHub issue comment submitted.');
             if (result.stdout) console.log(result.stdout);
         }
     } else if (action === 'release_create') {
@@ -4544,9 +4538,9 @@ async function showGitHubCliMenu() {
         });
 
         if (!result.success) {
-            console.log(`\n❌ ${result.error || result.stderr || result.stdout}`);
+            console.log(`\n${result.error || result.stderr || result.stdout}`);
         } else {
-            console.log('\n✅ GitHub release created.');
+            console.log('\nGitHub release created.');
             if (result.data?.url) console.log(cyan(result.data.url));
         }
     } else if (action === 'help') {
@@ -4575,7 +4569,7 @@ async function showGatewayMenu() {
     const mcpApiKey = agent.config.get('mcpApiKey') || apiKey;
     const autonomyAllowed = isAutonomyEnabledForChannel('gateway-chat');
 
-    sectionHeader('🌐', 'Web Gateway');
+    sectionHeader('Web Gateway');
     console.log('');
     const gatewayLines = [
         `${dim('Host')}       ${bold(String(currentHost))}`,
@@ -4585,7 +4579,7 @@ async function showGatewayMenu() {
         `${dim('Auth')}       ${apiKey ? green('● API Key set') : yellow('○ No authentication')}`,
         `${dim('Autonomy')}   ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
-    box(gatewayLines, { title: '📡 GATEWAY CONFIG', width: 52, color: c.cyan });
+    box(gatewayLines, { title: 'GATEWAY CONFIG', width: 52 });
     const mcpLines = [
         `${dim('Host')}       ${bold(String(currentMcpHost))}`,
         `${dim('Port')}       ${brightCyan(bold(String(currentMcpPort)))}`,
@@ -4593,7 +4587,7 @@ async function showGatewayMenu() {
         `${dim('Endpoint')}   ${cyan(`http://${currentMcpHost}:${currentMcpPort}${currentMcpPath}`)}`,
         `${dim('Auth')}       ${mcpApiKey ? green('● API Key set') : yellow('○ No authentication')}`,
     ];
-    box(mcpLines, { title: '🔌 MCP HTTP CONFIG', width: 52, color: c.brightMagenta });
+    box(mcpLines, { title: 'MCP HTTP CONFIG', width: 52 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -4602,23 +4596,23 @@ async function showGatewayMenu() {
             name: 'action',
             message: cyan('Gateway Options:'),
             choices: [
-                { name: `  🚀 ${bold('Start Gateway Server')}`, value: 'start' },
-                { name: `  🚀 ${bold('Start Gateway + Agent')}`, value: 'start_with_agent' },
-                { name: `  🚀 ${bold('Start Gateway + Agent + MCP HTTP')}`, value: 'start_with_agent_mcp' },
-                { name: `  🔌 ${bold('Start MCP HTTP Only')}`, value: 'start_mcp_http' },
-                { name: `  🧾 ${bold('Show MCP Client Config (Local/Tailnet)')}`, value: 'mcp_info' },
-                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.cyan, c.gray])),
-                { name: `  📌 Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
-                { name: `  🏠 Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
-                { name: `  🔑 ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
-                { name: `  📌 Set MCP Port ${dim(`(current: ${currentMcpPort})`)}`, value: 'mcp_port' },
-                { name: `  🏠 Set MCP Host ${dim(`(current: ${currentMcpHost})`)}`, value: 'mcp_host' },
-                { name: `  🛣️  Set MCP Path ${dim(`(current: ${currentMcpPath})`)}`, value: 'mcp_path' },
-                { name: `  🔑 ${mcpApiKey ? 'Update' : 'Set'} MCP API Key`, value: 'mcp_apikey' },
-                { name: `  🤖 ${autonomyAllowed ? 'Disable' : 'Enable'} Autonomous Messaging`, value: 'toggle_autonomy' },
-                { name: `  🔐 ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
-                { name: `  🌍 ${bold('Public Tunnel Setup (Cloudflare/Ngrok)')}`, value: 'public_tunnel' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
+                { name: `   ${bold('Start Gateway Server')}`, value: 'start' },
+                { name: `   ${bold('Start Gateway + Agent')}`, value: 'start_with_agent' },
+                { name: `   ${bold('Start Gateway + Agent + MCP HTTP')}`, value: 'start_with_agent_mcp' },
+                { name: `   ${bold('Start MCP HTTP Only')}`, value: 'start_mcp_http' },
+                { name: `   ${bold('Show MCP Client Config (Local/Tailnet)')}`, value: 'mcp_info' },
+                new inquirer.Separator(dim('  ─── Settings ─────────────────────')),
+                { name: `   Set Port ${dim(`(current: ${currentPort})`)}`, value: 'port' },
+                { name: `   Set Host ${dim(`(current: ${currentHost})`)}`, value: 'host' },
+                { name: `   ${apiKey ? 'Update' : 'Set'} API Key`, value: 'apikey' },
+                { name: `   Set MCP Port ${dim(`(current: ${currentMcpPort})`)}`, value: 'mcp_port' },
+                { name: `   Set MCP Host ${dim(`(current: ${currentMcpHost})`)}`, value: 'mcp_host' },
+                { name: `    Set MCP Path ${dim(`(current: ${currentMcpPath})`)}`, value: 'mcp_path' },
+                { name: `   ${mcpApiKey ? 'Update' : 'Set'} MCP API Key`, value: 'mcp_apikey' },
+                { name: `   ${autonomyAllowed ? 'Disable' : 'Enable'} Autonomous Messaging`, value: 'toggle_autonomy' },
+                { name: `   ${bold('Tailscale Setup & Status Guide')}`, value: 'tailscale' },
+                { name: `   ${bold('Public Tunnel Setup (Cloudflare/Ngrok)')}`, value: 'public_tunnel' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -4671,10 +4665,10 @@ async function showGatewayMenu() {
 
         const gateway = new GatewayServer(agent, agent.config, gatewayConfig);
 
-        console.log('\n🌐 Starting OrcBot Web Gateway...');
+        console.log('\nStarting OrcBot Web Gateway...');
         await gateway.start();
 
-        console.log(`\n📡 Gateway is ready!`);
+        console.log(`\nGateway is ready!`);
         console.log(`   REST API: http://${currentHost}:${currentPort}/api`);
         console.log(`   WebSocket: ws://${currentHost}:${currentPort}`);
         if (apiKey) {
@@ -4684,7 +4678,7 @@ async function showGatewayMenu() {
         console.log('\n   Press Ctrl+C to stop\n');
 
         if (action === 'start_with_agent' || action === 'start_with_agent_mcp') {
-            console.log('🤖 Also starting agent loop...\n');
+            console.log('Also starting agent loop...\n');
             agent.start().catch(err => logger.error(`Agent error: ${err}`));
         }
 
@@ -4700,7 +4694,7 @@ async function showGatewayMenu() {
             });
             await mcp.startHttp(resolved);
             const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
-            console.log(`🔌 MCP HTTP server running at http://${connectHost}:${resolved.port}${resolved.path}`);
+            console.log(`MCP HTTP server running at http://${connectHost}:${resolved.port}${resolved.path}`);
             console.log(`   Health check: http://${connectHost}:${resolved.port}/health`);
             process.on('SIGINT', async () => { await mcp.close(); });
         }
@@ -4719,7 +4713,7 @@ async function showGatewayMenu() {
         });
         await mcp.startHttp(resolved);
         const connectHost = resolved.host === '0.0.0.0' ? 'localhost' : resolved.host;
-        console.log('\n🔌 MCP HTTP server is ready!');
+        console.log('\nMCP HTTP server is ready!');
         console.log(`   Endpoint: http://${connectHost}:${resolved.port}${resolved.path}`);
         console.log(`   Health:   http://${connectHost}:${resolved.port}/health`);
         console.log('   Press Ctrl+C to stop\n');
@@ -4746,7 +4740,7 @@ async function showGatewayMenu() {
             `${dim('Tailnet IPv4')}    ${tsInfo.ipv4 ? brightCyan(tsInfo.ipv4) : gray('n/a')}`,
             `${dim('Tailnet State')}   ${tsInfo.connected ? green('connected') : yellow('not connected')}`,
             `${dim('Auth')}            ${mcpApiKey ? green('API key required') : yellow('no auth')}`,
-        ], { title: '🔌 MCP CLIENT CONNECTION INFO', width: 76, color: c.brightMagenta });
+        ], { title: 'MCP CLIENT CONNECTION INFO', width: 76 });
         if (tsInfo.health) {
             console.log(yellow(`Health: ${tsInfo.health}`));
             console.log('');
@@ -4819,7 +4813,7 @@ async function showGatewayMenu() {
             `${dim('Auth Key')}    ${apiKey ? green('set') : yellow('not set (recommended)')}`,
             `${dim('CLI Path')}    ${tsInfo.command ? dim(tsInfo.command) : dim('n/a')}`,
         ];
-        box(tailscaleLines, { title: '🔐 PRIVATE REMOTE ACCESS', width: 60, color: c.brightCyan });
+        box(tailscaleLines, { title: 'PRIVATE REMOTE ACCESS', width: 60 });
         if (tsInfo.health) {
             console.log(yellow(`Health: ${tsInfo.health}`));
             console.log('');
@@ -4844,10 +4838,10 @@ async function showGatewayMenu() {
         console.log('');
 
         const choices: any[] = [];
-        if (!tailscaleInstalled) choices.push({ name: `  ⬇️  ${bold('Install Tailscale')}`, value: 'install' });
-        else choices.push({ name: `  🔐 ${bold('Run login (tailscale up)')}`, value: 'login' });
-        choices.push({ name: `  🧾 ${bold('Show quick commands')}`, value: 'quick' });
-        choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])));
+        if (!tailscaleInstalled) choices.push({ name: `    ${bold('Install Tailscale')}`, value: 'install' });
+        else choices.push({ name: `   ${bold('Run login (tailscale up)')}`, value: 'login' });
+        choices.push({ name: `   ${bold('Show quick commands')}`, value: 'quick' });
+        choices.push(new inquirer.Separator(dim('  ──────────────────────────────────')));
         choices.push({ name: dim('  ← Back'), value: 'back' });
 
         const { tsAction } = await inquirer.prompt([
@@ -4922,7 +4916,7 @@ async function showGatewayMenu() {
             `${dim('ngrok')}        ${tunnelInfo.ngrok.available ? green(`installed${tunnelInfo.ngrok.version ? ` (${tunnelInfo.ngrok.version})` : ''}`) : yellow('not found')}`,
             `${dim('Auth')}         ${mcpApiKey ? green('MCP API key set') : yellow('no mcpApiKey set (strongly recommended)')}`,
         ];
-        box(tunnelLines, { title: '🌍 PUBLIC MCP TUNNEL', width: 80, color: c.brightYellow });
+        box(tunnelLines, { title: 'PUBLIC MCP TUNNEL', width: 80 });
 
         console.log('');
         console.log(bold('Public MCP notes:'));
@@ -4939,10 +4933,10 @@ async function showGatewayMenu() {
         console.log('');
 
         const tunnelChoices: any[] = [];
-        if (tunnelInfo.cloudflared.available) tunnelChoices.push({ name: `  ☁️  ${bold('Start Cloudflare Quick Tunnel now')}`, value: 'run_cloudflared' });
-        if (tunnelInfo.ngrok.available) tunnelChoices.push({ name: `  🕳️  ${bold('Start ngrok tunnel now')}`, value: 'run_ngrok' });
-        tunnelChoices.push({ name: `  📋 ${bold('Show quick commands')}`, value: 'quick' });
-        tunnelChoices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.yellow, c.gray])));
+        if (tunnelInfo.cloudflared.available) tunnelChoices.push({ name: `    ${bold('Start Cloudflare Quick Tunnel now')}`, value: 'run_cloudflared' });
+        if (tunnelInfo.ngrok.available) tunnelChoices.push({ name: `    ${bold('Start ngrok tunnel now')}`, value: 'run_ngrok' });
+        tunnelChoices.push({ name: `   ${bold('Show quick commands')}`, value: 'quick' });
+        tunnelChoices.push(new inquirer.Separator(dim('  ──────────────────────────────────')));
         tunnelChoices.push({ name: dim('  ← Back'), value: 'back' });
 
         const { tunnelAction } = await inquirer.prompt([
@@ -5130,7 +5124,7 @@ function getTailscaleInfo(): TailscaleInfo {
 async function showModelsMenu() {
     console.clear();
     banner();
-    sectionHeader('🤖', 'AI Models & Providers');
+    sectionHeader('AI Models & Providers');
 
     const currentProvider = agent.config.get('llmProvider') || 'auto';
     const currentModel = agent.config.get('modelName') || '(default)';
@@ -5153,7 +5147,7 @@ async function showModelsMenu() {
         `${dim('pi-ai')}     ${piAiEnabled ? green('enabled (primary)') : gray('disabled (legacy mode)')}`,
         `${dim('pi-tui')}    ${piTuiStatus}`,
     ];
-    box(modelLines, { title: '⭐ ACTIVE MODEL', width: 52, color: c.brightCyan });
+    box(modelLines, { title: 'ACTIVE MODEL', width: 52 });
 
     console.log('');
     const providerLines = [
@@ -5165,7 +5159,7 @@ async function showModelsMenu() {
         `${statusDot(hasAnthropic, '')}  ${bold('Anthropic')}    ${hasAnthropic ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasBedrock, '')}  ${bold('AWS Bedrock')}  ${hasBedrock ? green('Keys set') : gray('Not configured')}`,
     ];
-    box(providerLines, { title: '🏢 PROVIDERS', width: 52, color: c.green });
+    box(providerLines, { title: 'PROVIDERS', width: 52 });
     console.log('');
 
     const { provider } = await inquirer.prompt([
@@ -5174,8 +5168,8 @@ async function showModelsMenu() {
             name: 'provider',
             message: cyan('Select provider to configure:'),
             choices: [
-                { name: `  ⭐ ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
-                new inquirer.Separator(gradient('  ─── Per-Provider Config ──────────', [c.green, c.gray])),
+                { name: `   ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
+                new inquirer.Separator(dim('  ─── Per-Provider Config ──────────')),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
                 { name: `  ${statusDot(hasOpenRouter, '')} OpenRouter ${dim('(multi-model gateway)')}`, value: 'openrouter' },
                 { name: `  ${statusDot(hasOllama, '')} Ollama ${dim('(local models)')}`, value: 'ollama' },
@@ -5183,7 +5177,7 @@ async function showModelsMenu() {
                 { name: `  ${statusDot(hasNvidia, '')} NVIDIA ${dim('(AI models)')}`, value: 'nvidia' },
                 { name: `  ${statusDot(hasAnthropic, '')} Anthropic ${dim('(Claude)')}`, value: 'anthropic' },
                 { name: `  ${statusDot(hasBedrock, '')} AWS Bedrock ${dim('(foundation models)')}`, value: 'bedrock' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.green, c.gray])),
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -5216,11 +5210,11 @@ async function showModelsMenu() {
 async function showOllamaMenu() {
     console.clear();
     banner();
-    sectionHeader('🦙', 'Ollama / Local Models');
+    sectionHeader('Ollama / Local Models');
 
     const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
     const helper = new OllamaHelper(ollamaUrl);
-    
+
     const isInstalled = await helper.isInstalled();
     const isRunning = await helper.isRunning();
     const localModels = isRunning ? await helper.listModels() : [];
@@ -5237,22 +5231,22 @@ async function showOllamaMenu() {
     if (isRunning && runningModels.length > 0) {
         statusLines.push(`${dim('Active')}     ${green(runningModels.map(m => m.name.split(':')[0]).join(', '))}`);
     }
-    box(statusLines, { title: '📡 OLLAMA STATUS', width: 52, color: isRunning ? c.brightGreen : c.brightRed });
+    box(statusLines, { title: 'OLLAMA STATUS', width: 52, color: isRunning ? c.brightGreen : c.brightRed });
 
     if (!isRunning && !isInstalled) {
-        console.log(yellow('\n  ⚠ Ollama is not detected on your system.'));
+        console.log(yellow('\n   Ollama is not detected on your system.'));
         console.log(dim('  To use local models, please download Ollama and install it first.'));
     } else if (!isRunning) {
-        console.log(yellow('\n  ⚠ Ollama is installed but the server is not running.'));
+        console.log(yellow('\n   Ollama is installed but the server is not running.'));
         console.log(dim('  Select "Start Ollama Server" below to launch it.'));
     }
 
     if (isRunning && localModels.length > 0) {
         console.log('');
-        const modelLines = localModels.map(m => 
+        const modelLines = localModels.map(m =>
             `${m === currentModel && currentProvider === 'ollama' ? brightGreen('●') : gray('○')} ${m}`
         );
-        box(modelLines, { title: '📦 LOCAL MODELS', width: 52, color: c.brightCyan });
+        box(modelLines, { title: 'LOCAL MODELS', width: 52 });
     }
 
     console.log('');
@@ -5262,15 +5256,15 @@ async function showOllamaMenu() {
             name: 'action',
             message: cyan('Ollama Management:'),
             choices: [
-                { name: `  ⭐ ${bold('Set as Primary Provider')}`, value: 'set_primary', disabled: !isRunning },
-                { name: `  📦 ${bold('Select Local Model')}`, value: 'select_model', disabled: !isRunning || localModels.length === 0 },
-                { name: `  ⬇️  ${bold('Pull New Model')}`, value: 'pull_model', disabled: !isRunning },
-                { name: `  🚀 ${bold('Start Ollama Server')}`, value: 'start_server', disabled: isRunning },
-                { name: `  🌐 ${bold('Download Ollama')} ${dim('(ollama.com)')}`, value: 'download' },
-                { name: `  🔄 ${bold('Refresh Status')}`, value: 'refresh' },
-                new inquirer.Separator(gradient('  ─── Configuration ────────────────', [c.cyan, c.gray])),
-                { name: `  ⚙️  Set API URL ${dim(`(${ollamaUrl})`)}`, value: 'set_url' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.cyan, c.gray])),
+                { name: `   ${bold('Set as Primary Provider')}`, value: 'set_primary', disabled: !isRunning },
+                { name: `   ${bold('Select Local Model')}`, value: 'select_model', disabled: !isRunning || localModels.length === 0 },
+                { name: `    ${bold('Pull New Model')}`, value: 'pull_model', disabled: !isRunning },
+                { name: `   ${bold('Start Ollama Server')}`, value: 'start_server', disabled: isRunning },
+                { name: `   ${bold('Download Ollama')} ${dim('(ollama.com)')}`, value: 'download' },
+                { name: `   ${bold('Refresh Status')}`, value: 'refresh' },
+                new inquirer.Separator(dim('  ─── Configuration ────────────────')),
+                { name: `    Set API URL ${dim(`(${ollamaUrl})`)}`, value: 'set_url' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -5333,7 +5327,7 @@ async function showOllamaMenu() {
             }
         ]);
         console.log(yellow(`\n  Pulling ${modelName}...`));
-        
+
         const success = await helper.pullModel(modelName, (status, completed, total) => {
             if (completed !== undefined && total !== undefined) {
                 const percent = Math.round((completed / total) * 100);
@@ -5386,7 +5380,7 @@ async function showOllamaMenu() {
 async function showSelfTrainingMenu() {
     console.clear();
     banner();
-    sectionHeader('🧪', 'Self-Training Sidecar');
+    sectionHeader('Self-Training Sidecar');
 
     const status = agent.getSelfTrainingStatus();
     const lastEval = status.lastEvaluationReport;
@@ -5405,7 +5399,7 @@ async function showSelfTrainingMenu() {
         `${c.white}Last Job${c.reset}     ${lastJob ? green(lastJob.id) : gray('none')}`,
         `${c.white}Last Eval${c.reset}    ${lastEval ? green(`${lastEval.averageScore} avg / ${lastEval.passRate} pass`) : gray('none')}`,
         `${c.white}Last Promote${c.reset} ${lastPromotion ? green(lastPromotion.modelName) : gray('none')}`,
-    ], { title: '🧪 SELF-TRAINING STATUS', width: 58, color: c.brightCyan });
+    ], { title: 'SELF-TRAINING STATUS', width: 58 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -5414,17 +5408,17 @@ async function showSelfTrainingMenu() {
             name: 'action',
             message: cyan('Self-Training options:'),
             choices: [
-                { name: `  📊 ${bold('View Detailed Status')}`, value: 'status' },
-                { name: `  🧱 ${bold('Prepare Training Job')}`, value: 'prepare' },
-                { name: `  📈 ${bold('Run Evaluation')}`, value: 'eval' },
-                { name: `  📦 ${bold('Build Launch Plan')}`, value: 'plan' },
-                { name: `  🚀 ${bold('Launch Training Job')}`, value: 'launch', disabled: !status.lastPreparedJob },
-                new inquirer.Separator(gradient('  ─── Candidate Lifecycle ───────────', [c.brightCyan, c.gray])),
-                { name: `  🏷️  ${bold('Register Candidate Model')}`, value: 'register' },
-                { name: `  ⭐ ${bold('Promote Candidate Model')}`, value: 'promote', disabled: status.candidates.length === 0 },
-                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.brightCyan, c.gray])),
-                { name: `  ⚙️  ${bold('Configure Self-Training')}`, value: 'config' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.brightCyan, c.gray])),
+                { name: `   ${bold('View Detailed Status')}`, value: 'status' },
+                { name: `   ${bold('Prepare Training Job')}`, value: 'prepare' },
+                { name: `   ${bold('Run Evaluation')}`, value: 'eval' },
+                { name: `   ${bold('Build Launch Plan')}`, value: 'plan' },
+                { name: `   ${bold('Launch Training Job')}`, value: 'launch', disabled: !status.lastPreparedJob },
+                new inquirer.Separator(dim('  ─── Candidate Lifecycle ───────────')),
+                { name: `    ${bold('Register Candidate Model')}`, value: 'register' },
+                { name: `   ${bold('Promote Candidate Model')}`, value: 'promote', disabled: status.candidates.length === 0 },
+                new inquirer.Separator(dim('  ─── Settings ─────────────────────')),
+                { name: `    ${bold('Configure Self-Training')}`, value: 'config' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -5592,7 +5586,7 @@ async function showSelfTrainingMenu() {
 async function showPiAIConfig() {
     console.clear();
     banner();
-    sectionHeader('⭐', 'Model & Provider Setup');
+    sectionHeader('Model & Provider Setup');
 
     const catalogue = await agent.llm.getPiAICatalogue();
 
@@ -5642,15 +5636,15 @@ async function showPiAIConfig() {
         `${dim('Status')}   ${piAiEnabled ? green('Enabled (primary transport)') : yellow('Disabled (legacy mode)')}`,
         `${dim('Model')}    ${bold(currentModel)}`,
         `${dim('Providers')} ${cyan(String(Object.keys(catalogue).length))} providers found dynamically`,
-    ], { title: '🔄 pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
+    ], { title: 'pi-ai STATUS', width: 58, color: piAiEnabled ? c.green : c.yellow });
     console.log('');
 
     const currentProvider = agent.config.get('llmProvider');
     const topChoices: any[] = [
-        { name: `  ${piAiEnabled ? '✅ Disable pi-ai' : '🔄 Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
-        { name: `  📦 ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
-        { name: `  🔀 ${bold('Auto-detect provider')} ${dim(`(infer from model name)${!currentProvider ? ' ✓ active' : ''}`)}`, value: 'auto_provider' },
-        new inquirer.Separator(gradient('  ─── Browse & Select Model ────────────', [c.brightCyan, c.gray])),
+        { name: `  ${piAiEnabled ? 'Disable pi-ai' : 'Enable pi-ai'} ${dim('(toggle)')}`, value: 'toggle' },
+        { name: `   ${bold('Check for Catalog Updates')} ${dim('(npm update)')}`, value: 'update_catalog' },
+        { name: `   ${bold('Auto-detect provider')} ${dim(`(infer from model name)${!currentProvider ? ' ✓ active' : ''}`)}`, value: 'auto_provider' },
+        new inquirer.Separator(dim('  ─── Browse & Select Model ────────────')),
         ...Object.entries(catalogue).map(([key, cat]: [string, any]) => {
             const hasKey = !!(piKeyMap[key] ? piKeyMap[key]() : undefined);
             return {
@@ -5658,7 +5652,7 @@ async function showPiAIConfig() {
                 value: `cat:${key}`,
             };
         }),
-        new inquirer.Separator(gradient('  ────────────────────────────────────', [c.brightCyan, c.gray])),
+        new inquirer.Separator(dim('  ────────────────────────────────────')),
         { name: dim('  ← Back'), value: 'back' },
     ];
 
@@ -5699,18 +5693,18 @@ async function showPiAIConfig() {
             name: `  ${bold(m.id.padEnd(46))} ${dim(m.note)}`,
             value: m.id,
         }));
-        modelChoices.push({ name: dim('  ✏️  Enter custom model ID...'), value: '__custom__' } as any);
+        modelChoices.push({ name: dim('    Enter custom model ID...'), value: '__custom__' } as any);
         modelChoices.push({
             name: hasKey
-                ? yellow(`  🔑 Change / re-authenticate ${cat.label} key`)
-                : yellow(`  🔑 Set ${cat.label} API key first`),
+                ? yellow(`   Change / re-authenticate ${cat.label} key`)
+                : yellow(`   Set ${cat.label} API key first`),
             value: '__setkey__',
         } as any);
         modelChoices.push({ name: dim('  ← Back'), value: '__back__' } as any);
 
         const { selectedModel } = await inquirer.prompt([{
             type: 'list', name: 'selectedModel',
-            message: cyan(`${cat.label}${hasKey ? '' : yellow(' ⚠ no key set')} — select model:`),
+            message: cyan(`${cat.label}${hasKey ? '' : yellow('  no key set')} — select model:`),
             choices: modelChoices,
         }]);
 
@@ -5731,7 +5725,7 @@ async function showPiAIConfig() {
                     await agent.llm.piAiLogin(catKey);
                     console.log(green(`\n  Login process completed. Try selecting a model again.`));
                 } else {
-                    console.log(yellow(`\n  ℹ  Manual login instructions:`));
+                    console.log(yellow(`\n    Manual login instructions:`));
                     console.log(`     Run: ${bold(`npx @mariozechner/pi-ai /login ${catKey}`)}`);
                 }
             } else if (catKey === 'azure-openai-responses') {
@@ -5822,7 +5816,7 @@ async function showPiAIConfig() {
         const keyAfterSelect = piKeyMap[catKey] ? piKeyMap[catKey]() : undefined;
         if (!keyAfterSelect && piConfigKey[catKey]) {
             console.log('');
-            console.log(yellow(`⚠  No API key configured for ${cat.label}.`));
+            console.log(yellow(`No API key configured for ${cat.label}.`));
             const { setNow } = await inquirer.prompt([{
                 type: 'confirm', name: 'setNow',
                 message: `Set ${cat.label} API key now?`,
@@ -5863,32 +5857,32 @@ async function showSetPrimaryProvider() {
             value: 'auto'
         },
         {
-            name: `OpenAI${hasOpenAI ? '' : ' (no key configured)'}${currentProvider === 'openai' ? ' ✓' : ''}`,
+            name: `OpenAI (no key configured)${currentProvider === 'openai' ? ' ✓' : ''}`,
             value: 'openai',
             disabled: !hasOpenAI
         },
         {
-            name: `Google Gemini${hasGoogle ? '' : ' (no key configured)'}${currentProvider === 'google' ? ' ✓' : ''}`,
+            name: `Google Gemini (no key configured)${currentProvider === 'google' ? ' ✓' : ''}`,
             value: 'google',
             disabled: !hasGoogle
         },
         {
-            name: `OpenRouter${hasOpenRouter ? '' : ' (no key configured)'}${currentProvider === 'openrouter' ? ' ✓' : ''}`,
+            name: `OpenRouter (no key configured)${currentProvider === 'openrouter' ? ' ✓' : ''}`,
             value: 'openrouter',
             disabled: !hasOpenRouter
         },
         {
-            name: `NVIDIA${hasNvidia ? '' : ' (no key configured)'}${currentProvider === 'nvidia' ? ' ✓' : ''}`,
+            name: `NVIDIA (no key configured)${currentProvider === 'nvidia' ? ' ✓' : ''}`,
             value: 'nvidia',
             disabled: !hasNvidia
         },
         {
-            name: `Anthropic (Claude)${hasAnthropic ? '' : ' (no key configured)'}${currentProvider === 'anthropic' ? ' ✓' : ''}`,
+            name: `Anthropic (Claude) (no key configured)${currentProvider === 'anthropic' ? ' ✓' : ''}`,
             value: 'anthropic',
             disabled: !hasAnthropic
         },
         {
-            name: `AWS Bedrock${hasBedrock ? '' : ' (no credentials configured)'}${currentProvider === 'bedrock' ? ' ✓' : ''}`,
+            name: `AWS Bedrock (no credentials configured)${currentProvider === 'bedrock' ? ' ✓' : ''}`,
             value: 'bedrock',
             disabled: !hasBedrock
         },
@@ -6002,7 +5996,7 @@ async function showOpenAIConfig() {
 async function showGeminiConfig() {
     console.clear();
     banner();
-    sectionHeader('🤖', 'Google Gemini (Cloud API)');
+    sectionHeader('Google Gemini (Cloud API)');
 
     const currentModel = agent.config.get('modelName');
     const apiKey = agent.config.get('googleApiKey') || 'Not Set';
@@ -6167,7 +6161,7 @@ async function showBedrockConfig() {
 async function showPushTaskMenu() {
     console.clear();
     banner();
-    sectionHeader('📝', 'Push Task');
+    sectionHeader('Push Task');
     console.log('');
 
     const { task } = await inquirer.prompt([
@@ -6202,7 +6196,7 @@ async function showWorldEventsMenu() {
 
     console.clear();
     banner();
-    sectionHeader('🌍', 'World Events');
+    sectionHeader('World Events');
     console.log('');
 
     const lines = [
@@ -6216,7 +6210,7 @@ async function showWorldEventsMenu() {
         `${dim('Globe Cmd')}    ${globeCommand} ${globeArgs.join(' ')}`,
         `${dim('Store to Memory')} ${storeEnabled ? green('● ON') : gray('○ OFF')}`
     ];
-    box(lines, { title: '🌍 WORLD EVENTS', width: 56, color: c.brightBlue });
+    box(lines, { title: 'WORLD EVENTS', width: 56 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -6367,7 +6361,7 @@ async function showWorldEventsMenu() {
 async function showConnectionsMenu() {
     console.clear();
     banner();
-    sectionHeader('🔌', 'Connections');
+    sectionHeader('Connections');
 
     const hasTelegram = !!agent.config.get('telegramToken');
     const hasWhatsapp = !!agent.config.get('whatsappEnabled');
@@ -6388,7 +6382,7 @@ async function showConnectionsMenu() {
         `${statusDot(hasSlack, '')} ${bold('Slack')}       ${hasSlack ? green('Connected') : gray('Not configured')}  ${slAuto ? dim('auto-reply ✓') : ''}`,
         `${statusDot(hasEmail, '')} ${bold('Email')}       ${hasEmail ? green('Enabled') : gray('Not configured')}  ${emAuto ? dim('auto-reply ✓') : ''}`,
     ];
-    box(channelLines, { title: '📡 CHANNEL STATUS', width: 58, color: c.cyan });
+    box(channelLines, { title: 'CHANNEL STATUS', width: 58 });
     console.log('');
 
     const { channel } = await inquirer.prompt([
@@ -6397,12 +6391,12 @@ async function showConnectionsMenu() {
             name: 'channel',
             message: cyan('Select channel to configure:'),
             choices: [
-                { name: `  ${hasTelegram ? '✈️ ' : '  '}${bold('Telegram Bot')}      ${hasTelegram ? green('●') : gray('○')}`, value: 'telegram' },
-                { name: `  ${hasWhatsapp ? '💬' : '  '} ${bold('WhatsApp (Baileys)')} ${hasWhatsapp ? green('●') : gray('○')}`, value: 'whatsapp' },
-                { name: `  ${hasDiscord ? '🎮' : '  '} ${bold('Discord Bot')}       ${hasDiscord ? green('●') : gray('○')}`, value: 'discord' },
-                { name: `  ${hasSlack ? '💼' : '  '} ${bold('Slack Bot')}         ${hasSlack ? green('●') : gray('○')}`, value: 'slack' },
-                { name: `  ${hasEmail ? '📧' : '  '} ${bold('Email (SMTP/IMAP)')}  ${hasEmail ? green('●') : gray('○')}`, value: 'email' },
-                new inquirer.Separator(gradient('  ─────────────────────────────────', [c.cyan, c.gray])),
+                { name: `    ${bold('Telegram Bot')}      ${hasTelegram ? green('●') : gray('○')}`, value: 'telegram' },
+                { name: `     ${bold('WhatsApp (Baileys)')} ${hasWhatsapp ? green('●') : gray('○')}`, value: 'whatsapp' },
+                { name: `     ${bold('Discord Bot')}       ${hasDiscord ? green('●') : gray('○')}`, value: 'discord' },
+                { name: `     ${bold('Slack Bot')}         ${hasSlack ? green('●') : gray('○')}`, value: 'slack' },
+                { name: `     ${bold('Email (SMTP/IMAP)')}  ${hasEmail ? green('●') : gray('○')}`, value: 'email' },
+                new inquirer.Separator(dim('  ─────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' },
             ]
         }
@@ -6434,7 +6428,7 @@ async function showTelegramConfig() {
     const blockedGroups = (agent.config.get('telegramBlockedGroups') || []) as string[];
     console.clear();
     banner();
-    sectionHeader('✈️', 'Telegram Settings');
+    sectionHeader('Telegram Settings');
     console.log('');
     const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'reply_only' ? yellow('REPLY TO BOT ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
     const tgLines = [
@@ -6448,7 +6442,7 @@ async function showTelegramConfig() {
         `${dim('Allowed Groups')} ${cyan(String(allowedGroups.length))}`,
         `${dim('Blocked Groups')} ${cyan(String(blockedGroups.length))}`,
     ];
-    box(tgLines, { title: '✈️  TELEGRAM', width: 46, color: c.cyan });
+    box(tgLines, { title: 'TELEGRAM', width: 46 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -6582,7 +6576,7 @@ async function showWhatsAppConfig() {
 
     console.clear();
     banner();
-    sectionHeader('💬', 'WhatsApp Settings');
+    sectionHeader('WhatsApp Settings');
     console.log('');
     const onOff = (v: any) => v ? green(bold('● ON')) : gray('○ OFF');
     const groupPolicyLabel = groupPolicy === 'mention_only' ? yellow('MENTION ONLY') : groupPolicy === 'owner_only' ? yellow('OWNER ONLY') : groupPolicy === 'allowlist' ? yellow('ALLOWLIST') : green('ALL MESSAGES');
@@ -6606,7 +6600,7 @@ async function showWhatsAppConfig() {
         `${dim('Auto-React (Emojis)')}  ${onOff(autoReact)}`,
         `${dim('Context Profiling')}    ${onOff(contextProfiling)}`,
     ];
-    box(waLines, { title: '💬 WHATSAPP', width: 48, color: c.green });
+    box(waLines, { title: 'WHATSAPP', width: 48 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -6859,7 +6853,7 @@ async function showWhatsAppConfig() {
 
             const duration = agent.estimateProfilingDuration(contacts.length);
 
-            console.log('\n' + c.bgYellow + c.black + ' ⚠️  HEAVY TASK WARNING ' + c.reset);
+            console.log('\n' + c.bgYellow + c.black + '   HEAVY TASK WARNING ' + c.reset);
             console.log(yellow('Context profiling reads past chat history and uses AI to build relationship context.'));
             console.log(`${dim('contacts:')}      ${contacts.length}`);
             console.log(`${dim('estimated duration:')} ~${duration} minutes`);
@@ -6887,7 +6881,7 @@ async function showWhatsAppConfig() {
             const result = await agent.profileWhatsAppHistory(contacts, 20, updateProgress);
 
             process.stdout.write('\r' + ' '.repeat(70) + '\r'); // Clear progress line
-            console.log(green(`\n\n✅ Profiling complete! ${result.updated} contacts updated.`));
+            console.log(green(`\n\nProfiling complete! ${result.updated} contacts updated.`));
             await waitKeyPress();
             break;
         }
@@ -6903,7 +6897,7 @@ async function showWhatsAppConfig() {
             // Listener for QR events
             const qrListener = (qr: string) => {
                 console.clear();
-                console.log('🤖 OrcBot WhatsApp Pairing');
+                console.log('OrcBot WhatsApp Pairing');
                 console.log('-------------------------------------------');
                 console.log('Scan this QR code with your WhatsApp app:');
                 console.log('1. Open WhatsApp on your phone');
@@ -6932,7 +6926,7 @@ async function showWhatsAppConfig() {
                 eventBus.on('whatsapp:status', statusListener);
             });
 
-            console.log('\n✅ WhatsApp Linked Successfully!');
+            console.log('\nWhatsApp Linked Successfully!');
             await waitKeyPress();
             break;
     }
@@ -6950,7 +6944,7 @@ async function showSlackConfig() {
     const autonomyAllowed = isAutonomyEnabledForChannel('slack');
     console.clear();
     banner();
-    sectionHeader('💼', 'Slack Settings');
+    sectionHeader('Slack Settings');
     console.log('');
     const slLines = [
         `${dim('Bot Token')}   ${currentToken === 'Not Set' ? gray('Not Set') : green(currentToken.substring(0, 8) + '…' + currentToken.slice(-4))}`,
@@ -6959,7 +6953,7 @@ async function showSlackConfig() {
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
         `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
-    box(slLines, { title: '💼 SLACK', width: 46, color: c.brightCyan });
+    box(slLines, { title: 'SLACK', width: 46 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7045,7 +7039,7 @@ async function showEmailConfig() {
 
     console.clear();
     banner();
-    sectionHeader('📧', 'Email Settings');
+    sectionHeader('Email Settings');
     console.log('');
     const lines = [
         `${dim('Enabled')}      ${enabled ? green(bold('● ON')) : gray('○ OFF')}`,
@@ -7059,7 +7053,7 @@ async function showEmailConfig() {
         `${dim('Auto-Reply')}   ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
         `${dim('Startup Inbox')} ${processUnreadOnStart ? yellow('Process existing unread') : green('Ignore existing unread')}`,
     ];
-    box(lines, { title: '📧 EMAIL', width: 58, color: c.yellow });
+    box(lines, { title: 'EMAIL', width: 58 });
     console.log(dim('SMTP = sending outbound mail.'));
     console.log(dim('IMAP = reading inbound inbox (auto-reply/tasks). Not required for SMTP-only sending/tests.'));
     console.log(dim('Default: OrcBot ignores unread backlog on connect and only processes new inbound mail.'));
@@ -7198,14 +7192,14 @@ async function showDiscordConfig() {
     const autonomyAllowed = isAutonomyEnabledForChannel('discord');
     console.clear();
     banner();
-    sectionHeader('🎮', 'Discord Settings');
+    sectionHeader('Discord Settings');
     console.log('');
     const dcLines = [
         `${dim('Token')}       ${currentToken === 'Not Set' ? gray('Not Set') : green('***' + currentToken.slice(-8))}`,
         `${dim('Auto-Reply')}  ${autoReply ? green(bold('● ON')) : gray('○ OFF')}`,
         `${dim('Autonomy')}    ${autonomyAllowed ? green(bold('● ENABLED')) : gray('○ DISABLED')}`,
     ];
-    box(dcLines, { title: '🎮 DISCORD', width: 46, color: c.magenta });
+    box(dcLines, { title: 'DISCORD', width: 46 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7260,14 +7254,14 @@ async function showDiscordConfig() {
 async function showWorkerProfileMenu() {
     console.clear();
     banner();
-    sectionHeader('🪪', 'Worker Profile');
+    sectionHeader('Worker Profile');
 
     if (!workerProfile.exists()) {
         console.log('');
         box([
             `${dim('No worker profile exists yet.')}`,
             `${dim('A profile gives your agent a digital identity.')}`,
-        ], { title: '🪪 IDENTITY', width: 48, color: c.gray });
+        ], { title: 'IDENTITY', width: 48 });
         console.log('');
 
         const { create } = await inquirer.prompt([
@@ -7282,7 +7276,7 @@ async function showWorkerProfileMenu() {
         ]);
 
         workerProfile.create(handle.trim(), displayName.trim());
-        console.log('\n✅ Worker profile created!');
+        console.log('\nWorker profile created!');
         await waitKeyPress();
         return showWorkerProfileMenu();
     }
@@ -7299,7 +7293,7 @@ async function showWorkerProfileMenu() {
         `${dim('Avatar')}    ${profile.avatarUrl || gray('(not set)')}`,
         `${dim('Websites')}  ${profile.websites.length > 0 ? cyan(String(profile.websites.length) + ' linked') : gray('(none)')}`,
     ];
-    box(profileLines, { title: '🪪 DIGITAL IDENTITY', width: 52, color: c.brightCyan });
+    box(profileLines, { title: 'DIGITAL IDENTITY', width: 52 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7308,13 +7302,13 @@ async function showWorkerProfileMenu() {
             name: 'action',
             message: cyan('Profile Options:'),
             choices: [
-                { name: `  ✏️  ${bold('Edit Basic Info')} ${dim('(Handle, Name, Bio)')}`, value: 'edit_basic' },
-                { name: `  📧 ${profile.email ? 'Update' : 'Set'} ${bold('Email Address')}`, value: 'email' },
-                { name: `  🔑 ${profile.password ? 'Update' : 'Set'} ${bold('Password')}`, value: 'password' },
-                { name: `  🌐 ${bold('Manage Linked Websites')} ${dim(`(${profile.websites.length})`)}`, value: 'websites' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.red, c.gray])),
-                { name: `  🗑️  ${red('Delete Worker Profile')}`, value: 'delete' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                { name: `    ${bold('Edit Basic Info')} ${dim('(Handle, Name, Bio)')}`, value: 'edit_basic' },
+                { name: `   ${profile.email ? 'Update' : 'Set'} ${bold('Email Address')}`, value: 'email' },
+                { name: `   ${profile.password ? 'Update' : 'Set'} ${bold('Password')}`, value: 'password' },
+                { name: `   ${bold('Manage Linked Websites')} ${dim(`(${profile.websites.length})`)}`, value: 'websites' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
+                { name: `    ${red('Delete Worker Profile')}`, value: 'delete' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -7336,7 +7330,7 @@ async function showWorkerProfileMenu() {
                 bio: answers.bio.trim() || undefined,
                 avatarUrl: answers.avatarUrl.trim() || undefined
             });
-            console.log('✅ Profile updated!');
+            console.log('Profile updated!');
             break;
         }
         case 'email': {
@@ -7344,7 +7338,7 @@ async function showWorkerProfileMenu() {
                 { type: 'input', name: 'email', message: 'Enter email address:', validate: (v: string) => v.includes('@') || 'Enter a valid email' }
             ]);
             workerProfile.setEmail(email.trim());
-            console.log('✅ Email updated!');
+            console.log('Email updated!');
             break;
         }
         case 'password': {
@@ -7353,12 +7347,12 @@ async function showWorkerProfileMenu() {
                 { type: 'password', name: 'confirm', message: 'Confirm password:', mask: '*' }
             ]);
             if (password !== confirm) {
-                console.log('❌ Passwords do not match.');
+                console.log('Passwords do not match.');
             } else if (password.length < 1) {
-                console.log('❌ Password cannot be empty.');
+                console.log('Password cannot be empty.');
             } else {
                 workerProfile.setPassword(password);
-                console.log('✅ Password set (encrypted locally).');
+                console.log('Password set (encrypted locally).');
             }
             break;
         }
@@ -7367,7 +7361,7 @@ async function showWorkerProfileMenu() {
             return; // showWorkerWebsitesMenu handles returning
         case 'delete': {
             const { confirm } = await inquirer.prompt([
-                { type: 'confirm', name: 'confirm', message: '⚠️ Are you sure you want to DELETE your worker profile? This cannot be undone.', default: false }
+                { type: 'confirm', name: 'confirm', message: 'Are you sure you want to DELETE your worker profile? This cannot be undone.', default: false }
             ]);
             if (confirm) {
                 workerProfile.delete();
@@ -7384,7 +7378,7 @@ async function showWorkerProfileMenu() {
 async function showWorldGovernanceMenu() {
     console.clear();
     banner();
-    sectionHeader('🌍', 'World Governance');
+    sectionHeader('World Governance');
 
     const worldPath = agent.config.get('worldPath');
     let worldContent = '';
@@ -7399,8 +7393,8 @@ async function showWorldGovernanceMenu() {
     }
 
     const preview = worldContent.length > 800 ? worldContent.slice(0, 800) + '...' : worldContent;
-    
-    box([preview || '(Empty)'], { title: '📜 WORLD.MD PREVIEW', width: 64, color: c.brightBlue });
+
+    box([preview || '(Empty)'], { title: 'WORLD.MD PREVIEW', width: 64 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7409,9 +7403,9 @@ async function showWorldGovernanceMenu() {
             name: 'action',
             message: cyan('Governance Options:'),
             choices: [
-                { name: `  📝 ${bold('Edit WORLD.md (Manual)')}`, value: 'edit' },
-                { name: `  🤖 ${bold('Ask Agent to Update World')}`, value: 'agent_update' },
-                { name: `  👥 ${bold('View Peer Agent Worlds')}`, value: 'peers' },
+                { name: `   ${bold('Edit WORLD.md (Manual)')}`, value: 'edit' },
+                { name: `   ${bold('Ask Agent to Update World')}`, value: 'agent_update' },
+                { name: `   ${bold('View Peer Agent Worlds')}`, value: 'peers' },
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -7433,13 +7427,13 @@ async function showWorldGovernanceMenu() {
                 { type: 'input', name: 'topic', message: 'Governance Topic (e.g. "Security Protocol"):', validate: (v: string) => v.trim().length > 0 || 'Topic required' },
                 { type: 'input', name: 'content', message: 'Rules/Content:', validate: (v: string) => v.trim().length > 0 || 'Content required' }
             ]);
-            
+
             try {
                 const entry = `\n\n## ${topic}\n**Date**: ${new Date().toISOString().split('T')[0]}\n**User Entry via TUI**\n\n${content}\n\n---`;
                 require('fs').appendFileSync(worldPath, entry);
-                console.log(green('\n✅ WORLD.md updated successfully.'));
+                console.log(green('\nWORLD.md updated successfully.'));
             } catch (e: any) {
-                console.log(red(`\n❌ Failed to update world: ${e.message}`));
+                console.log(red(`\nFailed to update world: ${e.message}`));
             }
             await waitKeyPress();
             return showWorldGovernanceMenu();
@@ -7470,10 +7464,10 @@ async function showWorldGovernanceMenu() {
                     const peerWorld = require('fs').readFileSync(peerWorldPath, 'utf-8');
                     console.clear();
                     banner();
-                    sectionHeader('👥', `${peer.name}'s World`);
-                    box(peerWorld.split('\n'), { title: '📜 PEER WORLD.MD', width: 64, color: c.magenta });
+                    sectionHeader(`${peer.name}'s World`);
+                    box(peerWorld.split('\n'), { title: 'PEER WORLD.MD', width: 64 });
                 } else {
-                    console.log(red('\n❌ Peer WORLD.md not found.'));
+                    console.log(red('\nPeer WORLD.md not found.'));
                 }
             }
             await waitKeyPress();
@@ -7488,25 +7482,25 @@ async function showWorkerWebsitesMenu() {
 
     console.clear();
     banner();
-    sectionHeader('🌐', 'Linked Websites');
+    sectionHeader('Linked Websites');
 
     console.log('');
     if (profile.websites.length === 0) {
-        box([dim('No websites linked yet.')], { title: '🌐 WEBSITES', width: 46, color: c.gray });
+        box([dim('No websites linked yet.')], { title: 'WEBSITES', width: 46 });
     } else {
         const siteLines = profile.websites.map((w, i) =>
             `${cyan(bold(String(i + 1)))}. ${bold(w.name)} ${dim('→')} ${w.url}${w.username ? dim(` (${w.username})`) : ''}`
         );
-        box(siteLines, { title: `🌐 WEBSITES (${profile.websites.length})`, width: 56, color: c.cyan });
+        box(siteLines, { title: `WEBSITES (${profile.websites.length})`, width: 56 });
     }
     console.log('');
 
     const choices: { name: string; value: string }[] = [
-        { name: '➕ Add Website', value: 'add' }
+        { name: 'Add Website', value: 'add' }
     ];
 
     if (profile.websites.length > 0) {
-        choices.push({ name: '➖ Remove Website', value: 'remove' });
+        choices.push({ name: 'Remove Website', value: 'remove' });
     }
 
     choices.push({ name: 'Back', value: 'back' });
@@ -7524,7 +7518,7 @@ async function showWorkerWebsitesMenu() {
             { type: 'input', name: 'username', message: 'Username on this site (optional):' }
         ]);
         workerProfile.addWebsite(name.trim(), url.trim(), username.trim() || undefined);
-        console.log('✅ Website added!');
+        console.log('Website added!');
     } else if (action === 'remove') {
         const { name } = await inquirer.prompt([
             {
@@ -7535,7 +7529,7 @@ async function showWorkerWebsitesMenu() {
             }
         ]);
         workerProfile.removeWebsite(name);
-        console.log('✅ Website removed!');
+        console.log('Website removed!');
     }
 
     await waitKeyPress();
@@ -7545,7 +7539,7 @@ async function showWorkerWebsitesMenu() {
 async function showAgenticUserMenu() {
     console.clear();
     banner();
-    sectionHeader('🤖', 'Agentic User (HITL Proxy)');
+    sectionHeader('Agentic User (HITL Proxy)');
 
     const au = agent.agenticUser;
     const settings = au.getSettings();
@@ -7573,7 +7567,7 @@ async function showAgenticUserMenu() {
         `${dim('Interventions')}  ${cyan(bold(String(stats.totalInterventions)))} total  ${dim('│')}  ${green(bold(String(stats.appliedInterventions)))} applied`,
         `${dim('Active Timers')}  ${cyan(bold(String(stats.activeTimers)))}`,
     ];
-    box(auLines, { title: '🤖 AGENTIC USER STATUS', width: 56, color: isActive ? c.green : c.gray });
+    box(auLines, { title: 'AGENTIC USER STATUS', width: 56, color: isActive ? c.green : c.gray });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7582,24 +7576,24 @@ async function showAgenticUserMenu() {
             name: 'action',
             message: cyan('Agentic User Options:'),
             choices: [
-                new inquirer.Separator(gradient('  ─── Control ──────────────────────', [c.cyan, c.gray])),
+                new inquirer.Separator(dim('  ─── Control ──────────────────────')),
                 {
                     name: settings.enabled
                         ? `  ${red('○')} ${bold('Disable')} Agentic User`
                         : `  ${green('●')} ${bold('Enable')} Agentic User`, value: 'toggle'
                 },
-                new inquirer.Separator(gradient('  ─── Settings ─────────────────────', [c.yellow, c.gray])),
-                { name: `  ⏱️  Response Delay ${dim(`(${settings.responseDelay}s)`)}`, value: 'response_delay' },
-                { name: `  📊 Confidence Threshold ${dim(`(${settings.confidenceThreshold}%)`)}`, value: 'confidence' },
-                { name: `  🔄 Proactive Guidance ${dim(`(${proactiveBadge})`)}`, value: 'proactive' },
-                { name: `  📈 Proactive Step Threshold ${dim(`(${settings.proactiveStepThreshold})`)}`, value: 'step_threshold' },
-                { name: `  🔁 Check Interval ${dim(`(${settings.checkIntervalSeconds}s)`)}`, value: 'check_interval' },
-                { name: `  🚫 Max Interventions/Action ${dim(`(${settings.maxInterventionsPerAction})`)}`, value: 'max_interventions' },
-                { name: `  🔔 Notify User on Intervention ${dim(`(${notifyBadge})`)}`, value: 'notify_user' },
-                new inquirer.Separator(gradient('  ─── History ──────────────────────', [c.magenta, c.gray])),
-                { name: `  📜 View Intervention Log ${dim(`(${stats.totalInterventions} entries)`)}`, value: 'view_log' },
-                { name: `  🗑️  Clear History`, value: 'clear_history' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                new inquirer.Separator(dim('  ─── Settings ─────────────────────')),
+                { name: `    Response Delay ${dim(`(${settings.responseDelay}s)`)}`, value: 'response_delay' },
+                { name: `   Confidence Threshold ${dim(`(${settings.confidenceThreshold}%)`)}`, value: 'confidence' },
+                { name: `   Proactive Guidance ${dim(`(${proactiveBadge})`)}`, value: 'proactive' },
+                { name: `   Proactive Step Threshold ${dim(`(${settings.proactiveStepThreshold})`)}`, value: 'step_threshold' },
+                { name: `   Check Interval ${dim(`(${settings.checkIntervalSeconds}s)`)}`, value: 'check_interval' },
+                { name: `   Max Interventions/Action ${dim(`(${settings.maxInterventionsPerAction})`)}`, value: 'max_interventions' },
+                { name: `   Notify User on Intervention ${dim(`(${notifyBadge})`)}`, value: 'notify_user' },
+                new inquirer.Separator(dim('  ─── History ──────────────────────')),
+                { name: `   View Intervention Log ${dim(`(${stats.totalInterventions} entries)`)}`, value: 'view_log' },
+                { name: `    Clear History`, value: 'clear_history' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -7624,7 +7618,7 @@ async function showAgenticUserMenu() {
             if (val !== undefined && val !== '') {
                 agent.config.set('agenticUserResponseDelay', Number(val));
                 au.reloadSettings();
-                console.log(`\n⏱️  Response delay set to ${bold(val)}s`);
+                console.log(`\nResponse delay set to ${bold(val)}s`);
             }
             break;
         }
@@ -7635,7 +7629,7 @@ async function showAgenticUserMenu() {
             if (val !== undefined && val !== '') {
                 agent.config.set('agenticUserConfidenceThreshold', Number(val));
                 au.reloadSettings();
-                console.log(`\n📊 Confidence threshold set to ${bold(val)}%`);
+                console.log(`\nConfidence threshold set to ${bold(val)}%`);
             }
             break;
         }
@@ -7644,8 +7638,8 @@ async function showAgenticUserMenu() {
             agent.config.set('agenticUserProactiveGuidance', newVal);
             au.reloadSettings();
             console.log(newVal
-                ? `\n🔄 Proactive guidance ${green(bold('enabled'))}. Agent will receive guidance when stuck.`
-                : `\n🔄 Proactive guidance ${gray(bold('disabled'))}.`);
+                ? `\nProactive guidance ${green(bold('enabled'))}. Agent will receive guidance when stuck.`
+                : `\nProactive guidance ${gray(bold('disabled'))}.`);
             break;
         }
         case 'step_threshold': {
@@ -7655,7 +7649,7 @@ async function showAgenticUserMenu() {
             if (val !== undefined && val !== '') {
                 agent.config.set('agenticUserProactiveStepThreshold', Number(val));
                 au.reloadSettings();
-                console.log(`\n📈 Proactive step threshold set to ${bold(val)}`);
+                console.log(`\nProactive step threshold set to ${bold(val)}`);
             }
             break;
         }
@@ -7666,7 +7660,7 @@ async function showAgenticUserMenu() {
             if (val !== undefined && val !== '') {
                 agent.config.set('agenticUserCheckInterval', Number(val));
                 au.reloadSettings();
-                console.log(`\n🔁 Check interval set to ${bold(val)}s`);
+                console.log(`\nCheck interval set to ${bold(val)}s`);
             }
             break;
         }
@@ -7677,7 +7671,7 @@ async function showAgenticUserMenu() {
             if (val !== undefined && val !== '') {
                 agent.config.set('agenticUserMaxInterventions', Number(val));
                 au.reloadSettings();
-                console.log(`\n🚫 Max interventions per action set to ${bold(val)}`);
+                console.log(`\nMax interventions per action set to ${bold(val)}`);
             }
             break;
         }
@@ -7685,8 +7679,8 @@ async function showAgenticUserMenu() {
             const newVal = !notifyUser;
             agent.config.set('agenticUserNotifyUser', newVal);
             console.log(newVal
-                ? `\n🔔 User notifications ${green(bold('enabled'))}. You'll be messaged on the originating channel when the Agentic User intervenes.`
-                : `\n🔕 User notifications ${gray(bold('disabled'))}. Interventions will happen silently.`);
+                ? `\nUser notifications ${green(bold('enabled'))}. You'll be messaged on the originating channel when the Agentic User intervenes.`
+                : `\nUser notifications ${gray(bold('disabled'))}. Interventions will happen silently.`);
             break;
         }
         case 'view_log': {
@@ -7716,7 +7710,7 @@ async function showAgenticUserMenu() {
             ]);
             if (confirm) {
                 au.clearHistory();
-                console.log('\n🗑️  Intervention history cleared.');
+                console.log('\nIntervention history cleared.');
             }
             break;
         }
@@ -7729,7 +7723,7 @@ async function showAgenticUserMenu() {
 async function showOrchestrationMenu() {
     console.clear();
     banner();
-    sectionHeader('🐙', 'Multi-Agent Orchestration');
+    sectionHeader('Multi-Agent Orchestration');
 
     const orchestrator = agent.orchestrator;
     const status = orchestrator.getStatus();
@@ -7752,7 +7746,7 @@ async function showOrchestrationMenu() {
         const tokenMap = new Map(workerTokens.map(wt => [wt.agentId, wt]));
 
         for (const w of detailedWorkers) {
-            const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+            const statusIcon = w.isRunning ? (w.currentTaskId ? '●' : '○') : '·';
             const statusColor = w.isRunning ? (w.currentTaskId ? yellow : green) : gray;
             const statusLabel = w.isRunning ? (w.currentTaskId ? 'working' : 'idle') : 'stopped';
             const tokens = tokenMap.get(w.agentId);
@@ -7764,7 +7758,7 @@ async function showOrchestrationMenu() {
         }
     }
 
-    box(orchLines, { title: '📊 ORCHESTRATION STATUS', width: 64, color: c.magenta });
+    box(orchLines, { title: 'ORCHESTRATION STATUS', width: 64 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -7773,25 +7767,25 @@ async function showOrchestrationMenu() {
             name: 'action',
             message: cyan('Orchestration Options:'),
             choices: [
-                new inquirer.Separator(gradient('  ─── Monitor ──────────────────────', [c.magenta, c.gray])),
-                { name: `  📊 ${bold('View Detailed Status')}`, value: 'status' },
-                { name: `  🤖 ${bold('List Active Agents')}`, value: 'list' },
-                { name: `  ⚡ ${bold('View Running Processes')}`, value: 'processes' },
-                { name: `  🔍 ${bold('View Worker Task Details')}`, value: 'worker_details' },
-                new inquirer.Separator(gradient('  ─── Manage ───────────────────────', [c.cyan, c.gray])),
-                { name: `  👥 ${bold('Create Peer Agent (Clone)')}`, value: 'create_peer' },
-                { name: `  ⚙️  ${bold('Configure Peer Agent')}`, value: 'configure_peer' },
-                { name: `  ➕ ${bold('Spawn New Worker')}`, value: 'spawn' },
-                { name: `  ▶️  ${bold('Start Worker Process')}`, value: 'start_worker' },
-                { name: `  ⏹️  ${bold('Stop Worker Process')}`, value: 'stop_worker' },
-                new inquirer.Separator(gradient('  ─── Tasks ────────────────────────', [c.yellow, c.gray])),
-                { name: `  📋 ${bold('Delegate Task to Agent')}`, value: 'delegate' },
-                { name: `  🔀 ${bold('Distribute Tasks to All')}`, value: 'distribute' },
-                { name: `  💬 ${bold('Broadcast Message')}`, value: 'broadcast' },
-                new inquirer.Separator(gradient('  ─── Cleanup ──────────────────────', [c.red, c.gray])),
-                { name: `  🗑️  ${bold('Terminate Agent')}`, value: 'terminate' },
-                { name: `  🧹 ${bold('Terminate All Agents')}`, value: 'terminate_all' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                new inquirer.Separator(dim('  ─── Monitor ──────────────────────')),
+                { name: `   ${bold('View Detailed Status')}`, value: 'status' },
+                { name: `   ${bold('List Active Agents')}`, value: 'list' },
+                { name: `   ${bold('View Running Processes')}`, value: 'processes' },
+                { name: `   ${bold('View Worker Task Details')}`, value: 'worker_details' },
+                new inquirer.Separator(dim('  ─── Manage ───────────────────────')),
+                { name: `   ${bold('Create Peer Agent (Clone)')}`, value: 'create_peer' },
+                { name: `    ${bold('Configure Peer Agent')}`, value: 'configure_peer' },
+                { name: `   ${bold('Spawn New Worker')}`, value: 'spawn' },
+                { name: `  ▶  ${bold('Start Worker Process')}`, value: 'start_worker' },
+                { name: `    ${bold('Stop Worker Process')}`, value: 'stop_worker' },
+                new inquirer.Separator(dim('  ─── Tasks ────────────────────────')),
+                { name: `   ${bold('Delegate Task to Agent')}`, value: 'delegate' },
+                { name: `   ${bold('Distribute Tasks to All')}`, value: 'distribute' },
+                { name: `   ${bold('Broadcast Message')}`, value: 'broadcast' },
+                new inquirer.Separator(dim('  ─── Cleanup ──────────────────────')),
+                { name: `    ${bold('Terminate Agent')}`, value: 'terminate' },
+                { name: `   ${bold('Terminate All Agents')}`, value: 'terminate_all' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ],
             pageSize: 20
@@ -7804,7 +7798,7 @@ async function showOrchestrationMenu() {
         case 'status': {
             console.clear();
             banner();
-            sectionHeader('📊', 'Orchestration Dashboard');
+            sectionHeader('Orchestration Dashboard');
 
             // Summary box
             const summaryLines = [
@@ -7813,7 +7807,7 @@ async function showOrchestrationMenu() {
                 `${dim('Tasks')}      ${status.pendingTasks > 0 ? yellow(bold(String(status.pendingTasks))) + ' pending' : green('0 pending')}  ${green(String(status.completedTasks))} done  ${status.failedTasks > 0 ? red(String(status.failedTasks)) + ' failed' : dim('0 failed')}`,
             ];
             console.log('');
-            box(summaryLines, { title: '📈 OVERVIEW', width: 64, color: c.cyan });
+            box(summaryLines, { title: 'OVERVIEW', width: 64 });
 
             // Token usage box
             const workerTokens = orchestrator.getAggregateWorkerTokenUsage();
@@ -7832,15 +7826,15 @@ async function showOrchestrationMenu() {
                     );
                 }
                 console.log('');
-                box(tokenLines, { title: '🔢 WORKER TOKEN USAGE', width: 64, color: c.yellow });
+                box(tokenLines, { title: 'WORKER TOKEN USAGE', width: 64 });
             }
 
             // Per-worker details
             if (detailedWorkers.length > 0) {
                 console.log('');
-                console.log(gradient('  ─── Worker Details ──────────────────────────────────', [c.magenta, c.gray]));
+                console.log(dim('  ─── Worker Details ──────────────────────────────────'));
                 for (const w of detailedWorkers) {
-                    const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+                    const statusIcon = w.isRunning ? (w.currentTaskId ? '●' : '○') : '·';
                     const statusLabel = w.isRunning ? (w.currentTaskId ? yellow('working') : green('idle')) : gray('stopped');
                     const pidStr = w.pid ? dim(` PID:${w.pid}`) : '';
                     const agentIdShort = w.agentId.slice(0, 10);
@@ -7883,9 +7877,9 @@ async function showOrchestrationMenu() {
             // Running processes
             if (runningWorkers.length > 0) {
                 console.log('');
-                console.log(gradient('  ─── Processes ───────────────────────────────────────', [c.green, c.gray]));
+                console.log(dim('  ─── Processes ───────────────────────────────────────'));
                 for (const w of runningWorkers) {
-                    console.log(`  ⚡ ${bold(w.name)} ${dim('PID:' + w.pid)} ${dim('(' + w.agentId.slice(0, 10) + '…)')}`);
+                    console.log(`   ${bold(w.name)} ${dim('PID:' + w.pid)} ${dim('(' + w.agentId.slice(0, 10) + '…)')}`);
                 }
             }
             console.log('');
@@ -7894,7 +7888,7 @@ async function showOrchestrationMenu() {
         case 'worker_details': {
             console.clear();
             banner();
-            sectionHeader('🔍', 'Worker Task Details');
+            sectionHeader('Worker Task Details');
             if (detailedWorkers.length === 0) {
                 console.log(`\n  ${dim('No workers available.')}`);
             } else {
@@ -7902,7 +7896,7 @@ async function showOrchestrationMenu() {
                 const tokenMap = new Map(workerTokens.map(wt => [wt.agentId, wt]));
 
                 for (const w of detailedWorkers) {
-                    const statusIcon = w.isRunning ? (w.currentTaskId ? '🔄' : '💤') : '⏸️';
+                    const statusIcon = w.isRunning ? (w.currentTaskId ? '●' : '○') : '·';
                     const statusLabel = w.isRunning ? (w.currentTaskId ? 'WORKING' : 'IDLE') : 'STOPPED';
                     const statusColor = w.isRunning ? (w.currentTaskId ? yellow : green) : gray;
 
@@ -7953,7 +7947,7 @@ async function showOrchestrationMenu() {
                     }
 
                     console.log('');
-                    box(wLines, { title: `🤖 ${w.name.toUpperCase()}`, width: 64, color: w.isRunning ? c.cyan : c.gray });
+                    box(wLines, { title: `${w.name.toUpperCase()}`, width: 64, color: w.isRunning ? c.cyan : c.gray });
                 }
             }
             console.log('');
@@ -7961,7 +7955,7 @@ async function showOrchestrationMenu() {
         }
         case 'list': {
             console.clear();
-            console.log('🤖 Active Agents');
+            console.log('Active Agents');
             console.log('================');
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
@@ -7972,7 +7966,7 @@ async function showOrchestrationMenu() {
                     const agentData = orchestrator.getAgent(a.id);
                     console.log(`\n[${a.id}] ${a.name}`);
                     console.log(`  Status: ${a.status}`);
-                    console.log(`  Worker: ${isRunning ? `✅ Running (PID: ${agentData?.pid})` : '⏸️ Not running'}`);
+                    console.log(`  Worker: ${isRunning ? `Running (PID: ${agentData?.pid})` : 'Not running'}`);
                     console.log(`  Created: ${new Date(a.createdAt).toLocaleString()}`);
                     console.log(`  Capabilities: ${a.capabilities?.join(', ') || 'none'}`);
                     console.log(`  Active Tasks: ${a.activeTasks}`);
@@ -7982,7 +7976,7 @@ async function showOrchestrationMenu() {
         }
         case 'processes': {
             console.clear();
-            console.log('⚡ Running Worker Processes');
+            console.log('Running Worker Processes');
             console.log('===========================');
             if (runningWorkers.length === 0) {
                 console.log('No worker processes currently running.');
@@ -7997,7 +7991,7 @@ async function showOrchestrationMenu() {
         case 'start_worker': {
             const agents = orchestrator.listAgents().filter(a => !orchestrator.isWorkerRunning(a.id));
             if (agents.length === 0) {
-                console.log('\n❌ No stopped agents available. All agents are either running or spawn a new one.');
+                console.log('\nNo stopped agents available. All agents are either running or spawn a new one.');
                 break;
             }
 
@@ -8013,13 +8007,13 @@ async function showOrchestrationMenu() {
             const agentData = orchestrator.getAgent(agentId);
             if (agentData) {
                 const success = orchestrator.startWorkerProcess(agentData);
-                console.log(success ? '\n✅ Worker process started.' : '\n❌ Failed to start worker process.');
+                console.log(success ? '\nWorker process started.' : '\nFailed to start worker process.');
             }
             break;
         }
         case 'stop_worker': {
             if (runningWorkers.length === 0) {
-                console.log('\n❌ No worker processes running.');
+                console.log('\nNo worker processes running.');
                 break;
             }
 
@@ -8033,7 +8027,7 @@ async function showOrchestrationMenu() {
             ]);
 
             const success = orchestrator.stopWorkerProcess(agentId);
-            console.log(success ? '\n✅ Stop signal sent to worker.' : '\n❌ Failed to stop worker.');
+            console.log(success ? '\nStop signal sent to worker.' : '\nFailed to stop worker.');
             break;
         }
         case 'create_peer': {
@@ -8079,9 +8073,9 @@ async function showOrchestrationMenu() {
 
                 // 3. Start
                 orchestrator.startWorkerProcess(agentInstance);
-                console.log(`\n✅ Peer agent created and started: ${agentInstance.id} (${agentInstance.name})`);
+                console.log(`\nPeer agent created and started: ${agentInstance.id} (${agentInstance.name})`);
             } catch (err: any) {
-                console.log(`\n❌ Error creating peer: ${err.message}`);
+                console.log(`\nError creating peer: ${err.message}`);
             }
             break;
         }
@@ -8097,13 +8091,13 @@ async function showOrchestrationMenu() {
                 role: 'worker',
                 capabilities: caps.length > 0 ? caps : undefined
             });
-            console.log(`\n✅ Agent spawned: ${newAgent.id} (${newAgent.name})`);
+            console.log(`\nAgent spawned: ${newAgent.id} (${newAgent.name})`);
             break;
         }
         case 'configure_peer': {
             const agents = orchestrator.listAgents().filter(a => a.id !== 'primary');
             if (agents.length === 0) {
-                console.log('\n❌ No peer agents available to configure.');
+                console.log('\nNo peer agents available to configure.');
                 break;
             }
 
@@ -8154,30 +8148,30 @@ async function showOrchestrationMenu() {
                 const workerConfigPath = require('path').join(workerDir, 'orcbot.config.yaml');
 
                 const yamlMod = require('yaml');
-                const currentCfg = require('fs').existsSync(workerConfigPath) 
-                    ? yamlMod.parse(require('fs').readFileSync(workerConfigPath, 'utf-8')) 
+                const currentCfg = require('fs').existsSync(workerConfigPath)
+                    ? yamlMod.parse(require('fs').readFileSync(workerConfigPath, 'utf-8'))
                     : {};
-                
+
                 const newCfg = { ...currentCfg, ...updates };
                 if (updates.telegramToken || updates.discordToken) newCfg.allowWorkerChannels = true;
 
                 require('fs').writeFileSync(workerConfigPath, yamlMod.stringify(newCfg));
 
                 if (orchestrator.isWorkerRunning(agentId)) {
-                    console.log(yellow(`\n🔄 Restarting peer ${agentId} to apply changes...`));
+                    console.log(yellow(`\nRestarting peer ${agentId} to apply changes...`));
                     orchestrator.stopWorkerProcess(agentId);
                     setTimeout(() => orchestrator.startWorkerProcess(agentInstance), 6000);
                 }
-                console.log(green(`\n✅ Peer configuration updated.`));
+                console.log(green(`\nPeer configuration updated.`));
             } catch (err: any) {
-                console.log(red(`\n❌ Error configuring peer: ${err.message}`));
+                console.log(red(`\nError configuring peer: ${err.message}`));
             }
             break;
         }
         case 'delegate': {
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
-                console.log('\n❌ No agents available. Spawn an agent first.');
+                console.log('\nNo agents available. Spawn an agent first.');
                 break;
             }
 
@@ -8194,16 +8188,16 @@ async function showOrchestrationMenu() {
 
             try {
                 const task = orchestrator.delegateTask(agentId, taskDescription.trim(), Math.max(1, Math.min(10, priority)));
-                console.log(`\n✅ Task delegated: ${task.id}`);
+                console.log(`\nTask delegated: ${task.id}`);
             } catch (err: any) {
-                console.log(`\n❌ Error: ${err.message}`);
+                console.log(`\nError: ${err.message}`);
             }
             break;
         }
         case 'distribute': {
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
-                console.log('\n❌ No agents available. Spawn agents first.');
+                console.log('\nNo agents available. Spawn agents first.');
                 break;
             }
 
@@ -8213,12 +8207,12 @@ async function showOrchestrationMenu() {
 
             const taskList = tasks.split(';').map((t: string) => t.trim()).filter((t: string) => t.length > 0);
             if (taskList.length === 0) {
-                console.log('\n❌ No valid tasks provided.');
+                console.log('\nNo valid tasks provided.');
                 break;
             }
 
             const results = orchestrator.distributeTaskList(taskList);
-            console.log(`\n✅ Distributed ${results.length} tasks:`);
+            console.log(`\nDistributed ${results.length} tasks:`);
             results.forEach((t: any) => {
                 const agentName = agents.find(a => a.id === t.assignedAgentId)?.name || t.assignedAgentId || 'unassigned';
                 console.log(`  - "${t.description.slice(0, 40)}..." → ${agentName}`);
@@ -8228,7 +8222,7 @@ async function showOrchestrationMenu() {
         case 'broadcast': {
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
-                console.log('\n❌ No agents to broadcast to.');
+                console.log('\nNo agents to broadcast to.');
                 break;
             }
 
@@ -8237,13 +8231,13 @@ async function showOrchestrationMenu() {
             ]);
 
             orchestrator.broadcast('main-agent', message.trim());
-            console.log(`\n✅ Message broadcast to ${agents.length} agents.`);
+            console.log(`\nMessage broadcast to ${agents.length} agents.`);
             break;
         }
         case 'terminate': {
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
-                console.log('\n❌ No agents to terminate.');
+                console.log('\nNo agents to terminate.');
                 break;
             }
 
@@ -8257,18 +8251,18 @@ async function showOrchestrationMenu() {
             ]);
 
             const success = orchestrator.terminateAgent(agentId);
-            console.log(success ? '\n✅ Agent terminated.' : '\n❌ Failed to terminate agent.');
+            console.log(success ? '\nAgent terminated.' : '\nFailed to terminate agent.');
             break;
         }
         case 'terminate_all': {
             const agents = orchestrator.listAgents();
             if (agents.length === 0) {
-                console.log('\n❌ No agents to terminate.');
+                console.log('\nNo agents to terminate.');
                 break;
             }
 
             const { confirm } = await inquirer.prompt([
-                { type: 'confirm', name: 'confirm', message: `⚠️ Terminate all ${agents.length} agents?`, default: false }
+                { type: 'confirm', name: 'confirm', message: `Terminate all ${agents.length} agents?`, default: false }
             ]);
 
             if (confirm) {
@@ -8276,7 +8270,7 @@ async function showOrchestrationMenu() {
                 agents.forEach(a => {
                     if (orchestrator.terminateAgent(a.id)) terminated++;
                 });
-                console.log(`\n✅ Terminated ${terminated} agents.`);
+                console.log(`\nTerminated ${terminated} agents.`);
             }
             break;
         }
@@ -8289,7 +8283,7 @@ async function showOrchestrationMenu() {
 async function showSecurityMenu() {
     console.clear();
     banner();
-    sectionHeader('🔐', 'Security & Permissions');
+    sectionHeader('Security & Permissions');
 
     const safeMode = agent.config.get('safeMode');
     const sudoMode = agent.config.get('sudoMode');
@@ -8306,11 +8300,11 @@ async function showSecurityMenu() {
     const adminConfigured = totalAdmins > 0;
 
     console.log('');
-    const safeBadge = safeMode ? red(bold('🔒 LOCKED')) : green(bold('🔓 OPEN'));
-    const sudoBadge = sudoMode ? yellow(bold('⚠️  ENABLED')) : green(bold('✅ OFF'));
-    const selfModBadge = selfModEnabled ? red(bold('🛠️  ENABLED')) : green(bold('✅ OFF'));
-    const overrideBadge = overrideMode ? red(bold('☠️  ACTIVE')) : green(bold('✅ OFF'));
-    const adminBadge = adminConfigured ? green(bold(`👤 ${totalAdmins} admin(s)`)) : yellow(bold('⚠️  OPEN'));
+    const safeBadge = safeMode ? red(bold('LOCKED')) : green(bold('OPEN'));
+    const sudoBadge = sudoMode ? yellow(bold('ENABLED')) : green(bold('OFF'));
+    const selfModBadge = selfModEnabled ? red(bold('ENABLED')) : green(bold('OFF'));
+    const overrideBadge = overrideMode ? red(bold('ACTIVE')) : green(bold('OFF'));
+    const adminBadge = adminConfigured ? green(bold(`${totalAdmins} admin(s)`)) : yellow(bold('OPEN'));
     const secLines = [
         `${dim('Safe Mode')}     ${safeBadge}     ${dim(safeMode ? 'commands disabled' : 'commands allowed')}`,
         `${dim('Sudo Mode')}     ${sudoBadge}  ${dim(sudoMode ? 'all commands allowed' : 'allowList enforced')}`,
@@ -8321,7 +8315,7 @@ async function showSecurityMenu() {
         `${dim('Allow List')}    ${cyan(bold(String(allowList.length)))} commands  ${dim(allowList.length > 0 ? allowList.slice(0, 5).join(', ') + (allowList.length > 5 ? '…' : '') : '(empty)')}`,
         `${dim('Block List')}    ${cyan(bold(String(denyList.length)))} commands  ${dim(denyList.length > 0 ? denyList.slice(0, 5).join(', ') + (denyList.length > 5 ? '…' : '') : '(empty)')}`,
     ];
-    box(secLines, { title: '🛡️  SECURITY STATUS', width: 58, color: overrideMode ? c.red : (safeMode ? c.red : (sudoMode ? c.yellow : c.green)) });
+    box(secLines, { title: 'SECURITY STATUS', width: 58, color: overrideMode ? c.red : (safeMode ? c.red : (sudoMode ? c.yellow : c.green)) });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -8330,23 +8324,23 @@ async function showSecurityMenu() {
             name: 'action',
             message: cyan('Security Options:'),
             choices: [
-                new inquirer.Separator(gradient('  ─── Mode Toggles ─────────────────', [c.red, c.gray])),
-                { name: safeMode ? `  🔓 ${bold('Disable Safe Mode')} ${dim('(allow commands)')}` : `  🔒 ${bold('Enable Safe Mode')} ${dim('(block all commands)')}`, value: 'toggle_safe' },
-                { name: sudoMode ? `  ✅ ${bold('Disable Sudo Mode')} ${dim('(enforce allowList)')}` : `  ⚠️  ${bold('Enable Sudo Mode')} ${dim('(allow ALL commands)')}`, value: 'toggle_sudo' },
-                { name: selfModEnabled ? `  🛠️  ${bold('Disable Self-Modification')} ${dim('(block codebase access)')}` : `  🛠️  ${bold('Enable Self-Modification')} ${dim('(allow codebase access)')}`, value: 'toggle_self_mod' },
-                new inquirer.Separator(gradient('  ─── Dangerous ────────────────────', [c.red, c.brightRed || c.red])),
-                { name: overrideMode ? `  ☠️  ${bold('Disable Override')} ${dim('(restore persona boundaries)')}` : `  ☠️  ${bold('Enable Override')} ${dim('(remove ALL behavioral limits)')}`, value: 'toggle_override' },
-                new inquirer.Separator(gradient('  ─── Allow List ───────────────────', [c.green, c.gray])),
-                { name: `  ➕ Add Command to Allow List`, value: 'add_allow' },
-                { name: `  ➖ Remove Command from Allow List`, value: 'remove_allow' },
-                { name: `  📋 View Full Allow List ${dim(`(${allowList.length})`)}`, value: 'view_allow' },
-                new inquirer.Separator(gradient('  ─── Block List ───────────────────', [c.red, c.gray])),
-                { name: `  ➕ Add Command to Block List`, value: 'add_deny' },
-                { name: `  ➖ Remove Command from Block List`, value: 'remove_deny' },
-                { name: `  📋 View Full Block List ${dim(`(${denyList.length})`)}`, value: 'view_deny' },
-                new inquirer.Separator(gradient('  ─── Admin Users ──────────────────', [c.cyan, c.gray])),
-                { name: `  👤 ${bold('Manage Admin Users')} ${dim(`(${totalAdmins} configured)`)}`, value: 'manage_admins' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                new inquirer.Separator(dim('  ─── Mode Toggles ─────────────────')),
+                { name: safeMode ? `   ${bold('Disable Safe Mode')} ${dim('(allow commands)')}` : `   ${bold('Enable Safe Mode')} ${dim('(block all commands)')}`, value: 'toggle_safe' },
+                { name: sudoMode ? `   ${bold('Disable Sudo Mode')} ${dim('(enforce allowList)')}` : `    ${bold('Enable Sudo Mode')} ${dim('(allow ALL commands)')}`, value: 'toggle_sudo' },
+                { name: selfModEnabled ? `    ${bold('Disable Self-Modification')} ${dim('(block codebase access)')}` : `    ${bold('Enable Self-Modification')} ${dim('(allow codebase access)')}`, value: 'toggle_self_mod' },
+                new inquirer.Separator(dim('  ─── Dangerous ────────────────────')),
+                { name: overrideMode ? `    ${bold('Disable Override')} ${dim('(restore persona boundaries)')}` : `    ${bold('Enable Override')} ${dim('(remove ALL behavioral limits)')}`, value: 'toggle_override' },
+                new inquirer.Separator(dim('  ─── Allow List ───────────────────')),
+                { name: `   Add Command to Allow List`, value: 'add_allow' },
+                { name: `   Remove Command from Allow List`, value: 'remove_allow' },
+                { name: `   View Full Allow List ${dim(`(${allowList.length})`)}`, value: 'view_allow' },
+                new inquirer.Separator(dim('  ─── Block List ───────────────────')),
+                { name: `   Add Command to Block List`, value: 'add_deny' },
+                { name: `   Remove Command from Block List`, value: 'remove_deny' },
+                { name: `   View Full Block List ${dim(`(${denyList.length})`)}`, value: 'view_deny' },
+                new inquirer.Separator(dim('  ─── Admin Users ──────────────────')),
+                { name: `   ${bold('Manage Admin Users')} ${dim(`(${totalAdmins} configured)`)}`, value: 'manage_admins' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
         }
@@ -8357,46 +8351,46 @@ async function showSecurityMenu() {
     switch (action) {
         case 'toggle_safe':
             agent.config.set('safeMode', !safeMode);
-            console.log(safeMode ? '\n🔓 Safe Mode disabled. Agent can now run commands.' : '\n🔒 Safe Mode enabled. All commands are blocked.');
+            console.log(safeMode ? '\nSafe Mode disabled. Agent can now run commands.' : '\nSafe Mode enabled. All commands are blocked.');
             break;
         case 'toggle_sudo':
             if (!sudoMode) {
                 const { confirm } = await inquirer.prompt([
-                    { type: 'confirm', name: 'confirm', message: '⚠️ Sudo Mode allows the agent to run ANY command (including rm, format, etc). Are you sure?', default: false }
+                    { type: 'confirm', name: 'confirm', message: 'Sudo Mode allows the agent to run ANY command (including rm, format, etc). Are you sure?', default: false }
                 ]);
                 if (confirm) {
                     agent.config.set('sudoMode', true);
-                    console.log('\n⚠️ Sudo Mode enabled. Agent can run any command.');
+                    console.log('\nSudo Mode enabled. Agent can run any command.');
                 }
             } else {
                 agent.config.set('sudoMode', false);
-                console.log('\n✅ Sudo Mode disabled. AllowList is now enforced.');
+                console.log('\nSudo Mode disabled. AllowList is now enforced.');
             }
             break;
         case 'toggle_self_mod':
             if (!selfModEnabled) {
                 const { confirm } = await inquirer.prompt([
-                    { 
-                        type: 'confirm', 
-                        name: 'confirm', 
-                        message: `⚠️  ${bold('Self-Modification')} allows the agent to read and EDIT its own source code.\nThis is a high-autonomy feature that could lead to unexpected changes or bugs.\nAre you sure you want to enable this?`, 
-                        default: false 
+                    {
+                        type: 'confirm',
+                        name: 'confirm',
+                        message: `${bold('Self-Modification')} allows the agent to read and EDIT its own source code.\nThis is a high-autonomy feature that could lead to unexpected changes or bugs.\nAre you sure you want to enable this?`,
+                        default: false
                     }
                 ]);
                 if (confirm) {
                     agent.config.set('enableSelfModification', true);
-                    console.log('\n🛠️  Self-Modification enabled. Agent can now access and modify its own codebase.');
+                    console.log('\nSelf-Modification enabled. Agent can now access and modify its own codebase.');
                 }
             } else {
                 agent.config.set('enableSelfModification', false);
-                console.log('\n✅ Self-Modification disabled. Codebase access is now blocked.');
+                console.log('\nSelf-Modification disabled. Codebase access is now blocked.');
             }
             break;
         case 'toggle_override':
             if (!overrideMode) {
                 console.log('');
                 console.log(red(bold('  ╔══════════════════════════════════════════════════╗')));
-                console.log(red(bold('  ║         ☠️  BEHAVIORAL OVERRIDE WARNING ☠️         ║')));
+                console.log(red(bold('  ║           BEHAVIORAL OVERRIDE WARNING          ║')));
                 console.log(red(bold('  ╠══════════════════════════════════════════════════╣')));
                 console.log(red('  ║  This removes ALL persona safety boundaries.     ║'));
                 console.log(red('  ║  The agent will comply with ANY request —         ║'));
@@ -8415,14 +8409,14 @@ async function showSecurityMenu() {
                     ]);
                     if (c2 === 'OVERRIDE') {
                         agent.config.set('overrideMode', true);
-                        console.log('\n☠️  Override Mode ' + red(bold('ACTIVE')) + '. All persona boundaries suspended.');
+                        console.log('\nOverride Mode ' + red(bold('ACTIVE')) + '. All persona boundaries suspended.');
                     } else {
                         console.log('\nAborted — confirmation did not match.');
                     }
                 }
             } else {
                 agent.config.set('overrideMode', false);
-                console.log('\n✅ Override Mode disabled. Persona boundaries restored.');
+                console.log('\nOverride Mode disabled. Persona boundaries restored.');
             }
             break;
         case 'add_allow': {
@@ -8432,7 +8426,7 @@ async function showSecurityMenu() {
             if (cmd.trim()) {
                 const newList = [...allowList, cmd.trim().toLowerCase()];
                 agent.config.set('commandAllowList', [...new Set(newList)]);
-                console.log(`\n✅ '${cmd.trim()}' added to allow list.`);
+                console.log(`\n'${cmd.trim()}' added to allow list.`);
             }
             break;
         }
@@ -8445,7 +8439,7 @@ async function showSecurityMenu() {
                 { type: 'list', name: 'cmd', message: 'Select command to remove:', choices: allowList }
             ]);
             agent.config.set('commandAllowList', allowList.filter(c => c !== cmd));
-            console.log(`\n✅ '${cmd}' removed from allow list.`);
+            console.log(`\n'${cmd}' removed from allow list.`);
             break;
         }
         case 'add_deny': {
@@ -8455,7 +8449,7 @@ async function showSecurityMenu() {
             if (cmd.trim()) {
                 const newList = [...denyList, cmd.trim().toLowerCase()];
                 agent.config.set('commandDenyList', [...new Set(newList)]);
-                console.log(`\n✅ '${cmd.trim()}' added to block list.`);
+                console.log(`\n'${cmd.trim()}' added to block list.`);
             }
             break;
         }
@@ -8468,15 +8462,15 @@ async function showSecurityMenu() {
                 { type: 'list', name: 'cmd', message: 'Select command to unblock:', choices: denyList }
             ]);
             agent.config.set('commandDenyList', denyList.filter(c => c !== cmd));
-            console.log(`\n✅ '${cmd}' removed from block list.`);
+            console.log(`\n'${cmd}' removed from block list.`);
             break;
         }
         case 'view_allow':
-            console.log('\n📋 Full Allow List:');
+            console.log('\nFull Allow List:');
             console.log(allowList.length > 0 ? allowList.join(', ') : '(empty)');
             break;
         case 'view_deny':
-            console.log('\n📋 Full Block List:');
+            console.log('\nFull Block List:');
             console.log(denyList.length > 0 ? denyList.join(', ') : '(empty)');
             break;
         case 'manage_admins':
@@ -8496,7 +8490,7 @@ async function showSecurityMenu() {
 async function showAdminUsersMenu() {
     console.clear();
     banner();
-    sectionHeader('👤', 'Admin Users Management');
+    sectionHeader('Admin Users Management');
 
     const adminUsers = agent.config.get('adminUsers') as any || {};
     const tgAdmins = (adminUsers.telegram || []) as string[];
@@ -8530,7 +8524,7 @@ async function showAdminUsersMenu() {
         ``,
         `${dim('Known users')} ${cyan(bold(String(knownTg.length + knownDc.length + knownWa.length + knownSl.length)))} ${dim('available to add')}  ${dim(`(${knownTg.length} tg, ${knownDc.length} dc, ${knownWa.length} wa, ${knownSl.length} sl)`)}`,
     ];
-    box(adminLines, { title: '👤 ADMIN USERS', width: 62, color: c.cyan });
+    box(adminLines, { title: 'ADMIN USERS', width: 62 });
     console.log('');
 
     const { action } = await inquirer.prompt([
@@ -8539,16 +8533,16 @@ async function showAdminUsersMenu() {
             name: 'action',
             message: cyan('Admin Users Options:'),
             choices: [
-                new inquirer.Separator(gradient('  ─── Telegram ─────────────────────', [c.blue, c.gray])),
-                { name: `  ➕ Add Telegram Admin ${knownTg.length > 0 ? cyan(`(${knownTg.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_tg' },
-                { name: `  ➖ Remove Telegram Admin ${dim(`(${tgAdmins.length})`)}`, value: 'remove_tg' },
-                new inquirer.Separator(gradient('  ─── Discord ──────────────────────', [c.magenta, c.gray])),
-                { name: `  ➕ Add Discord Admin ${knownDc.length > 0 ? cyan(`(${knownDc.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_dc' },
-                { name: `  ➖ Remove Discord Admin ${dim(`(${dcAdmins.length})`)}`, value: 'remove_dc' },
-                new inquirer.Separator(gradient('  ─── WhatsApp ─────────────────────', [c.green, c.gray])),
-                { name: `  ➕ Add WhatsApp Admin ${knownWa.length > 0 ? cyan(`(${knownWa.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_wa' },
-                { name: `  ➖ Remove WhatsApp Admin ${dim(`(${waAdmins.length})`)}`, value: 'remove_wa' },
-                new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])),
+                new inquirer.Separator(dim('  ─── Telegram ─────────────────────')),
+                { name: `   Add Telegram Admin ${knownTg.length > 0 ? cyan(`(${knownTg.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_tg' },
+                { name: `   Remove Telegram Admin ${dim(`(${tgAdmins.length})`)}`, value: 'remove_tg' },
+                new inquirer.Separator(dim('  ─── Discord ──────────────────────')),
+                { name: `   Add Discord Admin ${knownDc.length > 0 ? cyan(`(${knownDc.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_dc' },
+                { name: `   Remove Discord Admin ${dim(`(${dcAdmins.length})`)}`, value: 'remove_dc' },
+                new inquirer.Separator(dim('  ─── WhatsApp ─────────────────────')),
+                { name: `   Add WhatsApp Admin ${knownWa.length > 0 ? cyan(`(${knownWa.length} known users)`) : dim('(enter ID manually)')}`, value: 'add_wa' },
+                { name: `   Remove WhatsApp Admin ${dim(`(${waAdmins.length})`)}`, value: 'remove_wa' },
+                new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back to Security'), value: 'back' }
             ]
         }
@@ -8573,7 +8567,7 @@ async function showAdminUsersMenu() {
                     name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ID: ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
                     value: u.id
                 }));
-                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                choices.push({ name: dim('    Enter ID manually'), value: '__manual__' });
                 const { selected } = await inquirer.prompt([
                     { type: 'list', name: 'selected', message: 'Select a Telegram user to add as admin:', choices }
                 ]);
@@ -8590,9 +8584,9 @@ async function showAdminUsersMenu() {
                 const newList = [...new Set([...tgAdmins, id])];
                 saveAdminUsers(newList, dcAdmins, waAdmins);
                 const user = agent.getKnownUsers('telegram').find(u => u.id === id);
-                console.log(`\n✅ Telegram admin added: ${user ? `${user.name} (${id})` : id}`);
+                console.log(`\nTelegram admin added: ${user ? `${user.name} (${id})` : id}`);
             } else if (id) {
-                console.log('\n❌ Invalid Telegram user ID. Must be numeric.');
+                console.log('\nInvalid Telegram user ID. Must be numeric.');
             }
             break;
         }
@@ -8602,7 +8596,7 @@ async function showAdminUsersMenu() {
                 { type: 'list', name: 'userId', message: 'Select Telegram admin to remove:', choices: tgAdmins.map(id => ({ name: nameForId(id, 'telegram'), value: id })) }
             ]);
             saveAdminUsers(tgAdmins.filter(id => id !== userId), dcAdmins, waAdmins);
-            console.log(`\n✅ Telegram admin removed: ${nameForId(userId, 'telegram')}`);
+            console.log(`\nTelegram admin removed: ${nameForId(userId, 'telegram')}`);
             break;
         }
         case 'add_dc': {
@@ -8612,7 +8606,7 @@ async function showAdminUsersMenu() {
                     name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ID: ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
                     value: u.id
                 }));
-                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                choices.push({ name: dim('    Enter ID manually'), value: '__manual__' });
                 const { selected } = await inquirer.prompt([
                     { type: 'list', name: 'selected', message: 'Select a Discord user to add as admin:', choices }
                 ]);
@@ -8629,9 +8623,9 @@ async function showAdminUsersMenu() {
                 const newList = [...new Set([...dcAdmins, id])];
                 saveAdminUsers(tgAdmins, newList, waAdmins);
                 const user = agent.getKnownUsers('discord').find(u => u.id === id);
-                console.log(`\n✅ Discord admin added: ${user ? `${user.name} (${id})` : id}`);
+                console.log(`\nDiscord admin added: ${user ? `${user.name} (${id})` : id}`);
             } else if (id) {
-                console.log('\n❌ Invalid Discord user ID. Must be a 15-20 digit snowflake.');
+                console.log('\nInvalid Discord user ID. Must be a 15-20 digit snowflake.');
             }
             break;
         }
@@ -8641,7 +8635,7 @@ async function showAdminUsersMenu() {
                 { type: 'list', name: 'userId', message: 'Select Discord admin to remove:', choices: dcAdmins.map(id => ({ name: nameForId(id, 'discord'), value: id })) }
             ]);
             saveAdminUsers(tgAdmins, dcAdmins.filter(id => id !== userId), waAdmins);
-            console.log(`\n✅ Discord admin removed: ${nameForId(userId, 'discord')}`);
+            console.log(`\nDiscord admin removed: ${nameForId(userId, 'discord')}`);
             break;
         }
         case 'add_wa': {
@@ -8651,7 +8645,7 @@ async function showAdminUsersMenu() {
                     name: `  ${u.name}${u.username ? ` (@${u.username})` : ''} — ${u.id}  ${dim(`${u.messageCount} msgs, last ${new Date(u.lastSeen).toLocaleDateString()}`)}`,
                     value: u.id
                 }));
-                choices.push({ name: dim('  ✏️  Enter ID manually'), value: '__manual__' });
+                choices.push({ name: dim('    Enter ID manually'), value: '__manual__' });
                 const { selected } = await inquirer.prompt([
                     { type: 'list', name: 'selected', message: 'Select a WhatsApp user to add as admin:', choices }
                 ]);
@@ -8673,9 +8667,9 @@ async function showAdminUsersMenu() {
                 const newList = [...new Set([...waAdmins, id])];
                 saveAdminUsers(tgAdmins, dcAdmins, newList);
                 const user = agent.getKnownUsers('whatsapp').find(u => u.id === id);
-                console.log(`\n✅ WhatsApp admin added: ${user ? `${user.name} (${id})` : id}`);
+                console.log(`\nWhatsApp admin added: ${user ? `${user.name} (${id})` : id}`);
             } else if (id) {
-                console.log('\n❌ Invalid WhatsApp JID. Use format: phonenumber@s.whatsapp.net');
+                console.log('\nInvalid WhatsApp JID. Use format: phonenumber@s.whatsapp.net');
             }
             break;
         }
@@ -8685,7 +8679,7 @@ async function showAdminUsersMenu() {
                 { type: 'list', name: 'userId', message: 'Select WhatsApp admin to remove:', choices: waAdmins.map(id => ({ name: nameForId(id, 'whatsapp'), value: id })) }
             ]);
             saveAdminUsers(tgAdmins, dcAdmins, waAdmins.filter(id => id !== userId));
-            console.log(`\n✅ WhatsApp admin removed: ${nameForId(userId, 'whatsapp')}`);
+            console.log(`\nWhatsApp admin removed: ${nameForId(userId, 'whatsapp')}`);
             break;
         }
     }
@@ -8697,7 +8691,7 @@ async function showAdminUsersMenu() {
 async function showConfigMenu() {
     console.clear();
     banner();
-    sectionHeader('⚙️', 'Agent Configuration');
+    sectionHeader('Agent Configuration');
     console.log('');
 
     const config = agent.config.getAll();
@@ -8737,7 +8731,7 @@ async function showConfigMenu() {
         name: `${key}: ${config[key as keyof typeof config] || '(empty)'}`,
         value: key
     }));
-    choices.push({ name: '🔥 Reset Agent (Fresh Start)', value: 'reset' });
+    choices.push({ name: 'Reset Agent (Fresh Start)', value: 'reset' });
     choices.push({ name: 'Back', value: 'back' });
 
     const { key } = await inquirer.prompt([
@@ -8807,13 +8801,13 @@ async function showConfigMenu() {
 async function showCommunitySkillsMenu() {
     console.clear();
     banner();
-    sectionHeader('🌐', 'Community Skills');
+    sectionHeader('Community Skills');
     console.log(gray('  Fetching latest skills from fredabila/orcbot-skills...'));
 
     try {
         const repoUrl = 'https://github.com/fredabila/orcbot-skills';
         const apiUrl = 'https://api.github.com/repos/fredabila/orcbot-skills/contents/skills';
-        
+
         // Use global fetch (Node 18+)
         const response = await fetch(apiUrl, {
             headers: { 'User-Agent': 'OrcBot-CLI' }
@@ -8835,10 +8829,10 @@ async function showCommunitySkillsMenu() {
         console.log(dim(`\n  Found ${skills.length} community skills in the vault:\n`));
 
         const choices = skills.map(name => ({
-            name: `  📦 ${bold(name)}`,
+            name: `   ${bold(name)}`,
             value: name
         }));
-        choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
+        choices.push(new inquirer.Separator(dim('  ──────────────────────────────────')));
         choices.push({ name: dim('  ← Back'), value: 'back' });
 
         const { selection } = await inquirer.prompt([
@@ -8864,8 +8858,8 @@ async function showCommunitySkillsMenu() {
                 name: 'action',
                 message: `Skill: ${bold(skillName)}`,
                 choices: [
-                    { name: `  📖 ${bold('View Details')} ${dim('(Description & Requirements)')}`, value: 'view' },
-                    { name: `  📥 ${bold('Install Skill')} ${dim('to this OrcBot')}`, value: 'install' },
+                    { name: `   ${bold('View Details')} ${dim('(Description & Requirements)')}`, value: 'view' },
+                    { name: `   ${bold('Install Skill')} ${dim('to this OrcBot')}`, value: 'install' },
                     new inquirer.Separator(),
                     { name: dim('  ← Back to list'), value: 'back' }
                 ]
@@ -8885,8 +8879,8 @@ async function showCommunitySkillsMenu() {
                 if (parsed) {
                     console.clear();
                     banner();
-                    sectionHeader('📖', `Skill: ${skillName}`);
-                    
+                    sectionHeader(`Skill: ${skillName}`);
+
                     console.log(`\n  ${bold('Description:')}`);
                     console.log(`  ${parsed.meta.description}\n`);
 
@@ -8929,18 +8923,18 @@ async function showCommunitySkillsMenu() {
         }
 
         // Proceed to installation
-        console.log(`\n📦 Installing "${skillName}" from community vault...`);
+        console.log(`\nInstalling "${skillName}" from community vault...`);
         const result = await agent.skills.installSkillFromUrl(skillUrl);
-        
+
         if (result.success) {
-            console.log(green(`\n✅ ${result.message}`));
+            console.log(green(`\n${result.message}`));
         } else {
-            console.log(red(`\n❌ ${result.message}`));
+            console.log(red(`\n${result.message}`));
         }
         await waitKeyPress();
 
     } catch (e: any) {
-        console.log(red(`\n❌ Failed to fetch community skills: ${e.message}`));
+        console.log(red(`\nFailed to fetch community skills: ${e.message}`));
         console.log(dim(`   You can manually install from: https://github.com/fredabila/orcbot-skills`));
         await waitKeyPress();
     }
@@ -8949,7 +8943,7 @@ async function showCommunitySkillsMenu() {
 async function showSkillsMenu() {
     console.clear();
     banner();
-    sectionHeader('🧩', 'Skills Manager');
+    sectionHeader('Skills Manager');
 
     const skills = agent.skills.getAllSkills();
     const agentSkills = agent.skills.getAgentSkills();
@@ -8964,14 +8958,14 @@ async function showSkillsMenu() {
         `${dim('Plugins')}        ${cyan(bold(String(pluginSkills.length)))} loaded`,
         `${dim('Core Built-in')}  ${gray(bold(String(coreSkills.length)))} available`,
     ];
-    box(summaryLines, { title: '📦 SKILL INVENTORY', width: 52, color: c.magenta });
+    box(summaryLines, { title: 'SKILL INVENTORY', width: 52 });
     console.log('');
 
     const choices: any[] = [];
 
     // Section: Agent Skills (SKILL.md format)
     if (agentSkills.length > 0) {
-        choices.push(new inquirer.Separator(gradient('  ─── Agent Skills (SKILL.md) ──────', [c.brightCyan, c.gray])));
+        choices.push(new inquirer.Separator(dim('  ─── Agent Skills (SKILL.md) ──────')));
         for (const s of agentSkills) {
             const badge = s.activated ? green('● ') : gray('○ ');
             choices.push({
@@ -8983,32 +8977,32 @@ async function showSkillsMenu() {
 
     // Section: Plugin Skills
     if (pluginSkills.length > 0) {
-        choices.push(new inquirer.Separator(gradient('  ─── Plugins (.ts/.js) ────────────', [c.yellow, c.gray])));
+        choices.push(new inquirer.Separator(dim('  ─── Plugins (.ts/.js) ────────────')));
         for (const s of pluginSkills) {
             choices.push({
-                name: `  🔌 ${bold(s.name)} ${dim('— ' + s.description.slice(0, 50) + (s.description.length > 50 ? '…' : ''))}`,
+                name: `   ${bold(s.name)} ${dim('— ' + s.description.slice(0, 50) + (s.description.length > 50 ? '…' : ''))}`,
                 value: `plugin:${s.name}`
             });
         }
     }
 
     // Section: Core Skills
-    choices.push(new inquirer.Separator(gradient(`  ─── Core Skills (${coreSkills.length}) ─────────────`, [c.gray, c.gray])));
-    choices.push({ name: `  📋 ${bold('Show all ' + coreSkills.length + ' core skills')}`, value: 'list_core' });
+    choices.push(new inquirer.Separator(dim(`  ─── Core Skills (${coreSkills.length}) ─────────────`)));
+    choices.push({ name: `   ${bold('Show all ' + coreSkills.length + ' core skills')}`, value: 'list_core' });
 
     // Section: Community
-    choices.push(new inquirer.Separator(gradient('  ─── Community ────────────────────', [c.magenta, c.gray])));
-    choices.push({ name: `  🌐 ${bold('Browse Community Skills')} ${dim('(orcbot-skills)')}`, value: 'browse_community' });
+    choices.push(new inquirer.Separator(dim('  ─── Community ────────────────────')));
+    choices.push({ name: `   ${bold('Browse Community Skills')} ${dim('(orcbot-skills)')}`, value: 'browse_community' });
 
     // Actions
-    choices.push(new inquirer.Separator(gradient('  ─── Actions ──────────────────────', [c.green, c.gray])));
-    choices.push({ name: `  📦 ${bold('Install Skill from URL')}`, value: 'install_url' });
-    choices.push({ name: `  📁 ${bold('Install Skill from Local Path')}`, value: 'install_path' });
-    choices.push({ name: `  ✨ ${bold('Create New Skill')}`, value: 'create' });
-    choices.push({ name: `  🔨 ${bold('Build Skill from Spec URL')} ${dim('(Legacy)')}`, value: 'build' });
-    choices.push({ name: `  ✅ ${bold('Validate Skill')}`, value: 'validate' });
-    choices.push({ name: `  🔄 ${bold('Resync Skills Registry Files')}`, value: 'resync_registry' });
-    choices.push(new inquirer.Separator(gradient('  ──────────────────────────────────', [c.gray, c.gray])));
+    choices.push(new inquirer.Separator(dim('  ─── Actions ──────────────────────')));
+    choices.push({ name: `   ${bold('Install Skill from URL')}`, value: 'install_url' });
+    choices.push({ name: `   ${bold('Install Skill from Local Path')}`, value: 'install_path' });
+    choices.push({ name: `   ${bold('Create New Skill')}`, value: 'create' });
+    choices.push({ name: `   ${bold('Build Skill from Spec URL')} ${dim('(Legacy)')}`, value: 'build' });
+    choices.push({ name: `   ${bold('Validate Skill')}`, value: 'validate' });
+    choices.push({ name: `   ${bold('Resync Skills Registry Files')}`, value: 'resync_registry' });
+    choices.push(new inquirer.Separator(dim('  ──────────────────────────────────')));
     choices.push({ name: dim('  ← Back'), value: 'back' });
 
     const { selection } = await inquirer.prompt([
@@ -9035,11 +9029,11 @@ async function showSkillsMenu() {
                 name: 'action',
                 message: `Agent Skill: ${skillName}`,
                 choices: [
-                    { name: skill.activated ? '⏸️  Deactivate' : '▶️  Activate', value: 'toggle' },
-                    { name: '📖 View SKILL.md', value: 'view' },
-                    { name: '✅ Validate', value: 'validate' },
-                    { name: '📂 Show Resources', value: 'resources' },
-                    { name: '🗑️  Uninstall', value: 'uninstall' },
+                    { name: skill.activated ? 'Deactivate' : '▶  Activate', value: 'toggle' },
+                    { name: 'View SKILL.md', value: 'view' },
+                    { name: 'Validate', value: 'validate' },
+                    { name: 'Show Resources', value: 'resources' },
+                    { name: 'Uninstall', value: 'uninstall' },
                     { name: 'Back', value: 'back' }
                 ]
             }
@@ -9048,10 +9042,10 @@ async function showSkillsMenu() {
         if (action === 'toggle') {
             if (skill.activated) {
                 agent.skills.deactivateAgentSkill(skillName);
-                console.log(`⏸️  Deactivated "${skillName}"`);
+                console.log(`Deactivated "${skillName}"`);
             } else {
                 agent.skills.activateAgentSkill(skillName);
-                console.log(`▶️  Activated "${skillName}"`);
+                console.log(`▶  Activated "${skillName}"`);
             }
             await waitKeyPress();
         } else if (action === 'view') {
@@ -9062,14 +9056,14 @@ async function showSkillsMenu() {
         } else if (action === 'validate') {
             const result = agent.skills.validateSkill(skill.skillDir);
             if (result.valid) {
-                console.log(`✅ Skill "${skillName}" is valid.`);
+                console.log(`Skill "${skillName}" is valid.`);
             } else {
-                console.log(`❌ ${result.errors.length} issue(s):`);
+                console.log(`${result.errors.length} issue(s):`);
                 result.errors.forEach(e => console.log(`  - ${e}`));
             }
             await waitKeyPress();
         } else if (action === 'resources') {
-            console.log(`\n📂 Resources for "${skillName}":`);
+            console.log(`\nResources for "${skillName}":`);
             if (skill.scripts.length > 0) console.log(`  Scripts: ${skill.scripts.join(', ')}`);
             if (skill.references.length > 0) console.log(`  References: ${skill.references.join(', ')}`);
             if (skill.assets.length > 0) console.log(`  Assets: ${skill.assets.join(', ')}`);
@@ -9098,7 +9092,7 @@ async function showSkillsMenu() {
                     name: 'action',
                     message: `Plugin Skill: ${skillName}`,
                     choices: [
-                        { name: '🗑️  Uninstall (Delete Plugin)', value: 'uninstall' },
+                        { name: 'Uninstall (Delete Plugin)', value: 'uninstall' },
                         { name: 'Back', value: 'back' }
                     ]
                 }
@@ -9140,7 +9134,7 @@ async function showSkillsMenu() {
         if (url) {
             console.log('Installing skill...');
             const result = await agent.skills.installSkillFromUrl(url);
-            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            console.log(result.success ? `${result.message}` : `${result.message}`);
             await waitKeyPress();
         }
         return showSkillsMenu();
@@ -9154,7 +9148,7 @@ async function showSkillsMenu() {
         if (localPath) {
             console.log('Installing skill...');
             const result = await agent.skills.installSkillFromPath(localPath);
-            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            console.log(result.success ? `${result.message}` : `${result.message}`);
             await waitKeyPress();
         }
         return showSkillsMenu();
@@ -9168,7 +9162,7 @@ async function showSkillsMenu() {
         ]);
         if (answers.name) {
             const result = agent.skills.initSkill(answers.name, answers.description);
-            console.log(result.success ? `✅ ${result.message}` : `❌ ${result.message}`);
+            console.log(result.success ? `${result.message}` : `${result.message}`);
             if (result.success) console.log(`  Edit SKILL.md at: ${path.join(result.path, 'SKILL.md')}`);
             await waitKeyPress();
         }
@@ -9195,9 +9189,9 @@ async function showSkillsMenu() {
         if (skill) {
             const result = agent.skills.validateSkill(skill.skillDir);
             if (result.valid) {
-                console.log(`✅ Skill "${skillName}" is valid.`);
+                console.log(`Skill "${skillName}" is valid.`);
             } else {
-                console.log(`❌ ${result.errors.length} issue(s):`);
+                console.log(`${result.errors.length} issue(s):`);
                 result.errors.forEach(e => console.log(`  - ${e}`));
             }
         }
@@ -9208,7 +9202,7 @@ async function showSkillsMenu() {
     if (selection === 'resync_registry') {
         try {
             const result = agent.syncSkillsRegistryNow();
-            console.log('\n✅ Skills registry files resynced.');
+            console.log('\nSkills registry files resynced.');
             if (result.sourcePath) {
                 console.log(`   Source: ${result.sourcePath}`);
             }
@@ -9216,7 +9210,7 @@ async function showSkillsMenu() {
                 console.log(`   Target: ${target}`);
             }
         } catch (e: any) {
-            console.log(`\n❌ Failed to resync skills registries: ${e?.message || e}`);
+            console.log(`\nFailed to resync skills registries: ${e?.message || e}`);
         }
         await waitKeyPress();
         return showSkillsMenu();
@@ -9246,17 +9240,17 @@ async function performPiAIUpdate() {
     const { execSync } = require('child_process');
     const orcbotDir = path.resolve(__dirname, '..', '..');
 
-    console.log('\n🔄 Checking for PI AI Catalog updates...');
+    console.log('\nChecking for PI AI Catalog updates...');
     console.log(dim('   This will update the @mariozechner/pi-ai library to get the newest models.\n'));
 
     try {
-        console.log('📡 Fetching latest catalog metadata via npm...');
+        console.log('Fetching latest catalog metadata via npm...');
         execSync('npm update @mariozechner/pi-ai', { cwd: orcbotDir, stdio: 'inherit' });
 
-        console.log(green('\n✅ Catalog update complete!'));
+        console.log(green('\nCatalog update complete!'));
         console.log(dim('   The model list will be refreshed the next time you open the browser.'));
     } catch (e) {
-        console.log(red(`\n❌ Failed to update catalog: ${e.message}`));
+        console.log(red(`\nFailed to update catalog: ${e.message}`));
     }
 
     await waitKeyPress();
@@ -9270,7 +9264,7 @@ async function performUpdate() {
     const orcbotDir = path.resolve(__dirname, '..', '..');
     const isGlobalInstall = orcbotDir.includes('node_modules');
 
-    console.log('\n🔄 Checking for OrcBot updates...\n');
+    console.log('\nChecking for OrcBot updates...\n');
 
     try {
         // Check if we're in a git repo
@@ -9278,10 +9272,10 @@ async function performUpdate() {
         const isGitRepo = fs.existsSync(gitDir);
 
         if (isGitRepo) {
-            console.log(`📁 OrcBot directory: ${orcbotDir}`);
+            console.log(`OrcBot directory: ${orcbotDir}`);
 
             // Fetch latest changes
-            console.log('📡 Fetching latest changes from remote...');
+            console.log('Fetching latest changes from remote...');
             execSync('git fetch origin', { cwd: orcbotDir });
 
             // Check if updates are available
@@ -9289,37 +9283,37 @@ async function performUpdate() {
             const remoteHash = execSync('git rev-parse origin/main', { cwd: orcbotDir, encoding: 'utf8' }).trim();
 
             if (localHash === remoteHash) {
-                console.log('\n✅ OrcBot is already up to date!');
+                console.log('\nOrcBot is already up to date!');
                 console.log(`   Current version: ${localHash.substring(0, 7)}`);
                 return;
             }
 
-            console.log(`\n📦 Update available!`);
+            console.log(`\nUpdate available!`);
             console.log(`   Current: ${localHash.substring(0, 7)}`);
             console.log(`   Latest:  ${remoteHash.substring(0, 7)}`);
 
             // Show what's changing
-            console.log('\n📋 Changes to be applied:');
+            console.log('\nChanges to be applied:');
             const logs = execSync('git log --oneline HEAD..origin/main', { cwd: orcbotDir, encoding: 'utf8' });
             console.log(logs);
 
             // Force update: discard local changes and sync to origin/main
-            console.log('\n⬇️  Applying latest changes (force update)...');
+            console.log('\nApplying latest changes (force update)...');
             execSync('git reset --hard origin/main', { cwd: orcbotDir });
             execSync('git clean -fd', { cwd: orcbotDir });
 
             // Install dependencies
-            console.log('\n📦 Installing dependencies...');
+            console.log('\nInstalling dependencies...');
             execSync('npm install', { cwd: orcbotDir });
-            
+
             // Rebuild
-            console.log('\n🔨 Rebuilding OrcBot...');
+            console.log('\nRebuilding OrcBot...');
             execSync('npm run build', { cwd: orcbotDir });
 
             // Re-link globally
             const packageJson = JSON.parse(fs.readFileSync(path.join(orcbotDir, 'package.json'), 'utf8'));
             if (packageJson.bin) {
-                console.log('\n🔗 Re-installing global command...');
+                console.log('\nRe-installing global command...');
                 try {
                     execSync('npm install -g .', { cwd: orcbotDir });
                 } catch (e) {
@@ -9327,13 +9321,13 @@ async function performUpdate() {
                 }
             }
 
-            console.log('\n✅ OrcBot updated successfully!');
+            console.log('\nOrcBot updated successfully!');
             console.log('   Please restart OrcBot to apply changes.');
             console.log('\n   Run: orcbot run');
 
         } else {
             // Not a git repo - might be npm installed
-            console.log('⚠️  OrcBot was not installed from git.');
+            console.log('OrcBot was not installed from git.');
             console.log('   To update, run these commands manually:');
             console.log('\n   cd ' + orcbotDir);
             console.log('   git pull origin main');
@@ -9342,7 +9336,7 @@ async function performUpdate() {
             console.log('   npm install -g .');
         }
     } catch (error: any) {
-        console.error('\n❌ Update failed:', error.message);
+        console.error('\nUpdate failed:', error.message);
         console.log('\n   Try updating manually:');
         console.log('   cd ' + orcbotDir);
         console.log('   git pull origin main');
@@ -9355,7 +9349,7 @@ async function performUpdate() {
 function showStatus() {
     console.clear();
     banner();
-    sectionHeader('📊', 'Agent Status');
+    sectionHeader('Agent Status');
 
     const shortMem = agent.memory.searchMemory('short').length;
     const episodicMem = agent.memory.searchMemory('episodic').length;
@@ -9378,7 +9372,7 @@ function showStatus() {
         `${c.white}Provider${c.reset}   ${c.brightWhite}${provider}${c.reset}`,
         `${c.white}Agent${c.reset}      ${c.bold}${c.brightWhite}${agentName}${c.reset}`,
         `${c.white}Mode${c.reset}       ${sudoMode ? `${c.bgRed}${c.bold}${c.white} SUDO ${c.reset} ${c.gray}(unrestricted)${c.reset}` : safeMode ? `${c.bgYellow}${c.bold}${c.white} SAFE ${c.reset} ${c.gray}(commands blocked)${c.reset}` : `${c.bgGreen}${c.bold}${c.white} NORMAL ${c.reset}`}`,
-    ], { title: '🤖 AI ENGINE', width: 52, color: c.brightCyan });
+    ], { title: 'AI ENGINE', width: 52 });
 
     // Memory Panel
     const memTotal = shortMem + episodicMem;
@@ -9387,7 +9381,7 @@ function showStatus() {
         `${c.white}Short-term${c.reset}  ${c.yellow}${c.bold}${String(shortMem).padStart(4)}${c.reset} entries  ${progressBar(shortMem, 200, 16)}`,
         `${c.white}Episodic${c.reset}    ${c.cyan}${c.bold}${String(episodicMem).padStart(4)}${c.reset} entries  ${progressBar(episodicMem, 50, 16, { colorFn: cyan })}`,
         `${c.white}Total${c.reset}       ${c.bold}${c.brightWhite}${String(memTotal).padStart(4)}${c.reset} entries`,
-    ], { title: '🧠 MEMORY', width: 52, color: c.magenta });
+    ], { title: 'MEMORY', width: 52 });
 
     // Channels Panel — fixed-width label column for clean alignment
     console.log('');
@@ -9398,7 +9392,7 @@ function showStatus() {
         chLine(hasWhatsapp, c.brightGreen, 'WhatsApp'),
         chLine(hasDiscord, c.brightMagenta, 'Discord'),
         chLine(hasSlack, c.brightYellow, 'Slack'),
-    ], { title: '🔌 CHANNELS', width: 52, color: c.brightBlue });
+    ], { title: 'CHANNELS', width: 52 });
 
     // Action Queue Panel
     const completed = queueItems.filter((a: any) => a.status === 'completed').length;
@@ -9416,12 +9410,12 @@ function showStatus() {
         queueLines.push(`${c.white}${c.bold}Recent:${c.reset}`);
         const recentActions = queueItems.slice(-3).reverse();
         for (const a of recentActions) {
-            const statusIcon = a.status === 'completed' ? `${c.brightGreen}✓${c.reset}` : a.status === 'failed' ? `${c.red}✗${c.reset}` : a.status === 'in-progress' ? `${c.cyan}▶${c.reset}` : a.status === 'waiting' ? `${c.magenta}⏸${c.reset}` : `${c.yellow}…${c.reset}`;
+            const statusIcon = a.status === 'completed' ? `${c.brightGreen}✓${c.reset}` : a.status === 'failed' ? `${c.red}✗${c.reset}` : a.status === 'in-progress' ? `${c.cyan}▶${c.reset}` : a.status === 'waiting' ? `` : `${c.yellow}…${c.reset}`;
             const desc = ((a as any).payload?.description || 'Unknown').slice(0, 38);
             queueLines.push(`  ${statusIcon} ${c.gray}${a.id.slice(0, 6)}${c.reset} ${c.white}${desc}${c.reset}`);
         }
     }
-    box(queueLines, { title: '📋 ACTION QUEUE', width: 52, color: c.yellow });
+    box(queueLines, { title: 'ACTION QUEUE', width: 52 });
 
     console.log('');
 }
@@ -9429,7 +9423,7 @@ function showStatus() {
 function showGuardrailMetrics(limit: number = 10) {
     console.clear();
     banner();
-    sectionHeader('🧪', 'Guardrail Metrics');
+    sectionHeader('Guardrail Metrics');
 
     const episodic = agent.memory.searchMemory('episodic') as any[];
     const supportedMetrics = new Set(['max_step_fallback', 'delay_risk_high']);
@@ -9487,12 +9481,12 @@ function showGuardrailMetrics(limit: number = 10) {
         `${c.white}Last 7 days${c.reset}    ${last7d > 0 ? `${c.cyan}${c.bold}${String(last7d)}${c.reset}` : `${c.gray}0${c.reset}`}`,
         `${c.white}By type${c.reset}        ${c.brightWhite}${typeSummary}${c.reset}`,
         `${c.white}Top sources${c.reset}    ${c.brightWhite}${topSources}${c.reset}`,
-    ], { title: '📉 FALLBACK SUMMARY', width: 64, color: c.yellow });
+    ], { title: 'FALLBACK SUMMARY', width: 64 });
 
     const recent = metricEntries.slice(0, Math.max(1, limit));
     if (recent.length === 0) {
         console.log('');
-        box([dim('No guardrail metric events recorded yet.')], { title: '🕘 RECENT EVENTS', width: 64, color: c.gray });
+        box([dim('No guardrail metric events recorded yet.')], { title: 'RECENT EVENTS', width: 64 });
         console.log('');
         return;
     }
@@ -9513,7 +9507,7 @@ function showGuardrailMetrics(limit: number = 10) {
     }
 
     console.log('');
-    box([`${dim('Recent')} ${recent.length} ${dim('event(s)')}`], { title: '🕘 RECENT EVENTS', width: 64, color: c.cyan });
+    box([`${dim('Recent')} ${recent.length} ${dim('event(s)')}`], { title: 'RECENT EVENTS', width: 64 });
     table(rows, { indent: '  ', separator: '   ', headerColor: brightCyan });
     console.log('');
 }
@@ -9521,7 +9515,7 @@ function showGuardrailMetrics(limit: number = 10) {
 function showTokenUsage() {
     console.clear();
     banner();
-    sectionHeader('📈', 'Token Usage');
+    sectionHeader('Token Usage');
 
     const tracker = new TokenTracker(
         agent.config.get('tokenUsagePath'),
@@ -9535,7 +9529,7 @@ function showTokenUsage() {
     const realPct = accuracy.realPct;
     const estPct = accuracy.estimatedPct;
     const accuracyColor = realPct >= 80 ? c.brightGreen : realPct >= 50 ? c.yellow : c.brightRed;
-    const accuracyLabel = realPct >= 80 ? '✓ High' : realPct >= 50 ? '~ Medium' : '⚠ Low';
+    const accuracyLabel = realPct >= 80 ? '✓ High' : realPct >= 50 ? '~ Medium' : 'Low';
     box([
         `${c.white}Data accuracy:${c.reset}         ${accuracyColor}${c.bold}${accuracyLabel} (${realPct}% API-reported)${c.reset}`,
         `${c.white}API-reported calls:${c.reset}    ${c.bold}${c.brightWhite}${accuracy.realCalls.toLocaleString().padStart(8)}${c.reset}  ${c.gray}│${c.reset}  ${c.brightGreen}${(summary.realTotals?.totalTokens?.toLocaleString() || '0').padStart(12)}${c.reset} tokens`,
@@ -9543,7 +9537,7 @@ function showTokenUsage() {
         `${c.gray}${'─'.repeat(52)}${c.reset}`,
         `${c.white}If numbers seem high, estimated calls use a heuristic${c.reset}`,
         `${c.white}that can over-count. Run${c.reset} ${c.bold}${c.brightCyan}orcbot tokens recount${c.reset} ${c.white}to rebuild.${c.reset}`,
-    ], { title: '🎯 DATA ACCURACY', width: 58, color: accuracyColor });
+    ], { title: 'DATA ACCURACY', width: 58, color: accuracyColor });
 
     // Totals Panel — now with real vs estimated breakdown
     console.log('');
@@ -9557,7 +9551,7 @@ function showTokenUsage() {
         `${c.white}Total${c.reset}        ${c.brightCyan}${c.bold}${totalTokens.toLocaleString().padStart(12)}${c.reset} tokens`,
         `  ${c.gray}├ API-reported:${c.reset} ${c.brightGreen}${realTotal.toLocaleString().padStart(10)}${c.reset}`,
         `  ${c.gray}└ Estimated:${c.reset}    ${c.yellow}${estTotal.toLocaleString().padStart(10)}${c.reset}  ${estTotal > 0 ? `${c.gray}(~30-60% inflated)${c.reset}` : ''}`,
-    ], { title: '🔢 TOKEN TOTALS', width: 48, color: c.brightCyan });
+    ], { title: 'TOKEN TOTALS', width: 48 });
 
     // Provider breakdown
     const providers = Object.entries(summary.byProvider);
@@ -9576,7 +9570,7 @@ function showTokenUsage() {
                 providerLines.push(`${dim(' '.repeat(12))} ${dim('real:')} ${green(realT.toLocaleString().padStart(8))} ${dim('est:')} ${c.yellow}${estT.toLocaleString().padStart(8)}${c.reset}`);
             }
         }
-        box(providerLines, { title: '🏢 BY PROVIDER', width: 58, color: c.green });
+        box(providerLines, { title: 'BY PROVIDER', width: 58 });
     }
 
     // Model breakdown
@@ -9592,7 +9586,7 @@ function showTokenUsage() {
             const suffix = estT > 0 ? ` ${c.yellow}~est${c.reset}` : '';
             modelLines.push(`${displayName.padEnd(22)} ${bar} ${dim(totals.totalTokens.toLocaleString().padStart(10))}${suffix}`);
         }
-        box(modelLines, { title: '🤖 TOP MODELS', width: 58, color: c.magenta });
+        box(modelLines, { title: 'TOP MODELS', width: 58 });
     }
 
     console.log('');
@@ -9611,7 +9605,7 @@ async function waitKeyPress() {
 function toggleAutonomyChannel(channel: string) {
     let allowedChannels = agent.config.get('autonomyAllowedChannels');
     if (!Array.isArray(allowedChannels)) allowedChannels = [];
-    
+
     // Create a new array to ensure config.set detects the change
     let nextChannels: string[];
     if (allowedChannels.includes(channel)) {

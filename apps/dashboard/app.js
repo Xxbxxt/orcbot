@@ -672,7 +672,7 @@
                 </div>
                 ${currentDirectory.path ? `
                     <button class="data-home-row data-home-row-parent" data-data-home-path="${escapeAttribute(parentPath)}" data-data-home-type="directory">
-                        <span class="data-home-row-name"><i class="fas fa-arrow-up"></i><strong>..</strong></span>
+                        <span class="data-home-row-name"><strong>..</strong></span>
                         <span>directory</span>
                         <span>-</span>
                         <span>Parent directory</span>
@@ -1665,14 +1665,12 @@
     function renderDirectoryEntry(entry) {
         const isActive = (entry.path || '') === (state.selectedDataHomePath || '');
         const isDirectory = entry.type === 'directory';
-        const icon = isDirectory ? 'fa-folder' : 'fa-file-lines';
         const size = isDirectory ? '-' : formatBytes(entry.size || 0);
         const modified = entry.modifiedAt ? formatTimestamp(entry.modifiedAt) : '-';
 
         return `
             <button class="data-home-row ${isActive ? 'active' : ''}" data-data-home-path="${escapeAttribute(entry.path || '')}" data-data-home-type="${escapeAttribute(entry.type || 'file')}">
                 <span class="data-home-row-name">
-                    <i class="fas ${icon}"></i>
                     <strong>${escapeHtml(entry.name || '(root)')}</strong>
                     ${entry.protected ? '<span class="tag">protected</span>' : ''}
                 </span>
@@ -1794,7 +1792,7 @@
                 </div>
                 <div class="kv-value ${row.mono ? 'mono' : ''} ${row.copyable ? 'kv-copyable' : ''}">${
                     row.copyable
-                        ? `<span class="kv-text">${formatMultiline(row.value || '-')}</span><button class="copy-btn" data-copy="${escapeAttribute(row.value || '')}" title="Copy to clipboard"><i class="fas fa-copy"></i></button>`
+                        ? `<span class="kv-text">${formatMultiline(row.value || '-')}</span><button class="copy-btn" data-copy="${escapeAttribute(row.value || '')}" title="Copy to clipboard"></button>`
                         : formatMultiline(row.value || '-')
                 }</div>
             </article>
