@@ -10,7 +10,7 @@
 
 import { logger } from '../utils/logger';
 import { ConfigPolicy, ConfigChangeLevel } from '../config/ConfigPolicy';
-import { AgentContext } from '../core/SkillsManager';
+import { SkillContext } from '../core/SkillsManager';
 
 export interface ConfigChange {
     key: string;
@@ -28,14 +28,14 @@ export class ConfigManagementService {
     /**
      * Get current configuration value
      */
-    getConfig(key: string, context: AgentContext): any {
+    getConfig(key: string, context: SkillContext): any {
         return context.config.get(key);
     }
 
     /**
      * Get all configuration with policies
      */
-    getAllConfigWithPolicies(context: AgentContext): any {
+    getAllConfigWithPolicies(context: SkillContext): any {
         const config = context.config.getAll();
         const result: any = {
             safe: {},
@@ -64,7 +64,7 @@ export class ConfigManagementService {
     /**
      * Set configuration value (respects policy)
      */
-    setConfig(key: string, value: any, reason: string | undefined, context: AgentContext): {
+    setConfig(key: string, value: any, reason: string | undefined, context: SkillContext): {
         success: boolean;
         message: string;
         requiresApproval?: boolean;
@@ -151,7 +151,7 @@ export class ConfigManagementService {
     /**
      * Approve a pending configuration change
      */
-    approvePending(key: string, context: AgentContext): {
+    approvePending(key: string, context: SkillContext): {
         success: boolean;
         message: string;
     } {
@@ -230,7 +230,7 @@ export class ConfigManagementService {
     /**
      * Suggest optimal configuration based on task context
      */
-    suggestOptimizations(taskDescription: string, context: AgentContext): {
+    suggestOptimizations(taskDescription: string, context: SkillContext): {
         suggestions: Array<{ key: string; value: any; reason: string }>;
     } {
         const suggestions: Array<{ key: string; value: any; reason: string }> = [];
@@ -300,7 +300,7 @@ export const configManagementSkill = {
     usage: 'manage_config({ action: "get"|"set"|"list"|"policy"|"history"|"pending"|"approve"|"reject"|"suggest", key?: string, value?: any, reason?: string, taskDescription?: string })',
     isDeep: true,
     
-    handler: async (args: any, context?: AgentContext) => {
+    handler: async (args: any, context?: SkillContext) => {
         if (!context) {
             return 'Error: Context not available';
         }

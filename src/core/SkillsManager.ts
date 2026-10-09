@@ -3,27 +3,54 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { SyntaxChecker } from '../utils/SyntaxChecker';
 import type { LLMToolDefinition } from './MultiLLM';
+import type { MemoryManager } from '../memory/MemoryManager';
+import type { ConfigManager } from '../config/ConfigManager';
+import type { ActionQueue } from '../memory/ActionQueue';
 
-export interface AgentContext {
-    browser: any; // WebBrowser
-    config: any;  // ConfigManager
-    agent: any;   // Agent
-    logger: any;  // logger
-    workerProfile?: any; // WorkerProfileManager
-    orchestrator?: any;  // AgentOrchestrator
-    workerCapabilityProfile?: {
-        enforced: boolean;
-        capabilities: string[];
-        allowChannels?: boolean;
-    };
-    [key: string]: any;
+/**
+ * Narrow handles a skill may depend on. Each names only the capabilities the migrated slice
+ * needs, picked from the real manager so the signatures cannot drift from the implementation.
+ * A manager satisfies its handle structurally, so no adapter is required, and a test
+ * satisfies it with a small object literal.
+ */
+export type SkillMemory = Pick<MemoryManager,
+    | 'searchMemory' | 'getMemory' | 'semanticSearch' | 'semanticRecall' | 'vectorMemory'
+    | 'getContactProfile' | 'saveContactProfile' | 'getDailyMemory' | 'refreshUserContext'>;
+
+export type SkillConfig = Pick<ConfigManager, 'get' | 'getAll' | 'set' | 'getDataHome'>;
+
+export type SkillActionQueue = Pick<ActionQueue, 'push' | 'getAction'>;
+
+/**
+ * Everything a skill may reach, and nothing else. Built fresh per invocation, so it always
+ * reflects the agent's current subsystems and no handle can go stale when one is replaced.
+ */
+export interface SkillContext {
+    readonly memory: SkillMemory;
+    readonly config: SkillConfig;
+    readonly actionQueue: SkillActionQueue;
+}
+
+/** What a skill module's register function receives. A skill module never sees the agent. */
+export interface SkillRegistry {
+    registerSkill(skill: Skill): void;
+}
+
+/**
+ * What the manager itself needs from its host to load plugins and enforce policy. Distinct
+ * from SkillContext, which is what a skill handler may reach: loading a plugin is not a skill
+ * call, and policy is not a capability.
+ */
+export interface SkillHost {
+    config: Pick<ConfigManager, 'get'>;
+    pushTask: (task: string, priority: number, options?: any) => Promise<any>;
 }
 
 export interface Skill {
     name: string;
     description: string;
     usage: string;
-    handler: (args: any, context?: AgentContext) => Promise<any>;
+    handler: (args: any, context: SkillContext) => Promise<any>;
     pluginPath?: string; // Track source file for uninstallation
     sourceUrl?: string;  // Original URL if generated from a spec
     
@@ -70,11 +97,18 @@ export interface AgentSkill {
 export class SkillsManager {
     private skills: Map<string, Skill> = new Map();
     private agentSkills: Map<string, AgentSkill> = new Map();
-    private context: AgentContext | undefined;
+    private contextFactory?: () => SkillContext;
+    private workerCapabilityProfile?: {
+        enforced: boolean;
+        capabilities: string[];
+        allowChannels?: boolean;
+    };
+    private workerCapabilityDataHome?: string;
+    private host?: SkillHost;
     private lastLoadErrors: Map<string, string> = new Map();
 
-    constructor(private skillsPath: string = './SKILLS.md', private pluginsDir?: string, context?: AgentContext) {
-        this.context = context;
+    constructor(private skillsPath: string = './SKILLS.md', private pluginsDir?: string, contextFactory?: () => SkillContext) {
+        this.contextFactory = contextFactory;
         this.loadSkills();
         if (this.pluginsDir) {
             this.loadPlugins();
@@ -82,8 +116,43 @@ export class SkillsManager {
         }
     }
 
-    public setContext(context: AgentContext) {
-        this.context = context;
+    /**
+     * Supply the factory that builds a fresh SkillContext per invocation. It is a factory
+     * rather than a context because the agent's subsystems are not all constructed when this
+     * manager is, and because a context captured once would go stale as soon as a subsystem
+     * is replaced (see switch_browser_engine).
+     */
+    public setContextFactory(factory: () => SkillContext) {
+        this.contextFactory = factory;
+    }
+
+    /** The manager's own host dependencies. See SkillHost. */
+    public setHost(host: SkillHost) {
+        this.host = host;
+    }
+
+    private contextOrUndefined(): SkillContext | undefined {
+        return this.contextFactory ? this.contextFactory() : undefined;
+    }
+
+    private buildContext(): SkillContext {
+        if (!this.contextFactory) {
+            throw new Error('SkillsManager: no SkillContext factory set. Call setContextFactory() during agent init.');
+        }
+        return this.contextFactory();
+    }
+
+    /**
+     * The worker capability policy this manager enforces, and the data home its status file is
+     * written to. This is policy (may this skill run at all?), not a capability a skill can
+     * reach, so it is held here rather than in the SkillContext.
+     */
+    public setWorkerCapabilityPolicy(
+        profile?: { enforced: boolean; capabilities: string[]; allowChannels?: boolean },
+        dataHome?: string,
+    ) {
+        this.workerCapabilityProfile = profile;
+        this.workerCapabilityDataHome = dataHome;
     }
 
     public getSkill(name: string): Skill | undefined {
@@ -194,7 +263,7 @@ export class SkillsManager {
     public loadPlugins(verifyOnly: boolean = false) {
         if (!this.pluginsDir) return;
 
-        if (this.context?.config?.get('safeMode') && !verifyOnly) {
+        if (this.host?.config.get('safeMode') && !verifyOnly) {
             logger.warn('SkillsManager: Safe mode enabled; plugin loading is disabled.');
             return;
         }
@@ -248,8 +317,8 @@ export class SkillsManager {
                     if (registerable) {
                         const skillName = registerable.name;
 
-                        const allowList = (this.context?.config?.get('pluginAllowList') || []) as string[];
-                        const denyList = (this.context?.config?.get('pluginDenyList') || []) as string[];
+                        const allowList = (this.host?.config.get('pluginAllowList') || []) as string[];
+                        const denyList = (this.host?.config.get('pluginDenyList') || []) as string[];
                         const normalized = skillName.toLowerCase();
                         const allow = allowList.length === 0 || allowList.map(s => s.toLowerCase()).includes(normalized);
                         const deny = denyList.map(s => s.toLowerCase()).includes(normalized);
@@ -293,12 +362,13 @@ export class SkillsManager {
 
                     // SELF REPAIR TRIGGER
                     // If it's a TypeScript compilation error, we can try to auto-repair it.
-                    if ((errorMsg.includes('TSError') || errorMsg.includes('SyntaxError') || errorMsg.includes('Unexpected')) && this.context && this.context.agent) {
+                    const host = this.host;
+                    if ((errorMsg.includes('TSError') || errorMsg.includes('SyntaxError') || errorMsg.includes('Unexpected')) && host) {
                         const skillName = path.parse(file).name;
                         logger.warn(`SkillsManager: Triggering self-repair for broken plugin ${skillName}...`);
 
                         // We push a high priority task to the agent to fix this immediately
-                        this.context.agent.pushTask(
+                        host.pushTask(
                             `System Alert: The plugin skill '${skillName}' failed to compile. Error:\n${errorMsg}\n\nPlease use 'self_repair_skill' to fix it immediately.`,
                             10,
                             { source: 'system', error: errorMsg, skillName }
@@ -324,9 +394,9 @@ export class SkillsManager {
         timestamp: string;
     }): void {
         try {
-            const profile = this.context?.workerCapabilityProfile;
+            const profile = this.workerCapabilityProfile;
             if (!profile?.enforced) return;
-            const dataHome = this.context?.config?.getDataHome?.();
+            const dataHome = this.workerCapabilityDataHome;
             if (!dataHome) return;
             const statusPath = path.join(dataHome, 'worker-capability-status.json');
             fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
@@ -369,7 +439,7 @@ export class SkillsManager {
     }
 
     private assertWorkerCapabilityAllowed(skillName: string): void {
-        const profile = this.context?.workerCapabilityProfile;
+        const profile = this.workerCapabilityProfile;
         if (!profile || profile.enforced !== true) return;
 
         const requiredCapability = this.getRequiredWorkerCapability(skillName);
@@ -799,10 +869,10 @@ export class SkillsManager {
             
             // Inject required configuration if available
             const requiredConfig = skill.meta.orcbot?.requiredConfig;
-            if (requiredConfig && requiredConfig.length > 0 && this.context?.config) {
+            if (requiredConfig && requiredConfig.length > 0 && this.host?.config) {
                 parts.push('CONFIGURATION (from your config manager):');
                 for (const key of requiredConfig) {
-                    const value = this.context.config.get(key);
+                    const value = this.host?.config.get(key);
                     if (value !== undefined) {
                         parts.push(`- ${key}: "${value}"`);
                     } else {
@@ -1437,9 +1507,10 @@ main().catch(console.error);
             // Defaults to 15 minutes (900000ms). This is longer than the default
             // max command timeout (10 mins) to allow legitimate long-running tasks,
             // while ensuring no tool can permanently zombie the agent worker.
-            const timeoutMs = Number(this.context.config.get('skillExecutionTimeoutMs') || 900000);
+            const context = this.buildContext();
+            const timeoutMs = Number(context.config.get('skillExecutionTimeoutMs') || 900000);
             
-            const executionPromise = skill.handler(args, this.context);
+            const executionPromise = skill.handler(args, context);
             
             const timeoutPromise = new Promise((_, reject) => {
                 timerId = setTimeout(() => reject(new Error(`[WATCHDOG] Skill execution timed out after ${timeoutMs}ms. The process was likely blocked or waiting for interactive input.`)), timeoutMs);
@@ -1540,7 +1611,7 @@ main().catch(console.error);
 
                 const healthcheck = registerable.healthcheck || loadedModule.healthcheck || loadedModule.describe;
                 if (typeof healthcheck === 'function') {
-                    await Promise.resolve(healthcheck({ dryRun: true, healthcheck: true }, this.context));
+                    await Promise.resolve(healthcheck({ dryRun: true, healthcheck: true }, this.contextOrUndefined()));
                 }
 
                 healthy.push(registerable.name);
