@@ -11,3 +11,4 @@ orcbot.config.yaml
 .venv
 .npmrc
 .claude
+.agents

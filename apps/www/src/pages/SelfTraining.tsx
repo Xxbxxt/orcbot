@@ -6,45 +6,24 @@ import './SelfTraining.css';
 
 const phases = [
   {
-    title: '1. Capture',
-    desc: 'Completed actions are converted into redacted trajectories. OrcBot keeps the task, tool sequence, delivery audit, and final user-facing answer, but strips secrets before persistence.'
-  },
-  {
-    title: '2. Filter',
-    desc: 'Only accepted trajectories survive into the training export. Status-only chatter, unresolved failures, and low-quality runs are stored for analysis but rejected from the dataset.'
-  },
-  {
-    title: '3. Prepare',
-    desc: 'When enough accepted examples exist, OrcBot writes a deterministic training manifest and JSONL export. This stays offline-safe: no live weight mutation happens here.'
-  },
-  {
-    title: '4. Evaluate',
-    desc: 'Candidate models are measured against accepted trajectories. The current evaluation runner scores lexical overlap and response fit so promotions are gated on evidence instead of optimism.'
-  },
-  {
-    title: '5. Promote',
-    desc: 'Admins explicitly register a trained candidate, review the evaluation, and promote it into OrcBot’s standard model configuration. Promotion is recorded with the previous model for rollback clarity.'
+    title: '1. Capture', desc: 'Completed actions are converted into redacted trajectories. OrcBot keeps the task, tool sequence, delivery audit, and final user-facing answer, but strips secrets before persistence.'
+  }, {
+    title: '2. Filter', desc: 'Only accepted trajectories survive into the training export. Status-only chatter, unresolved failures, and low-quality runs are stored for analysis but rejected from the dataset.'
+  }, {
+    title: '3. Prepare', desc: 'When enough accepted examples exist, OrcBot writes a deterministic training manifest and JSONL export. This stays offline-safe: no live weight mutation happens here.'
+  }, {
+    title: '4. Evaluate', desc: 'Candidate models are measured against accepted trajectories. The current evaluation runner scores lexical overlap and response fit so promotions are gated on evidence instead of optimism.'
+  }, {
+    title: '5. Promote', desc: 'Admins explicitly register a trained candidate, review the evaluation, and promote it into OrcBot’s standard model configuration. Promotion is recorded with the previous model for rollback clarity.'
   }
 ];
 
 const artifacts = [
-  'self-training-trajectories.json: durable capture store',
-  'self-training-trajectories.jsonl: accepted examples only',
-  'self-training-job.json: offline job manifest',
-  'self-training-eval-report.json: evaluation evidence',
-  'self-training-launch.json: background launch audit',
-  'self-training-candidates.json: registered model candidates',
-  'self-training-promotion.json: latest promotion record'
+  'self-training-trajectories.json: durable capture store', 'self-training-trajectories.jsonl: accepted examples only', 'self-training-job.json: offline job manifest', 'self-training-eval-report.json: evaluation evidence', 'self-training-launch.json: background launch audit', 'self-training-candidates.json: registered model candidates', 'self-training-promotion.json: latest promotion record'
 ];
 
 const commands = [
-  'get_self_training_status()',
-  'prepare_self_training_job()',
-  'run_self_training_eval(limit?, provider?, modelName?)',
-  'build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)',
-  'launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)',
-  'register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)',
-  'promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)'
+  'get_self_training_status()', 'prepare_self_training_job()', 'run_self_training_eval(limit?, provider?, modelName?)', 'build_self_training_launch_plan(commandTemplate?, cwd?, sessionId?)', 'launch_self_training_job(commandTemplate?, cwd?, sessionId?, dryRun?)', 'register_self_training_candidate(modelName, provider?, candidateId?, jobId?, notes?)', 'promote_self_training_candidate(candidateId?, modelName?, provider?, dryRun?)'
 ];
 
 const configSnippet = `selfTrainingEnabled: true
@@ -59,7 +38,7 @@ selfTrainingLaunchCommand: python trainer.py --manifest {jobManifestPath} --expo
 export default function SelfTraining() {
   useEffect(() => {
     window.scrollTo(0, 0);
-    document.title = 'Self-Training Sidecar — OrcBot';
+    document.title = 'Self-Training Sidecar, OrcBot';
   }, []);
 
   return (
@@ -75,9 +54,7 @@ export default function SelfTraining() {
             <div className="section-label">Self-Training Sidecar</div>
             <h1 className="self-training-title">Teach OrcBot from real work without mutating the live model in place.</h1>
             <p className="section-desc self-training-lead">
-              OrcBot now captures successful trajectories while it works, prepares offline training datasets, evaluates trained candidates,
-              and lets admins promote stronger models through the normal config path. The design is intentionally conservative: offline first,
-              redacted by default, and promotion-gated by evaluation evidence.
+              OrcBot now captures successful trajectories while it works, prepares offline training datasets, evaluates trained candidates, and lets admins promote stronger models through the normal config path. The design is intentionally conservative: offline first, redacted by default, and promotion-gated by evaluation evidence.
             </p>
             <div className="self-training-actions">
               <a className="btn btn-primary btn-lg" href="https://github.com/fredabila/orcbot" target="_blank" rel="noopener noreferrer">View the code</a>

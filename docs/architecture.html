@@ -12,7 +12,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="index.html" class="sidebar-logo">
-          <div class="sidebar-logo-icon">🤖</div>
+          <div class="sidebar-logo-icon">OB</div>
           OrcBot
         </a>
         <span class="sidebar-version">v1.0.0</span>
@@ -22,35 +22,35 @@
         <div class="nav-section">
           <div class="nav-section-title">Getting Started</div>
           <ul class="nav-links">
-            <li><a href="index.html" class="nav-link"><span class="nav-link-icon">📚</span> Introduction</a></li>
-            <li><a href="getting-started.html" class="nav-link"><span class="nav-link-icon">🚀</span> Quick Start</a></li>
-            <li><a href="configuration.html" class="nav-link"><span class="nav-link-icon">⚙️</span> Configuration</a></li>
+            <li><a href="index.html" class="nav-link">Introduction</a></li>
+            <li><a href="getting-started.html" class="nav-link">Quick Start</a></li>
+            <li><a href="configuration.html" class="nav-link">Configuration</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Core Concepts</div>
           <ul class="nav-links">
-            <li><a href="architecture.html" class="nav-link active"><span class="nav-link-icon">🏗️</span> Architecture</a></li>
-            <li><a href="skills.html" class="nav-link"><span class="nav-link-icon">🧩</span> Skills & Plugins</a></li>
-            <li><a href="autonomy.html" class="nav-link"><span class="nav-link-icon">🤖</span> Autonomy</a></li>
-            <li><a href="local-models.html" class="nav-link"><span class="nav-link-icon">🦙</span> Local Models</a></li>
+            <li><a href="architecture.html" class="nav-link active">Architecture</a></li>
+            <li><a href="skills.html" class="nav-link">Skills & Plugins</a></li>
+            <li><a href="autonomy.html" class="nav-link">Autonomy</a></li>
+            <li><a href="local-models.html" class="nav-link">Local Models</a></li>
           </ul>
         </div>
         
         <div class="nav-section">
           <div class="nav-section-title">Deployment</div>
           <ul class="nav-links">
-            <li><a href="docker.html" class="nav-link"><span class="nav-link-icon">🐳</span> Docker</a></li>
-            <li><a href="gateway.html" class="nav-link"><span class="nav-link-icon">🌐</span> Web Gateway</a></li>
-            <li><a href="operations.html" class="nav-link"><span class="nav-link-icon">📊</span> Operations</a></li>
+            <li><a href="docker.html" class="nav-link">Docker</a></li>
+            <li><a href="gateway.html" class="nav-link">Web Gateway</a></li>
+            <li><a href="operations.html" class="nav-link">Operations</a></li>
           </ul>
         </div>
       </nav>
       
       <div class="sidebar-footer">
-        <a href="https://github.com/fredabila/orcbot" target="_blank"><span>⭐</span> GitHub</a>
-        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank"><span>💬</span> Community</a>
+        <a href="https://github.com/fredabila/orcbot" target="_blank">GitHub</a>
+        <a href="https://github.com/fredabila/orcbot/discussions" target="_blank">Community</a>
       </div>
     </aside>
 
@@ -64,19 +64,19 @@
           <span>Architecture</span>
         </div>
         <div class="header-actions">
-          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank"><span>⭐</span> Star</a>
+          <a href="https://github.com/fredabila/orcbot" class="header-btn" target="_blank">Star</a>
         </div>
       </header>
 
       <div class="page-content">
         <div class="page-header">
-          <span class="page-badge">🏗️ Core Concepts</span>
+          <span class="page-badge"> Core Concepts</span>
           <h1 class="page-title">Architecture</h1>
           <p class="page-description">Understand OrcBot's modular design and how components interact.</p>
         </div>
 
         <div class="card">
-          <h2>📦 System Overview</h2>
+          <h2> System Overview</h2>
           <pre><code>┌─────────────────────────────────────────────────────────┐
 │                      Channels                            │
 │   (Telegram, WhatsApp, Discord, CLI, Web Gateway)       │
@@ -102,7 +102,7 @@
         </div>
 
         <div class="card">
-          <h2>📁 Data Paths</h2>
+          <h2> Data Paths</h2>
           <p>OrcBot stores all data in <code>~/.orcbot/</code> by default:</p>
           <table>
             <tr><th>Path</th><th>Purpose</th></tr>
@@ -118,28 +118,28 @@
 
         <div class="grid grid-2">
           <div class="card">
-            <h3>🧠 Decision Engine</h3>
+            <h3> Decision Engine</h3>
             <p>The decision engine builds context from memories, skills, and channel metadata, then calls the LLM to determine the next action. It supports multi-tool responses.</p>
           </div>
           
           <div class="card">
-            <h3>💾 Memory Manager</h3>
+            <h3> Memory Manager</h3>
             <p>Manages short-term memories with automatic consolidation into episodic summaries after 30 entries. Retrieval is capped for context window efficiency.</p>
           </div>
           
           <div class="card">
-            <h3>⏰ Scheduler</h3>
+            <h3>Scheduler</h3>
             <p>Emits <code>scheduler:tick</code> events for background jobs. Heartbeat tasks, polling jobs, and autonomy checks all run through the scheduler.</p>
           </div>
           
           <div class="card">
-            <h3>🔌 Event Bus</h3>
+            <h3> Event Bus</h3>
             <p>Central pub/sub system for decoupled communication. Components subscribe to events like <code>config:changed</code>, <code>action:push</code>, etc.</p>
           </div>
         </div>
 
         <div class="card">
-          <h2>🔄 Request Flow</h2>
+          <h2> Request Flow</h2>
           <ol>
             <li><strong>Inbound:</strong> Message arrives via channel (Telegram, WhatsApp, etc.)</li>
             <li><strong>Memory:</strong> Message stored in short-term memory with context</li>
@@ -152,7 +152,7 @@
         </div>
 
         <div class="card">
-          <h2>🔐 Trust Boundaries</h2>
+          <h2> Trust Boundaries</h2>
           <table>
             <tr><th>Boundary</th><th>Trust Level</th><th>Notes</th></tr>
             <tr><td>Inbound channels</td><td>Untrusted input</td><td>Telegram, WhatsApp, Discord, Slack, Email, and Gateway Chat payloads are treated as user-controlled input and must pass through session scoping, tool policy, and prompt guardrails.</td></tr>
@@ -165,7 +165,7 @@
         </div>
 
         <div class="card">
-          <h2>🧭 Deterministic Inbound Routing</h2>
+          <h2> Deterministic Inbound Routing</h2>
           <p>OrcBot routes inbound user messages by thread before they become executable actions. The order is explicit and stable:</p>
           <ol>
             <li><strong>Resolve session scope:</strong> Every inbound message is mapped to a <code>sessionScopeId</code> using the configured session policy (<code>main</code>, <code>per-peer</code>, or <code>per-channel-peer</code>).</li>

@@ -6,98 +6,50 @@ import './Engineering.css';
 const Engineering = () => {
   useEffect(() => {
     window.scrollTo(0, 0);
-    document.title = "Engineering Autonomy — OrcBot";
+    document.title = "Engineering Autonomy, OrcBot";
   }, []);
 
   const domains = [
     {
-      icon: '🏗️',
-      title: 'Structural & Civil',
-      desc: 'Orchestrating stress simulations, material sourcing, and compliance checks across global standards.',
-      details: ['BIM Integration', 'Automated Compliance', 'Resource Optimization']
-    },
-    {
-      icon: '⚙️',
-      title: 'Mechanical & CAD',
-      desc: 'Automating iterative design cycles. Let agents refine tolerances and run CFD simulations in parallel.',
-      details: ['Generative Design', 'Tolerance Analysis', 'PLM Management']
-    },
-    {
-      icon: '⚡',
-      title: 'Electrical & Systems',
-      desc: 'Managing complex PCB layouts and power distribution logic with deterministic skill-based routing.',
-      details: ['Circuit Validation', 'Power Analysis', 'FPGA Workflows']
-    },
-    {
-      icon: '🧪',
-      title: 'Chemical & Bio',
-      desc: 'Accelerating molecular discovery by orchestrating lab automation and synthesis planning.',
-      details: ['Process Simulation', 'Safety Monitoring', 'Yield Optimization']
+      title: 'Structural & Civil', desc: 'Orchestrating stress simulations, material sourcing, and compliance checks across global standards.', details: ['BIM Integration', 'Automated Compliance', 'Resource Optimization']
+    }, {
+      title: 'Mechanical & CAD', desc: 'Automating iterative design cycles. Let agents refine tolerances and run CFD simulations in parallel.', details: ['Generative Design', 'Tolerance Analysis', 'PLM Management']
+    }, {
+      title: 'Electrical & Systems', desc: 'Managing complex PCB layouts and power distribution logic with deterministic skill-based routing.', details: ['Circuit Validation', 'Power Analysis', 'FPGA Workflows']
+    }, {
+      title: 'Chemical & Bio', desc: 'Accelerating molecular discovery by orchestrating lab automation and synthesis planning.', details: ['Process Simulation', 'Safety Monitoring', 'Yield Optimization']
     }
   ];
 
   const technicalPillars = [
     {
-      title: 'Deterministic Skills',
-      subtitle: 'The Precision Layer',
-      desc: 'Standard LLMs are probabilistic—they "guess" the next token. In engineering, guessing is failure. OrcBot offloads physical calculations to deterministic Skills (Python/C++/Rust) to ensure 1+1 always equals 2.',
-      icon: '🎯'
-    },
-    {
-      title: 'Simulation Loop (HIL/SIL)',
-      subtitle: 'Continuous Verification',
-      desc: 'OrcBot orchestrates Hardware-in-the-Loop and Software-in-the-Loop simulations. Agents trigger FEA runs, parse results, adjust CAD geometry, and re-run simulations autonomously until safety factors are met.',
-      icon: '🔄'
-    },
-    {
-      title: 'Protocol Orchestration',
-      subtitle: 'Industrial Interoperability',
-      desc: 'Native support for industrial protocols. OrcBot agents communicate with PLC systems via Modbus, OPC-UA, or ROS2, acting as the intelligent bridge to physical machine execution.',
-      icon: '🔌'
+      title: 'Deterministic Skills', subtitle: 'The Precision Layer', desc: 'Standard LLMs are probabilistic, they "guess" the next token. In engineering, guessing is failure. OrcBot offloads physical calculations to deterministic Skills (Python/C++/Rust) to ensure 1+1 always equals 2.'
+    }, {
+      title: 'Simulation Loop (HIL/SIL)', subtitle: 'Continuous Verification', desc: 'OrcBot orchestrates Hardware-in-the-Loop and Software-in-the-Loop simulations. Agents trigger FEA runs, parse results, adjust CAD geometry, and re-run simulations autonomously until safety factors are met.'
+    }, {
+      title: 'Protocol Orchestration', subtitle: 'Industrial Interoperability', desc: 'Native support for industrial protocols. OrcBot agents communicate with PLC systems via Modbus, OPC-UA, or ROS2, acting as the intelligent bridge to physical machine execution.'
     }
   ];
 
   const workflows = [
     {
-      title: 'Generative Design Refinement',
-      steps: [
-        'Agent receives high-level load constraints and volume bounds.',
-        'Initial geometry is generated via specialized CAD-API skill.',
-        'SaaS Farm agents run parallel CFD (Fluid Dynamics) and Thermal simulations.',
-        'Agent analyzes "hot spots" and modifies the mesh topology.',
-        'Loop continues until weight is minimized and safety factor > 2.0.'
+      title: 'Generative Design Refinement', steps: [
+        'Agent receives high-level load constraints and volume bounds.', 'Initial geometry is generated via specialized CAD-API skill.', 'SaaS Farm agents run parallel CFD (Fluid Dynamics) and Thermal simulations.', 'Agent analyzes "hot spots" and modifies the mesh topology.', 'Loop continues until weight is minimized and safety factor > 2.0.'
       ]
-    },
-    {
-      title: 'Autonomous Compliance & Safety',
-      steps: [
-        'Agent monitors live sensor data from a structural health system.',
-        'Anomalies trigger a "Deep Investigation" task.',
-        'Agent scrapes local building codes and historical maintenance logs.',
-        'Autonomous "Damage-Assessment" skill runs a stress-recalculation.',
-        'If risk is detected, agent orchestrates a maintenance ticket and alerts stakeholders.'
+    }, {
+      title: 'Autonomous Compliance & Safety', steps: [
+        'Agent monitors live sensor data from a structural health system.', 'Anomalies trigger a "Deep Investigation" task.', 'Agent scrapes local building codes and historical maintenance logs.', 'Autonomous "Damage-Assessment" skill runs a stress-recalculation.', 'If risk is detected, agent orchestrates a maintenance ticket and alerts stakeholders.'
       ]
     }
   ];
 
   const deepDivePrompts = [
     {
-      title: 'Thermal Management Optimization',
-      context: 'Aerospace / Electronics',
-      prompt: 'Analyze the current PCB layout for the flight controller. Given a peak power of 45W, determine if the existing copper pour is sufficient for heat dissipation. If not, propose a heat-pipe routing strategy.',
-      result: 'Parses Gerber files → Runs thermal-calc skill → Identifies 95C hot spot → Routes 4mm heat pipe.'
-    },
-    {
-      title: 'Material Science Discovery',
-      context: 'R&D / Synthesis',
-      prompt: 'Research breakthroughs in high-entropy alloys for hydrogen storage. Extract chemical composition of top 3 performing alloys and simulate storage capacity at 700 bar.',
-      result: 'Scrapes ArXiv/PubMed → Extracts stoichiometry → Runs physics-sim skill → Renders performance graph.'
-    },
-    {
-      title: 'BIM-to-Field Synchronization',
-      context: 'Civil Engineering',
-      prompt: 'Compare as-built laser scan with original BIM model. Identify duct placement deviations > 5cm. Calculate impact on plumbing and update schedule.',
-      result: 'Ingests point cloud → Aligns to BIM → Detects 8cm offset → Adjusts Gantt chart → Notifies plumbing lead.'
+      title: 'Thermal Management Optimization', context: 'Aerospace / Electronics', prompt: 'Analyze the current PCB layout for the flight controller. Given a peak power of 45W, determine if the existing copper pour is sufficient for heat dissipation. If not, propose a heat-pipe routing strategy.', result: 'Parses Gerber files → Runs thermal-calc skill → Identifies 95C hot spot → Routes 4mm heat pipe.'
+    }, {
+      title: 'Material Science Discovery', context: 'R&D / Synthesis', prompt: 'Research breakthroughs in high-entropy alloys for hydrogen storage. Extract chemical composition of top 3 performing alloys and simulate storage capacity at 700 bar.', result: 'Scrapes ArXiv/PubMed → Extracts stoichiometry → Runs physics-sim skill → Renders performance graph.'
+    }, {
+      title: 'BIM-to-Field Synchronization', context: 'Civil Engineering', prompt: 'Compare as-built laser scan with original BIM model. Identify duct placement deviations > 5cm. Calculate impact on plumbing and update schedule.', result: 'Ingests point cloud → Aligns to BIM → Detects 8cm offset → Adjusts Gantt chart → Notifies plumbing lead.'
     }
   ];
 
@@ -105,7 +57,7 @@ const Engineering = () => {
     <div className="app engineering-page">
       <div className="bg-gradient-orbs" />
       <div className="noise-overlay" />
-      
+
       <Header scrolled={true} />
 
       <main className="section-inner">
@@ -113,7 +65,7 @@ const Engineering = () => {
           <div className="section-label">Engineering the Future</div>
           <h1 className="hero-title">Precision. <span className="hero-title-em">Autonomy.</span> Scale.</h1>
           <p className="section-desc">
-            Vague prompts don't build bridges. OrcBot provides the deterministic framework where 
+            Vague prompts don't build bridges. OrcBot provides the deterministic framework where
             high-level reasoning meets absolute physical precision.
           </p>
         </header>
@@ -127,7 +79,6 @@ const Engineering = () => {
           <div className="pillars-grid">
             {technicalPillars.map((p, i) => (
               <div key={i} className="pillar-card">
-                <div className="p-icon-box">{p.icon}</div>
                 <div className="p-content">
                   <span className="p-subtitle">{p.subtitle}</span>
                   <h3>{p.title}</h3>
@@ -155,8 +106,6 @@ const Engineering = () => {
             </div>
             <div className="loop-visual">
               <div className="visual-orb">
-                <div className="inner-orb" />
-                <div className="scanner-line" />
               </div>
             </div>
           </div>
@@ -189,7 +138,6 @@ const Engineering = () => {
         <section className="eng-grid">
           {domains.map((d, i) => (
             <div key={i} className="eng-card">
-              <div className="eng-card-icon">{d.icon}</div>
               <h3>{d.title}</h3>
               <p>{d.desc}</p>
               <ul className="eng-details">

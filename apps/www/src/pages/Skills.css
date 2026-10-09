@@ -1,14 +1,11 @@
-﻿/* â”€â”€â”€ Skills Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Skills Page ───────────────────────────────────────────────────────── */
 
-/* â”€â”€ Hero gradient accent for titles â”€â”€ */
+/* ── Hero gradient accent for titles ── */
 .hero-title-em {
-  background: linear-gradient(135deg, var(--accent) 10%, var(--accent-cool) 90%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--accent);
 }
 
-/* â”€â”€â”€ Skills Hero â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Skills Hero ────────────────────────────────────────────────────────── */
 .skills-hero {
   position: relative;
   z-index: 1;
@@ -38,7 +35,7 @@
   line-height: 1.7;
 }
 
-/* â”€â”€ Hero stat chips row â”€â”€ */
+/* ── Hero stat chips row ── */
 .skills-hero-stats {
   display: flex;
   flex-wrap: wrap;
@@ -63,8 +60,6 @@
   background: var(--bg-shell);
 }
 
-.sh-stat-icon { font-size: 0.9rem; }
-
 .sh-stat-count {
   font-weight: 700;
   color: var(--text-main);
@@ -73,7 +68,7 @@
 
 .sh-stat-label { color: var(--text-muted); }
 
-/* â”€â”€â”€ Skills Browser (sidebar + grid) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Skills Browser (sidebar + grid) ───────────────────────────────────── */
 .skills-browser {
   position: relative;
   z-index: 1;
@@ -85,7 +80,7 @@
   align-items: flex-start;
 }
 
-/* â”€â”€ Sidebar â”€â”€ */
+/* ── Sidebar ── */
 .skills-sidebar {
   flex-shrink: 0;
   width: 240px;
@@ -176,8 +171,6 @@
   background: rgba(92, 255, 179, 0.1);
   color: var(--accent);
 }
-
-.sb-nav-icon { font-size: 0.95rem; flex-shrink: 0; }
 .sb-nav-label { flex: 1; }
 
 .sb-nav-count {
@@ -209,7 +202,7 @@
   margin-bottom: 10px;
 }
 
-/* â”€â”€ Main content area â”€â”€ */
+/* ── Main content area ── */
 .skills-main {
   flex: 1;
   min-width: 0;
@@ -267,14 +260,14 @@
 .skills-empty span { font-size: 2.5rem; }
 .skills-empty p { font-size: 0.95rem; }
 
-/* â”€â”€ Skills Grid â”€â”€ */
+/* ── Skills Grid ── */
 .skills-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 12px;
 }
 
-/* â”€â”€ Skill Card â”€â”€ */
+/* ── Skill Card ── */
 .skill-card {
   background: var(--bg-panel);
   border: 1px solid var(--border-subtle);
@@ -284,16 +277,6 @@
   transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
   position: relative;
   overflow: hidden;
-}
-
-.skill-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at 50% 0%, rgba(92,255,179,0.05) 0%, transparent 70%);
-  opacity: 0;
-  transition: opacity 0.25s;
-  pointer-events: none;
 }
 
 .skill-card:hover {
@@ -306,7 +289,7 @@
 
 .skill-card.expanded {
   border-color: rgba(92, 255, 179, 0.35);
-  box-shadow: 0 0 0 1px rgba(92,255,179,0.15), 0 8px 24px rgba(0,0,0,0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
 }
 
 .skill-card-top {
@@ -397,7 +380,7 @@
   line-height: 1.6;
 }
 
-/* â”€â”€â”€ Plugin Guide â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Plugin Guide ───────────────────────────────────────────────────────── */
 .plugin-guide {
   position: relative;
   z-index: 1;
@@ -429,7 +412,7 @@
   margin-bottom: 48px;
 }
 
-/* â”€â”€ Plugin Steps â”€â”€ */
+/* ── Plugin Steps ── */
 .plugin-steps {
   display: flex;
   flex-direction: column;
@@ -488,7 +471,7 @@
   border-radius: 4px;
 }
 
-/* â”€â”€ Code block (macOS style) â”€â”€ */
+/* ── Code block (macOS style) ── */
 .plugin-code-block {
   background: #0d1117;
   border: 1px solid rgba(255,255,255,0.06);
@@ -527,7 +510,7 @@
 
 .plugin-code code { font-family: inherit; }
 
-/* â”€â”€ Feature cards row â”€â”€ */
+/* ── Feature cards row ── */
 .plugin-cta-row {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -573,7 +556,7 @@
   border-radius: 3px;
 }
 
-/* â”€â”€ Docs link row â”€â”€ */
+/* ── Docs link row ── */
 .plugin-docs-link {
   display: flex;
   flex-wrap: wrap;
@@ -582,7 +565,7 @@
   padding-top: 8px;
 }
 
-/* â”€â”€â”€ Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ─── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 960px) {
   .skills-browser {
     flex-direction: column;

@@ -10,9 +10,9 @@
   --text: #fafafa;
   --text-secondary: #a1a1aa;
   --muted: #71717a;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-bg: rgba(99, 102, 241, 0.1);
+  --accent: #12b8cf;
+  --accent-hover: #4dd4e6;
+  --accent-bg: rgba(18, 184, 207, 0.12);
   --success: #22c55e;
   --warning: #f59e0b;
   --sidebar-width: 260px;
@@ -79,7 +79,7 @@ body {
 .sidebar-logo-icon {
   width: 28px;
   height: 28px;
-  background: linear-gradient(135deg, var(--accent) 0%, #a855f7 100%);
+  background: var(--accent);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -180,8 +180,7 @@ body {
 .content-header {
   position: sticky;
   top: 0;
-  background: rgba(10, 10, 11, 0.8);
-  backdrop-filter: blur(12px);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
   padding: 16px 40px;
   z-index: 50;
@@ -532,10 +531,7 @@ tr:hover td {
   font-weight: 700;
   letter-spacing: -0.03em;
   margin-bottom: 16px;
-  background: linear-gradient(135deg, var(--text) 0%, var(--text-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--text);
 }
 
 .hero-description {
