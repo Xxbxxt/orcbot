@@ -32,7 +32,7 @@
     "LEARNING.md"
   ],
   "scripts": {
-    "build": "tsc && node -e \"require('fs').mkdirSync('dist/skills/chrome-cdp', {recursive:true}); require('fs').copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs')\"",
+    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/skills/chrome-cdp', {recursive:true}); fs.copyFileSync('src/skills/chrome-cdp/cdp.mjs', 'dist/skills/chrome-cdp/cdp.mjs'); if (fs.existsSync('apps/dashboard')) fs.cpSync('apps/dashboard', 'dist/dashboard', {recursive:true})\"",
     "build:fast": "node build.mjs",
     "release:github": "node scripts/create-github-release.mjs",
     "prepublishOnly": "npm run build",

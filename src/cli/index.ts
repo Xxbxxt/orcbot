@@ -91,6 +91,7 @@ import {
     showGoogleWorkspaceCliMenu,
     showGitHubCliMenu,
     showGatewayMenu,
+    showWebDashboardMenu,
 } from './screens/ToolingScreen';
 
 dotenv.config(); // Local .env
@@ -1291,6 +1292,7 @@ program
         console.log('   GET  /api/config         - View config');
         console.log('   GET  /api/memory         - View memories');
         console.log('   GET  /api/connections    - Channel status');
+        console.log('   GET  /api/channels       - Channels and their settings');
         console.log('   GET  /api/logs           - Recent logs');
         console.log('\n   Press Ctrl+C to stop\n');
 
@@ -1325,6 +1327,102 @@ program
             process.exit(0);
         });
     });
+
+program
+    .command('web')
+    .description('Start the OrcBot web dashboard in your browser')
+    .option('-p, --port <number>', 'Port to listen on')
+    .option('-h, --host <string>', 'Host to bind to')
+    .option('-k, --api-key <string>', 'API key for authentication')
+    .option('-s, --static <path>', 'Path to dashboard static files')
+    .option('--with-agent', 'Also start the agent loop')
+    .option('--no-open', 'Do not open the dashboard in a browser')
+    .option('-b, --background', 'Run the web dashboard in the background')
+    .option('--background-child', 'Internal: run as background child', false)
+    .action(async (options) => {
+        const port = parseInt(String(options.port || agent.config.get('gatewayPort') || '3100'));
+        const host = String(options.host || agent.config.get('gatewayHost') || '0.0.0.0');
+        const connectHost = host === '0.0.0.0' ? 'localhost' : host;
+        const dashboardUrl = `http://${connectHost}:${port}/`;
+
+        if (options.background && !options.backgroundChild) {
+            const { spawn } = require('child_process');
+            const nodePath = process.execPath;
+            const scriptPath = process.argv[1];
+
+            const dataDir = getOrcBotDataHome();
+            if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+            const logPath = path.join(dataDir, 'web.log');
+            const out = fs.openSync(logPath, 'a');
+
+            const args = [scriptPath, 'web', '--background-child'];
+            if (options.port) args.push('-p', options.port);
+            if (options.host) args.push('-h', options.host);
+            if (options.apiKey) args.push('-k', options.apiKey);
+            if (options.static) args.push('-s', options.static);
+            if (options.withAgent) args.push('--with-agent');
+
+            const child = spawn(nodePath, args, {
+                detached: true,
+                stdio: ['ignore', out, out],
+                env: { ...process.env, ORCBOT_GATEWAY_BACKGROUND: '1' }
+            });
+
+            child.unref();
+            console.log('\nOrcBot Web Dashboard is running in the background.');
+            console.log(`   Dashboard: ${dashboardUrl}`);
+            console.log(`   Log file:  ${logPath}`);
+            console.log('   Stop with: pkill -f "orcbot web --background-child"');
+            return;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { GatewayServer } = require('../gateway/GatewayServer');
+
+        const staticDir = options.static || agent.config.get('gatewayStaticDir');
+        const apiKey = options.apiKey || agent.config.get('gatewayApiKey');
+        const gateway = new GatewayServer(agent, agent.config, { port, host, apiKey, staticDir });
+
+        console.log('\nStarting OrcBot Web Dashboard...');
+        await gateway.start();
+
+        console.log('\nWeb dashboard is ready!');
+        console.log(`   Dashboard: ${dashboardUrl}`);
+        console.log(`   REST API:  http://${connectHost}:${port}/api`);
+        console.log(`   WebSocket: ws://${connectHost}:${port}`);
+        if (apiKey) console.log('   Auth: API key required (X-Api-Key header or ?apiKey=)');
+        console.log('\n   Press Ctrl+C to stop\n');
+
+        if (options.open !== false) {
+            openDashboardInBrowser(dashboardUrl);
+        }
+
+        if (options.withAgent) {
+            console.log('Also starting agent loop...\n');
+            gateway.setAgentLoopStarted(true);
+            agent.start().catch(err => logger.error(`Agent error: ${err}`));
+        }
+
+        process.on('SIGINT', () => {
+            console.log('\nShutting down web dashboard...');
+            gateway.stop();
+            process.exit(0);
+        });
+    });
+
+function openDashboardInBrowser(url: string): void {
+    try {
+        if (process.platform === 'win32') {
+            spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' });
+        } else if (process.platform === 'darwin') {
+            spawnSync('open', [url], { stdio: 'ignore' });
+        } else {
+            spawnSync('xdg-open', [url], { stdio: 'ignore' });
+        }
+    } catch (error: any) {
+        logger.warn(`Could not open browser automatically: ${error?.message || error}`);
+    }
+}
 
 program
     .command('mcp')
@@ -2450,6 +2548,7 @@ async function showMainMenu() {
             { label: `     Tooling & APIs`, value: 'tooling' },
             { label: dim('── ADVANCED'), value: 'separator_adv', disabled: true },
             { label: `     Web Gateway`, value: 'gateway' },
+            { label: `     Web Dashboard  ${c.gray}(browser UI)${c.reset}`, value: 'web' },
             { label: `     Worker Profile`, value: 'worker' },
             { label: `     Multi-Agent Orchestration`, value: 'orchestration' },
             { label: `     Agentic User  ${c.gray}(HITL Proxy)${c.reset}`, value: 'agentic_user' },
@@ -2518,6 +2617,9 @@ async function showMainMenu() {
             break;
         case 'gateway':
             await showGatewayMenu();
+            break;
+        case 'web':
+            await showWebDashboardMenu();
             break;
         case 'worker':
             await showWorkerProfileMenu();

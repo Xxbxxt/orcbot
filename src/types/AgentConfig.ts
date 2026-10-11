@@ -20,9 +20,20 @@ const coerceNumber = z.preprocess((val) => {
     return val;
 }, z.number());
 
+/**
+ * YAML/env configs frequently persist an empty string for enum fields (e.g. a blank
+ * provider dropdown). Treat that as "not set" so a blank value falls back to the
+ * default instead of failing schema validation and aborting startup.
+ */
+const emptyToUndefined = (val: unknown) =>
+    typeof val === 'string' && val.trim() === '' ? undefined : val;
+
+const withEmptyAsUndefined = <S extends z.ZodTypeAny>(schema: S) =>
+    z.preprocess(emptyToUndefined, schema);
+
 export const AgentConfigSchema = z.object({
     agentName: z.string().default('OrcBot'),
-    llmProvider: z.enum(['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama']).optional(),
+    llmProvider: withEmptyAsUndefined(z.enum(['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama']).optional()),
     providerModelNames: z.record(z.string(), z.string()).optional(),
     fallbackModelNames: z.record(z.string(), z.string()).optional(),
     /**
@@ -93,21 +104,21 @@ export const AgentConfigSchema = z.object({
     whatsappSessionPath: z.string().optional(),
     whatsappAutoReplyEnabled: coerceBool.default(false),
     whatsappStatusReplyEnabled: coerceBool.default(false),
-    whatsappStatusMediaMode: z.enum(['off', 'download_only', 'download_and_analyze']).default('off'),
+    whatsappStatusMediaMode: withEmptyAsUndefined(z.enum(['off', 'download_only', 'download_and_analyze']).default('off')),
     whatsappAutoReactEnabled: coerceBool.default(false),
     whatsappContextProfilingEnabled: coerceBool.default(false),
-    whatsappContactAccessMode: z.enum(['all', 'allowlist', 'blocklist']).default('all'),
+    whatsappContactAccessMode: withEmptyAsUndefined(z.enum(['all', 'allowlist', 'blocklist']).default('all')),
     whatsappAllowedContacts: z.array(z.string()).default([]),
     whatsappBlockedContacts: z.array(z.string()).default([]),
     whatsappGroupsEnabled: coerceBool.default(false),
-    whatsappGroupPolicy: z.enum(['all', 'mention_only', 'owner_only', 'allowlist']).default('mention_only'),
+    whatsappGroupPolicy: withEmptyAsUndefined(z.enum(['all', 'mention_only', 'owner_only', 'allowlist']).default('mention_only')),
     whatsappAllowedGroups: z.array(z.string()).default([]),
     whatsappBlockedGroups: z.array(z.string()).default([]),
     whatsappOwnerJID: z.string().optional(),
     telegramAutoReplyEnabled: coerceBool.default(false),
     telegramChannelsEnabled: coerceBool.default(false),
     telegramGroupsEnabled: coerceBool.default(false),
-    telegramGroupPolicy: z.enum(['all', 'mention_only', 'reply_only', 'allowlist']).default('mention_only'),
+    telegramGroupPolicy: withEmptyAsUndefined(z.enum(['all', 'mention_only', 'reply_only', 'allowlist']).default('mention_only')),
     telegramAllowedGroups: z.array(z.string()).default([]),
     telegramBlockedGroups: z.array(z.string()).default([]),
     maxMessagesPerAction: coerceNumber.default(10),
@@ -136,7 +147,7 @@ export const AgentConfigSchema = z.object({
     pluginHealthCheckIntervalMinutes: coerceNumber.default(15),
     browserProfileDir: z.string().optional(),
     browserProfileName: z.string().default('default'),
-    browserEngine: z.enum(['playwright', 'lightpanda', 'puppeteer']).default('puppeteer'),
+    browserEngine: withEmptyAsUndefined(z.enum(['playwright', 'lightpanda', 'puppeteer']).default('puppeteer')),
     lightpandaEndpoint: z.string().default('ws://127.0.0.1:9222'),
     lightpandaPath: z.string().optional(),
     browserDebugAlwaysSave: coerceBool.default(false),
@@ -180,12 +191,12 @@ export const AgentConfigSchema = z.object({
     worldEventsStoreEnabled: coerceBool.default(true),
     worldEventsHeartbeatEnabled: coerceBool.default(false),
     worldEventsGdeltQuery: z.string().default('global'),
-    worldEventsGlobeRenderer: z.enum(['ascii', 'external', 'map', 'mapscii']).default('mapscii'),
+    worldEventsGlobeRenderer: withEmptyAsUndefined(z.enum(['ascii', 'external', 'map', 'mapscii']).default('mapscii')),
     worldEventsGlobeCommand: z.string().default('mapscii'),
     worldEventsGlobeArgs: z.array(z.string()).default([]),
-    sessionScope: z.enum(['main', 'per-peer', 'per-channel-peer']).default('per-channel-peer'),
+    sessionScope: withEmptyAsUndefined(z.enum(['main', 'per-peer', 'per-channel-peer']).default('per-channel-peer')),
     identityLinks: z.record(z.string(), z.string()).default({}),
-    guidanceMode: z.enum(['strict', 'balanced', 'fluid']).default('balanced'),
+    guidanceMode: withEmptyAsUndefined(z.enum(['strict', 'balanced', 'fluid']).default('balanced')),
     guidanceAckPatterns: z.array(z.string()).default([
         '^(understood|got it|on it|acknowledged|okay|ok|alright|sure|perfect)\b',
         '^thanks?[,.!\s]',
@@ -291,11 +302,14 @@ export const AgentConfigSchema = z.object({
     gatewayHost: z.string().default('0.0.0.0'),
     gatewayApiKey: z.string().optional(),
     gatewayCorsOrigins: z.array(z.string()).default(['*']),
+    gatewayStaticDir: z.string().optional(),
+    gatewayRateLimitPerMinute: coerceNumber.default(180),
+    gatewayAutoStart: coerceBool.default(false),
     mcpPort: coerceNumber.default(3190),
     mcpHost: z.string().default('0.0.0.0'),
     mcpPath: z.string().default('/mcp'),
     mcpApiKey: z.string().optional(),
-    imageGenProvider: z.enum(['openai', 'google']).optional(),
+    imageGenProvider: withEmptyAsUndefined(z.enum(['openai', 'google']).optional()),
     imageGenModel: z.string().optional(),
     imageGenSize: z.string().default('1024x1024'),
     imageGenQuality: z.string().default('medium'),
