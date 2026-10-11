@@ -103,6 +103,13 @@ export class UsagePing {
             ['google', this.config.get('googleApiKey')],
             ['anthropic', this.config.get('anthropicApiKey')],
             ['nvidia', this.config.get('nvidiaApiKey')],
+            ['groq', this.config.get('groqApiKey')],
+            ['mistral', this.config.get('mistralApiKey')],
+            ['deepseek', this.config.get('deepseekApiKey')],
+            ['xai', this.config.get('xaiApiKey')],
+            ['perplexity', this.config.get('perplexityApiKey')],
+            ['cerebras', this.config.get('cerebrasApiKey')],
+            ['custom', this.config.get('customBaseUrl')],
             ['bedrock', this.config.get('bedrockAccessKeyId')],
             ['serper', this.config.get('serperApiKey')],
         ];

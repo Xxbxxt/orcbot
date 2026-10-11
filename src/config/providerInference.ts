@@ -10,7 +10,7 @@
 
 export type InferredProvider =
     | 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama'
-    | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
+    | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras' | 'custom';
 
 /**
  * Best-effort provider for a model id, matching prefixes first and then well-known name
@@ -19,6 +19,7 @@ export type InferredProvider =
 export function inferProviderFromModel(modelName: string): InferredProvider {
     const lower = (modelName || '').toLowerCase();
     if (lower.startsWith('ollama:') || lower.startsWith('local:') || lower.startsWith('ol:')) return 'ollama';
+    if (lower.startsWith('custom:') || lower.startsWith('compat:') || lower.startsWith('openai-compatible:')) return 'custom';
     if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
     if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
     if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
@@ -46,6 +47,9 @@ export function hasStrongProviderSignal(modelName: string): boolean {
     return lower.startsWith('ollama:') ||
         lower.startsWith('local:') ||
         lower.startsWith('ol:') ||
+        lower.startsWith('custom:') ||
+        lower.startsWith('compat:') ||
+        lower.startsWith('openai-compatible:') ||
         lower.includes('bedrock') ||
         lower.startsWith('br:') ||
         lower.includes('claude') ||

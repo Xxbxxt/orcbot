@@ -142,6 +142,13 @@ export class SystemProfiler {
             if (config.get?.('openrouterApiKey')) configuredProviders.add('openrouter');
             if (config.get?.('bedrockRegion')) configuredProviders.add('bedrock');
             if (config.get?.('ollamaUrl')) configuredProviders.add('ollama');
+            if (config.get?.('groqApiKey')) configuredProviders.add('groq');
+            if (config.get?.('mistralApiKey')) configuredProviders.add('mistral');
+            if (config.get?.('deepseekApiKey')) configuredProviders.add('deepseek');
+            if (config.get?.('xaiApiKey')) configuredProviders.add('xai');
+            if (config.get?.('perplexityApiKey')) configuredProviders.add('perplexity');
+            if (config.get?.('cerebrasApiKey')) configuredProviders.add('cerebras');
+            if (config.get?.('customBaseUrl')) configuredProviders.add('custom');
         }
 
         // Detect available skills

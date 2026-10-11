@@ -62,12 +62,13 @@ export interface ListOptions {
 /**
  * Providers accepted by `AgentConfigSchema.llmProvider`.
  *
- * MultiLLM can route to more providers than this (groq, xai, deepseek, ...), but persisting one
- * of those into `llmProvider` makes the next config load throw on the Zod enum. For those we
- * leave the provider unset and rely on the model-id prefix instead.
+ * Kept in sync with the schema enum so a switch can persist `llmProvider` directly. Providers
+ * outside this set are still routable via a model-id prefix, but persisting them would fail the
+ * next config load, so they are left unset.
  */
 export const PERSISTABLE_PROVIDERS = new Set([
     'openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama',
+    'groq', 'mistral', 'deepseek', 'xai', 'perplexity', 'cerebras', 'custom',
 ]);
 
 /** pi-ai catalogue ids and other aliases mapped onto the legacy provider names. */
@@ -79,6 +80,7 @@ const PROVIDER_ALIASES: Record<string, string> = {
     'openai-codex': 'openai',
     'azure-openai-responses': 'openai',
     'minimax-cn': 'minimax',
+    'openai-compatible': 'custom',
     local: 'ollama',
 };
 
@@ -96,6 +98,10 @@ const PROVIDER_CREDENTIAL_KEYS: Record<string, string[]> = {
     xai: ['xaiApiKey'],
     perplexity: ['perplexityApiKey'],
     deepseek: ['deepseekApiKey'],
+    huggingface: ['huggingfaceApiKey'],
+    // The generic provider is reachable once its base URL is set; the key is optional
+    // for endpoints that do not require auth (local vLLM, LM Studio, ...).
+    custom: ['customBaseUrl'],
 };
 
 /** pi-ai provider ids whose OAuth link substitutes for an API key. */

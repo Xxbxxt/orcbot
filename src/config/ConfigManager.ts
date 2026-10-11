@@ -166,6 +166,19 @@ export class ConfigManager {
             mistralApiKey: process.env.MISTRAL_API_KEY,
             cerebrasApiKey: process.env.CEREBRAS_API_KEY,
             xaiApiKey: process.env.XAI_API_KEY,
+            deepseekApiKey: process.env.DEEPSEEK_API_KEY,
+            perplexityApiKey: process.env.PERPLEXITY_API_KEY,
+            huggingfaceApiKey: process.env.HUGGINGFACE_API_KEY,
+            kimiApiKey: process.env.KIMI_API_KEY,
+            minimaxApiKey: process.env.MINIMAX_API_KEY,
+            zaiApiKey: process.env.ZAI_API_KEY,
+            opencodeApiKey: process.env.OPENCODE_API_KEY,
+            azureEndpoint: process.env.AZURE_OPENAI_ENDPOINT,
+            googleProjectId: process.env.GOOGLE_PROJECT_ID,
+            googleLocation: process.env.GOOGLE_LOCATION,
+            customApiKey: process.env.CUSTOM_API_KEY,
+            customBaseUrl: process.env.CUSTOM_BASE_URL,
+            customModelName: process.env.CUSTOM_MODEL_NAME,
             // @ts-ignore - Dynamic key support
             MOLTBOOK_API_KEY: process.env.MOLTBOOK_API_KEY
         };
@@ -518,6 +531,7 @@ export class ConfigManager {
     private applyModelProviderCoupling(key: string, value: any) {
         const providers = new Set([
             'openai', 'google', 'openrouter', 'nvidia', 'anthropic', 'bedrock', 'ollama',
+            'groq', 'mistral', 'deepseek', 'xai', 'perplexity', 'cerebras', 'custom',
         ]);
         const currentProvider = String((this.config as any).llmProvider || '').toLowerCase();
 
@@ -583,7 +597,11 @@ export class ConfigManager {
                         'telegramToken', 'discordToken', 'slackBotToken', 'slackAppToken', 'slackSigningSecret', 'smtpPassword', 'imapPassword', 'openaiApiKey', 'googleApiKey',
                         'nvidiaApiKey', 'anthropicApiKey', 'openrouterApiKey', 'serperApiKey',
                         'captchaApiKey', 'braveSearchApiKey', 'bedrockAccessKeyId',
-                        'bedrockSecretAccessKey', 'bedrockSessionToken'
+                        'bedrockSecretAccessKey', 'bedrockSessionToken',
+                        'groqApiKey', 'mistralApiKey', 'cerebrasApiKey', 'xaiApiKey',
+                        'deepseekApiKey', 'perplexityApiKey', 'huggingfaceApiKey', 'kimiApiKey',
+                        'minimaxApiKey', 'zaiApiKey', 'opencodeApiKey', 'azureEndpoint',
+                        'customApiKey', 'customBaseUrl', 'customModelName'
                     ];
 
                     const merged = { ...this.config };
@@ -644,7 +662,22 @@ export class ConfigManager {
             bedrockRegion: 'BEDROCK_REGION',
             bedrockAccessKeyId: 'BEDROCK_ACCESS_KEY_ID',
             bedrockSecretAccessKey: 'BEDROCK_SECRET_ACCESS_KEY',
-            bedrockSessionToken: 'BEDROCK_SESSION_TOKEN'
+            bedrockSessionToken: 'BEDROCK_SESSION_TOKEN',
+            groqApiKey: 'GROQ_API_KEY',
+            mistralApiKey: 'MISTRAL_API_KEY',
+            cerebrasApiKey: 'CEREBRAS_API_KEY',
+            xaiApiKey: 'XAI_API_KEY',
+            deepseekApiKey: 'DEEPSEEK_API_KEY',
+            perplexityApiKey: 'PERPLEXITY_API_KEY',
+            huggingfaceApiKey: 'HUGGINGFACE_API_KEY',
+            kimiApiKey: 'KIMI_API_KEY',
+            minimaxApiKey: 'MINIMAX_API_KEY',
+            zaiApiKey: 'ZAI_API_KEY',
+            opencodeApiKey: 'OPENCODE_API_KEY',
+            azureEndpoint: 'AZURE_OPENAI_ENDPOINT',
+            customApiKey: 'CUSTOM_API_KEY',
+            customBaseUrl: 'CUSTOM_BASE_URL',
+            customModelName: 'CUSTOM_MODEL_NAME'
         };
 
         const envKey = envMap[key];

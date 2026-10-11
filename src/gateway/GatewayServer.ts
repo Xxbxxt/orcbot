@@ -2107,8 +2107,16 @@ export class GatewayServer {
         return [
             { name: 'openai', configured: !!this.config.get('openaiApiKey'), isActive: activeProvider === 'openai' },
             { name: 'google', configured: !!this.config.get('googleApiKey'), isActive: activeProvider === 'google' },
+            { name: 'anthropic', configured: !!this.config.get('anthropicApiKey'), isActive: activeProvider === 'anthropic' },
             { name: 'openrouter', configured: !!this.config.get('openrouterApiKey'), isActive: activeProvider === 'openrouter' },
             { name: 'nvidia', configured: !!this.config.get('nvidiaApiKey'), isActive: activeProvider === 'nvidia' },
+            { name: 'groq', configured: !!this.config.get('groqApiKey'), isActive: activeProvider === 'groq' },
+            { name: 'mistral', configured: !!this.config.get('mistralApiKey'), isActive: activeProvider === 'mistral' },
+            { name: 'deepseek', configured: !!this.config.get('deepseekApiKey'), isActive: activeProvider === 'deepseek' },
+            { name: 'xai', configured: !!this.config.get('xaiApiKey'), isActive: activeProvider === 'xai' },
+            { name: 'perplexity', configured: !!this.config.get('perplexityApiKey'), isActive: activeProvider === 'perplexity' },
+            { name: 'cerebras', configured: !!this.config.get('cerebrasApiKey'), isActive: activeProvider === 'cerebras' },
+            { name: 'custom', configured: !!this.config.get('customBaseUrl'), isActive: activeProvider === 'custom' },
             { name: 'bedrock', configured: !!this.config.get('bedrockAccessKeyId'), isActive: activeProvider === 'bedrock' }
         ];
     }

@@ -69,8 +69,11 @@ export async function runSetup() {
             { label: 'AWS Bedrock', value: 'bedrock' },
             { label: 'Groq (ultra-fast inference)', value: 'groq' },
             { label: 'Mistral AI', value: 'mistral' },
+            { label: 'DeepSeek', value: 'deepseek' },
+            { label: 'xAI (Grok)', value: 'xai' },
+            { label: 'Perplexity', value: 'perplexity' },
             { label: 'Cerebras', value: 'cerebras' },
-            { label: 'xAI (Grok)', value: 'xai' }
+            { label: 'Custom (OpenAI-compatible endpoint)', value: 'custom' }
         ]
     }));
 
@@ -120,6 +123,24 @@ export async function runSetup() {
     let xaiApiKey;
     if (llmProvider === 'xai') {
         xaiApiKey = checkCancel(await p.password({ message: `xAI (Grok) API Key ${maskHint('XAI_API_KEY')}:` }));
+    }
+
+    let deepseekApiKey;
+    if (llmProvider === 'deepseek' || !llmProvider) {
+        deepseekApiKey = checkCancel(await p.password({ message: `DeepSeek API Key ${maskHint('DEEPSEEK_API_KEY')}:` }));
+    }
+
+    let perplexityApiKey;
+    if (llmProvider === 'perplexity') {
+        perplexityApiKey = checkCancel(await p.password({ message: `Perplexity API Key ${maskHint('PERPLEXITY_API_KEY')}:` }));
+    }
+
+    // Custom OpenAI-compatible endpoint
+    let customBaseUrl, customApiKey, customModelName;
+    if (llmProvider === 'custom') {
+        customBaseUrl = checkCancel(await p.text({ message: `Custom Base URL ${maskHint('CUSTOM_BASE_URL')} (e.g. https://api.deepseek.com/v1):` }));
+        customApiKey = checkCancel(await p.password({ message: `Custom API Key ${maskHint('CUSTOM_API_KEY')} (optional):` }));
+        customModelName = checkCancel(await p.text({ message: `Custom Model Name ${maskHint('CUSTOM_MODEL_NAME')}:` }));
     }
 
     // ── Section 3: Channels ──
@@ -307,7 +328,13 @@ export async function runSetup() {
         // Gateway
         ...(gatewayEnabled ? { gatewayPort: gatewayPort || 3100 } : {}),
         // Bedrock (non-secret)
-        ...(bedrockRegion ? { bedrockRegion } : {})
+        ...(bedrockRegion ? { bedrockRegion } : {}),
+        // Explicit provider keys are persisted so ConfigManager can hot-reload them; the
+        // secret values themselves also go to .env below.
+        ...(deepseekApiKey ? { deepseekApiKey } : {}),
+        ...(perplexityApiKey ? { perplexityApiKey } : {}),
+        ...(customBaseUrl ? { customBaseUrl } : {}),
+        ...(customModelName ? { customModelName } : {})
     };
 
     // Remove undefined values for clean YAML
@@ -333,6 +360,11 @@ export async function runSetup() {
         MISTRAL_API_KEY: mistralApiKey,
         CEREBRAS_API_KEY: cerebrasApiKey,
         XAI_API_KEY: xaiApiKey,
+        DEEPSEEK_API_KEY: deepseekApiKey,
+        PERPLEXITY_API_KEY: perplexityApiKey,
+        CUSTOM_BASE_URL: customBaseUrl,
+        CUSTOM_API_KEY: customApiKey,
+        CUSTOM_MODEL_NAME: customModelName,
         TELEGRAM_TOKEN: telegramToken,
         DISCORD_TOKEN: discordToken,
         SLACK_BOT_TOKEN: slackBotToken,

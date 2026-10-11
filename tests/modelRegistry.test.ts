@@ -217,12 +217,12 @@ describe('ModelRegistry', () => {
         it('clears llmProvider for providers the config schema rejects', () => {
             const config = makeConfig({ modelName: 'gpt-6.1-sol', llmProvider: 'openai' });
 
-            const applied = switchToModel(config, { model: 'groq:llama-3.3-70b', provider: 'groq' });
+            const applied = switchToModel(config, { model: 'minimax:minimax-m2', provider: 'minimax' });
 
-            // Persisting `groq` would make the next config load throw on the Zod enum.
+            // Persisting `minimax` would make the next config load throw on the Zod enum.
             expect(config.store.llmProvider).toBeUndefined();
             expect(applied.provider).toBeUndefined();
-            expect(config.store.modelName).toBe('groq:llama-3.3-70b');
+            expect(config.store.modelName).toBe('minimax:minimax-m2');
         });
 
         it('de-aliases a pi-ai provider id before persisting it', () => {

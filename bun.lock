@@ -10,7 +10,7 @@
         "@ffmpeg-installer/ffmpeg": "^1.1.0",
         "@jitsi/robotjs": "^0.6.21",
         "@lydell/node-pty": "^1.2.0-beta.3",
-        "@mariozechner/pi-ai": "^0.53.0",
+        "@mariozechner/pi-ai": "^0.53.1",
         "@mariozechner/pi-tui": "^0.53.0",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "@mozilla/readability": "^0.6.0",

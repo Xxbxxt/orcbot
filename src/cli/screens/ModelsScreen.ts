@@ -196,6 +196,13 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const hasDeepseek = !!agent.config.get('deepseekApiKey');
+    const hasGroq = !!agent.config.get('groqApiKey');
+    const hasMistral = !!agent.config.get('mistralApiKey');
+    const hasXai = !!agent.config.get('xaiApiKey');
+    const hasPerplexity = !!agent.config.get('perplexityApiKey');
+    const hasCerebras = !!agent.config.get('cerebrasApiKey');
+    const hasCustom = !!agent.config.get('customBaseUrl');
     const ollamaUrl = agent.config.get('ollamaApiUrl') || 'http://localhost:11434';
     const ollamaHelper = new OllamaHelper(ollamaUrl);
     const hasOllama = await ollamaHelper.isRunning();
@@ -221,6 +228,13 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
         `${statusDot(hasNvidia, '')}  ${bold('NVIDIA')}       ${hasNvidia ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasAnthropic, '')}  ${bold('Anthropic')}    ${hasAnthropic ? green('Key set') : gray('Not configured')}`,
         `${statusDot(hasBedrock, '')}  ${bold('AWS Bedrock')}  ${hasBedrock ? green('Keys set') : gray('Not configured')}`,
+        `${statusDot(hasDeepseek, '')}  ${bold('DeepSeek')}     ${hasDeepseek ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasGroq, '')}  ${bold('Groq')}         ${hasGroq ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasMistral, '')}  ${bold('Mistral')}      ${hasMistral ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasXai, '')}  ${bold('xAI (Grok)')}   ${hasXai ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasPerplexity, '')}  ${bold('Perplexity')}   ${hasPerplexity ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasCerebras, '')}  ${bold('Cerebras')}     ${hasCerebras ? green('Key set') : gray('Not configured')}`,
+        `${statusDot(hasCustom, '')}  ${bold('Custom/Compat')} ${hasCustom ? green('Configured') : gray('Not configured')}`,
     ];
     box(providerLines, { title: 'PROVIDERS', width: 52 });
     console.log('');
@@ -241,6 +255,7 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
                 { name: `  ${statusDot(hasNvidia, '')} NVIDIA ${dim('(AI models)')}`, value: 'nvidia' },
                 { name: `  ${statusDot(hasAnthropic, '')} Anthropic ${dim('(Claude)')}`, value: 'anthropic' },
                 { name: `  ${statusDot(hasBedrock, '')} AWS Bedrock ${dim('(foundation models)')}`, value: 'bedrock' },
+                { name: `  ${statusDot(hasCustom, '')} Custom / OpenAI-compatible ${dim('(own base URL + model)')}`, value: 'custom' },
                 new inquirer.Separator(dim('  ──────────────────────────────────')),
                 { name: dim('  ← Back'), value: 'back' }
             ]
@@ -267,6 +282,8 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
         await showAnthropicConfig(ctx);
     } else if (provider === 'bedrock') {
         await showBedrockConfig(ctx);
+    } else if (provider === 'custom') {
+        await showCustomProviderConfig(ctx);
     }
 }
 
@@ -942,6 +959,13 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
     const hasNvidia = !!agent.config.get('nvidiaApiKey');
     const hasAnthropic = !!agent.config.get('anthropicApiKey');
     const hasBedrock = !!agent.config.get('bedrockAccessKeyId');
+    const hasDeepseek = !!agent.config.get('deepseekApiKey');
+    const hasGroq = !!agent.config.get('groqApiKey');
+    const hasMistral = !!agent.config.get('mistralApiKey');
+    const hasXai = !!agent.config.get('xaiApiKey');
+    const hasPerplexity = !!agent.config.get('perplexityApiKey');
+    const hasCerebras = !!agent.config.get('cerebrasApiKey');
+    const hasCustom = !!agent.config.get('customBaseUrl');
 
     const choices = [
         {
@@ -978,6 +1002,42 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
             value: 'bedrock',
             disabled: !hasBedrock
         },
+        { name: '─'.repeat(30), value: '__sep1__', disabled: true },
+        {
+            name: `DeepSeek${currentProvider === 'deepseek' ? ' ✓' : ''}`,
+            value: 'deepseek',
+            disabled: !hasDeepseek
+        },
+        {
+            name: `Groq${currentProvider === 'groq' ? ' ✓' : ''}`,
+            value: 'groq',
+            disabled: !hasGroq
+        },
+        {
+            name: `Mistral AI${currentProvider === 'mistral' ? ' ✓' : ''}`,
+            value: 'mistral',
+            disabled: !hasMistral
+        },
+        {
+            name: `xAI (Grok)${currentProvider === 'xai' ? ' ✓' : ''}`,
+            value: 'xai',
+            disabled: !hasXai
+        },
+        {
+            name: `Perplexity${currentProvider === 'perplexity' ? ' ✓' : ''}`,
+            value: 'perplexity',
+            disabled: !hasPerplexity
+        },
+        {
+            name: `Cerebras${currentProvider === 'cerebras' ? ' ✓' : ''}`,
+            value: 'cerebras',
+            disabled: !hasCerebras
+        },
+        {
+            name: `Custom / OpenAI-compatible${currentProvider === 'custom' ? ' ✓' : ''}`,
+            value: 'custom',
+            disabled: !hasCustom
+        },
         { name: 'Back', value: 'back' }
     ];
 
@@ -1002,6 +1062,92 @@ export async function showSetPrimaryProvider(context?: CliContext): Promise<void
 
     await waitKeyPress();
     return showModelsMenu(ctx);
+}
+
+/**
+ * Configure the generic OpenAI-compatible provider.
+ *
+ * Any endpoint that speaks the OpenAI `/chat/completions` shape works here — DeepSeek, Together,
+ * Fireworks, DeepInfra, Groq-compatible proxies, vLLM, LM Studio, or a self-hosted gateway. The
+ * user supplies the base URL, an optional API key, and the model id.
+ */
+export async function showCustomProviderConfig(context?: CliContext): Promise<void> {
+    const ctx = context ?? getCliContext();
+    const { agent } = ctx;
+
+    renderScreenHeader('Custom / OpenAI-compatible Provider');
+
+    const base = agent.config.get('customBaseUrl') || '';
+    const key = agent.config.get('customApiKey') || '';
+    const model = agent.config.get('customModelName') || agent.config.get('modelName') || '';
+    const label = agent.config.get('customProviderLabel') || 'Custom';
+    const activeProvider = agent.config.get('llmProvider');
+
+    box([
+        `${dim('Label')}      ${bold(String(label))}`,
+        `${dim('Base URL')}   ${base ? cyan(String(base)) : yellow('not set')}`,
+        `${dim('API Key')}    ${key ? green('set') : gray('none (optional)')}`,
+        `${dim('Model')}      ${model ? bold(String(model)) : yellow('not set')}`,
+        `${dim('Status')}     ${activeProvider === 'custom' ? green('active primary provider') : gray('not primary')}`,
+    ], { title: 'CUSTOM PROVIDER', width: 64 });
+    console.log('');
+
+    const { action } = await inquirer.prompt([{
+        type: 'list', name: 'action', message: cyan('Custom provider:'),
+        choices: [
+            { name: `   ${bold('Set Base URL')} ${dim('(e.g. https://api.deepseek.com/v1)')}`, value: 'base' },
+            { name: `   ${bold('Set API Key')} ${dim('(optional for local endpoints)')}`, value: 'key' },
+            { name: `   ${bold('Set Model Name')}`, value: 'model' },
+            { name: `   ${bold('Set Display Label')}`, value: 'label' },
+            new inquirer.Separator(dim('  ──────────────────────────────────')),
+            { name: `   ${bold('Use as Primary Provider')}`, value: 'activate', disabled: !base },
+            { name: `   ${bold('Test Connection')}`, value: 'test', disabled: !base },
+            { name: dim('  ← Back'), value: 'back' },
+        ]
+    }]);
+
+    if (action === 'back') return showModelsMenu(ctx);
+
+    if (action === 'base') {
+        const { val } = await inquirer.prompt([{
+            type: 'input', name: 'val',
+            message: 'Base URL (include /v1 or the full /chat/completions path):',
+            default: base,
+        }]);
+        if (val?.trim()) agent.config.set('customBaseUrl', val.trim());
+    } else if (action === 'key') {
+        const { val } = await inquirer.prompt([{
+            type: 'password', name: 'val', mask: '*',
+            message: 'API key (leave blank to clear):',
+        }]);
+        agent.config.set('customApiKey', val?.trim() || undefined);
+    } else if (action === 'model') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Model id:', default: model }]);
+        if (val?.trim()) agent.config.set('customModelName', val.trim());
+    } else if (action === 'label') {
+        const { val } = await inquirer.prompt([{ type: 'input', name: 'val', message: 'Display label:', default: label }]);
+        if (val?.trim()) agent.config.set('customProviderLabel', val.trim());
+    } else if (action === 'activate') {
+        if (model) agent.config.set('modelName', model);
+        agent.config.set('llmProvider', 'custom' as any);
+        console.log(green(`Custom provider "${label}" is now the primary provider.`));
+    } else if (action === 'test') {
+        console.log(dim('\nSending a test completion...'));
+        try {
+            const reply = await agent.llm.call(
+                'Reply with the single word: ok',
+                'You are a connectivity check.',
+                'custom' as any,
+                model || undefined
+            );
+            console.log(green(`Connection OK. Model replied: ${String(reply).slice(0, 100)}`));
+        } catch (error: any) {
+            console.log(red(`Connection failed: ${error?.message || error}`));
+        }
+    }
+
+    await waitKeyPress();
+    return showCustomProviderConfig(ctx);
 }
 
 export async function showOpenRouterConfig(context?: CliContext): Promise<void> {

@@ -6,6 +6,7 @@ import { Agent } from '../core/Agent';
 import { logger } from '../utils/logger';
 import dotenv from 'dotenv';
 import { ConfigManager } from '../config/ConfigManager';
+import { hasConfiguredProvider, getConfiguredProviders } from '../config/providerCredentials';
 import { eventBus } from '../core/EventBus';
 import qrcode from 'qrcode-terminal';
 
@@ -2086,15 +2087,9 @@ function sleep(ms: number): Promise<void> {
 
     function hasConnectedLlmForTuner(): boolean {
         const provider = String(agent.config.get('llmProvider') || '').trim().toLowerCase();
-        if (!provider) return false;
-        if (provider === 'openai') return !!agent.config.get('openaiApiKey') || !!agent.config.get('usePiAI');
-        if (provider === 'gemini' || provider === 'google') return !!agent.config.get('googleApiKey') || !!agent.config.get('usePiAI');
-        if (provider === 'anthropic') return !!agent.config.get('anthropicApiKey') || !!agent.config.get('usePiAI');
-        if (provider === 'nvidia') return !!agent.config.get('nvidiaApiKey') || !!agent.config.get('usePiAI');
-        if (provider === 'openrouter') return !!agent.config.get('openrouterApiKey') || !!agent.config.get('usePiAI');
-        if (provider === 'bedrock') return !!agent.config.get('bedrockRegion') || !!agent.config.get('usePiAI');
-        if (provider === 'ollama') return !!agent.config.get('ollamaApiUrl') || !!agent.config.get('ollamaUrl');
-        return !!agent.config.get('usePiAI');
+        if (provider) return hasConfiguredProvider(agent.config, provider);
+        // No explicit provider: usable if any keyed (or special) provider is configured.
+        return getConfiguredProviders(agent.config).length > 0;
     }
 
     async function generateLlmTunerArtifacts(p: AITunerPreset): Promise<TunerArtifacts | null> {
