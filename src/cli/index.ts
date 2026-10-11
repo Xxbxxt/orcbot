@@ -15,6 +15,13 @@ import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { WorkerProfileManager } from '../core/WorkerProfile';
 import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
+import {
+    listConfiguredModels,
+    findModelEntry,
+    switchToModel,
+    saveCurrentModel,
+    removeSavedModel,
+} from '../config/ModelRegistry';
 import { DaemonManager } from '../utils/daemon';
 import { getOrcBotDataHome, resolveDataHomePath } from '../utils/dataHome';
 import { TokenTracker } from '../core/TokenTracker';
@@ -48,6 +55,7 @@ import {
 } from './screens/ChannelsScreen';
 import {
     showModelsMenu,
+    showSwitchModelMenu,
     showSelfTrainingMenu,
 } from './screens/ModelsScreen';
 import {
@@ -1375,6 +1383,83 @@ program
         });
     });
 
+// Switch between already-configured models without entering the TUI.
+program
+    .command('model [query]')
+    .description('List or switch between configured models (query = index, model id, or label)')
+    .option('-l, --list', 'List configured models and exit')
+    .option('-s, --save [label]', 'Save the active model to the shortlist')
+    .option('-r, --remove <query>', 'Remove a saved model by id or label')
+    .action((query, options) => {
+        const renderList = () => {
+            const entries = listConfiguredModels(agent.config, {
+                isLinked: (id: string) => {
+                    try { return !!agent.llm?.isPiAiLinked?.(id); } catch { return false; }
+                },
+            });
+            console.log('');
+            entries.forEach((entry, index) => {
+                const marker = entry.isActive ? '*' : ' ';
+                const source = entry.sources.includes('saved') ? 'saved'
+                    : entry.sources.includes('provider-memory') ? 'recent' : 'fallback';
+                const creds = entry.hasCredentials ? '' : '  [no key]';
+                const label = entry.label ? ` "${entry.label}"` : '';
+                console.log(` ${marker} ${String(index + 1).padStart(2)}. ${entry.model}${label}`);
+                console.log(`      via ${entry.effectiveProvider}${entry.provider ? '' : ' (inferred)'}  ${source}${creds}`);
+            });
+            console.log('');
+            console.log('Switch with: orcbot model <number|model-id|label>');
+            return entries;
+        };
+
+        if (options.remove) {
+            const removed = removeSavedModel(agent.config, options.remove);
+            console.log(removed
+                ? `Removed ${removed.model} from the shortlist.`
+                : `No saved model matched "${options.remove}".`);
+            return;
+        }
+
+        if (options.save) {
+            const label = typeof options.save === 'string' ? options.save : undefined;
+            const saved = saveCurrentModel(agent.config, label);
+            console.log(`Saved ${saved.model}${saved.label ? ` as "${saved.label}"` : ''} to the shortlist.`);
+            return;
+        }
+
+        if (options.list || !query) {
+            renderList();
+            return;
+        }
+
+        const entries = listConfiguredModels(agent.config);
+        const match = findModelEntry(entries, query);
+
+        if (match.ambiguous) {
+            console.log(`"${query}" matches ${match.ambiguous.length} configured models:`);
+            match.ambiguous.forEach(e => console.log(`  - ${e.model} (via ${e.effectiveProvider})`));
+            console.log('\nUse a full model id, a label, or the list number.');
+            process.exitCode = 1;
+            return;
+        }
+
+        if (!match.entry) {
+            console.log(`No configured model matched "${query}".`);
+            renderList();
+            process.exitCode = 1;
+            return;
+        }
+
+        const applied = switchToModel(agent.config, {
+            model: match.entry.model,
+            provider: match.entry.provider,
+        });
+        console.log(`Active model is now ${applied.model} via ${applied.provider || `${match.entry.effectiveProvider} (inferred)`}.`);
+        if (!match.entry.hasCredentials) {
+            console.log(`Warning: no credentials configured for ${match.entry.effectiveProvider}; calls will fail until you add a key.`);
+        }
+    });
+
 const configCommand = program
     .command('config')
     .description('Manage agent configuration');
@@ -2354,6 +2439,7 @@ async function showMainMenu() {
             { label: `     Push Task`, value: 'push' },
             { label: `     View Status`, value: 'status' },
             { label: dim('── CONFIGURE'), value: 'separator_config', disabled: true },
+            { label: `     Switch Model  ${c.gray}(${String(model).length > 28 ? `${String(model).slice(0, 27)}…` : model})${c.reset}`, value: 'switch_model' },
             { label: `     Manage AI Models`, value: 'models' },
             { label: `     Self-Training`, value: 'self_training' },
             { label: `     Manage Connections`, value: 'connections' },
@@ -2420,6 +2506,9 @@ async function showMainMenu() {
             break;
         case 'models':
             await showModelsMenu();
+            break;
+        case 'switch_model':
+            await showSwitchModelMenu();
             break;
         case 'self_training':
             await showSelfTrainingMenu();

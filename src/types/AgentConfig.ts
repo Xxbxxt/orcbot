@@ -25,6 +25,21 @@ export const AgentConfigSchema = z.object({
     llmProvider: z.enum(['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama']).optional(),
     providerModelNames: z.record(z.string(), z.string()).optional(),
     fallbackModelNames: z.record(z.string(), z.string()).optional(),
+    /**
+     * User-curated model shortlist for the "Switch Model" picker.
+     *
+     * `providerModelNames` only remembers one model per provider, so it cannot express
+     * "I flip between two Anthropic models". This list is explicit and unbounded: entries
+     * are added by the user (TUI "Save current model" / `orcbot model --save`) and are the
+     * primary source for the switcher, merged with the auto-remembered maps above.
+     *
+     * `provider` is optional - omit it to let the provider be inferred from the model id.
+     */
+    savedModels: z.array(z.object({
+        model: z.string().min(1),
+        provider: z.string().optional(),
+        label: z.string().optional(),
+    })).optional(),
     telegramToken: z.string().optional(),
     openaiApiKey: z.string().optional(),
     openrouterApiKey: z.string().optional(),

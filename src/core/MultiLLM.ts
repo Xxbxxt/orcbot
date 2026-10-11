@@ -10,6 +10,10 @@ import { piAiCall, piAiCallWithTools, getPiProviders, getPiModels, piAiLogin, is
 import { convertToWhisperCompatible, getMimeType as getAudioHelperMimeType, isAudioFile } from '../utils/AudioHelper';
 import { eventBus } from './EventBus';
 import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
+import {
+    inferProviderFromModel,
+    hasStrongProviderSignal as modelHasStrongProviderSignal,
+} from '../config/providerInference';
 
 export type LLMProvider = 'openai' | 'google' | 'bedrock' | 'openrouter' | 'nvidia' | 'anthropic' | 'ollama' | 'groq' | 'mistral' | 'deepseek' | 'xai' | 'perplexity' | 'cerebras';
 
@@ -910,24 +914,7 @@ export class MultiLLM {
     }
 
     public inferProvider(modelName: string): LLMProvider {
-        const lower = (modelName || '').toLowerCase();
-        if (lower.startsWith('ollama:') || lower.startsWith('local:') || lower.startsWith('ol:')) return 'ollama';
-        if (lower.includes('bedrock') || lower.startsWith('br:')) return 'bedrock';
-        if (lower.includes('claude') || lower.startsWith('anthropic:') || lower.startsWith('ant:')) return 'anthropic';
-        if (lower.startsWith('openrouter:') || lower.startsWith('openrouter/') || lower.startsWith('or:')) return 'openrouter';
-        if (lower.startsWith('nvidia:') || lower.startsWith('nv:')) return 'nvidia';
-        if (lower.startsWith('mistral:') || lower.startsWith('mi:')) return 'mistral';
-        if (lower.startsWith('groq:') || lower.startsWith('gr:')) return 'groq';
-        if (lower.startsWith('deepseek:') || lower.startsWith('ds:')) return 'deepseek';
-        if (lower.startsWith('xai:') || lower.startsWith('xi:')) return 'xai';
-        if (lower.startsWith('perplexity:') || lower.startsWith('pp:')) return 'perplexity';
-        if (lower.startsWith('cerebras:') || lower.startsWith('cb:')) return 'cerebras';
-        if (lower.includes('gemini')) return 'google';
-        if (lower.includes('gpt-') || lower.includes('o1-')) return 'openai';
-        if (lower.includes('mistral') || lower.includes('mixtral')) return 'mistral';
-        if (lower.includes('deepseek')) return 'deepseek';
-        if (lower.includes('llama')) return 'groq';
-        return 'openai';
+        return inferProviderFromModel(modelName) as LLMProvider;
     }
 
     private normalizeOpenRouterModel(modelName: string): string {
@@ -944,35 +931,7 @@ export class MultiLLM {
     }
 
     private hasStrongProviderSignal(modelName: string): boolean {
-        const lower = (modelName || '').toLowerCase();
-        return lower.startsWith('ollama:') ||
-            lower.startsWith('local:') ||
-            lower.startsWith('ol:') ||
-            lower.includes('bedrock') ||
-            lower.startsWith('br:') ||
-            lower.includes('claude') ||
-            lower.startsWith('anthropic:') ||
-            lower.startsWith('ant:') ||
-            lower.startsWith('openrouter:') ||
-            lower.startsWith('openrouter/') ||
-            lower.startsWith('or:') ||
-            lower.startsWith('nvidia:') ||
-            lower.startsWith('nv:') ||
-            lower.startsWith('mistral:') ||
-            lower.startsWith('mi:') ||
-            lower.startsWith('groq:') ||
-            lower.startsWith('gr:') ||
-            lower.startsWith('deepseek:') ||
-            lower.startsWith('ds:') ||
-            lower.startsWith('xai:') ||
-            lower.startsWith('xi:') ||
-            lower.startsWith('perplexity:') ||
-            lower.startsWith('pp:') ||
-            lower.startsWith('cerebras:') ||
-            lower.startsWith('cb:') ||
-            lower.includes('gemini') ||
-            lower.includes('gpt-') ||
-            lower.includes('o1-');
+        return modelHasStrongProviderSignal(modelName);
     }
 
     private resolveProviderForModel(requestedProvider: LLMProvider | undefined, modelName: string): LLMProvider {

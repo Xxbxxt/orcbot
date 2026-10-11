@@ -20,6 +20,164 @@ import {
     brightGreen,
 } from '../ui/Widgets';
 import { getCliContext, CliContext } from '../context';
+import {
+    listConfiguredModels,
+    findModelEntry,
+    switchToModel,
+    saveCurrentModel,
+    removeSavedModel,
+    readSavedModels,
+    type ModelEntry,
+} from '../../config/ModelRegistry';
+
+/** Short provenance tag shown against each switch-list row. */
+function sourceBadge(entry: ModelEntry): string {
+    if (entry.sources.includes('saved')) return green('saved');
+    if (entry.sources.includes('provider-memory')) return dim('recent');
+    return dim('fallback');
+}
+
+/** One row of the switch list: marker, label/model, provider, provenance, credential state. */
+function formatModelRow(entry: ModelEntry): string {
+    const marker = entry.isActive ? brightGreen('●') : gray('○');
+    const title = entry.label ? `${bold(entry.label)} ${dim(entry.model)}` : bold(entry.model);
+    const provider = entry.provider
+        ? entry.effectiveProvider
+        : `${entry.effectiveProvider}${dim(' auto')}`;
+    const creds = entry.hasCredentials ? '' : `  ${yellow('no key')}`;
+    return `${marker} ${title}  ${dim('via')} ${provider}  ${sourceBadge(entry)}${creds}`;
+}
+
+/**
+ * Switch between models the user has already configured.
+ *
+ * Merges the curated `savedModels` shortlist with the auto-remembered `providerModelNames` and
+ * `fallbackModelNames` maps, so previously used models show up without any setup while the
+ * curated list still allows several models per provider.
+ */
+export async function showSwitchModelMenu(context?: CliContext): Promise<void> {
+    const ctx = context ?? getCliContext();
+    const { agent } = ctx;
+
+    renderScreenHeader('Switch Model');
+
+    const entries = listConfiguredModels(agent.config, {
+        isLinked: (id: string) => {
+            try {
+                return !!agent.llm?.isPiAiLinked?.(id);
+            } catch {
+                return false;
+            }
+        },
+    });
+    const active = entries.find(e => e.isActive);
+    const savedCount = readSavedModels(agent.config).length;
+
+    console.log('');
+    box([
+        `${dim('Active')}  ${brightCyan(bold(active?.model || agent.config.get('modelName') || '(none)'))}`,
+        `${dim('Via')}     ${active?.effectiveProvider || 'auto'}`,
+        `${dim('Known')}   ${cyan(String(entries.length))} configured ${dim(`(${savedCount} saved)`)}`,
+    ], { title: 'ACTIVE MODEL', width: 58 });
+    console.log('');
+
+    if (entries.length <= 1) {
+        console.log(yellow('  Only the active model is configured so far.'));
+        console.log(dim('  Save it below, or add more via "Model & Provider Setup".'));
+        console.log('');
+    }
+
+    const choices: any[] = [
+        ...entries.map(entry => ({
+            name: `  ${formatModelRow(entry)}`,
+            value: `use:${entry.effectiveProvider}::${entry.model}`,
+            disabled: entry.isActive ? dim('active') : false,
+        })),
+        new inquirer.Separator(dim('  ─── Manage shortlist ─────────────────')),
+        { name: `  ${bold('Save active model to shortlist')}`, value: 'save' },
+        {
+            name: `  ${bold('Remove a saved model')}`,
+            value: 'remove',
+            disabled: savedCount === 0 ? dim('nothing saved') : false,
+        },
+        { name: `  ${bold('Model & Provider Setup')} ${dim('(browse full catalogue)')}`, value: 'browse' },
+        new inquirer.Separator(dim('  ────────────────────────────────────')),
+        { name: dim('  ← Back'), value: 'back' },
+    ];
+
+    const { choice } = await inquirer.prompt([{
+        type: 'list',
+        name: 'choice',
+        message: cyan('Select a model to activate:'),
+        choices,
+        pageSize: 20,
+    }]);
+
+    if (choice === 'back') return showModelsMenu(ctx);
+    if (choice === 'browse') return showPiAIConfig(ctx);
+
+    if (choice === 'save') {
+        const { label } = await inquirer.prompt([{
+            type: 'input',
+            name: 'label',
+            message: 'Optional label (blank to use the model id):',
+        }]);
+        const saved = saveCurrentModel(agent.config, label);
+        console.log(green(`\n  Saved ${saved.label ? `${saved.label} (${saved.model})` : saved.model} to the shortlist.`));
+        await waitKeyPress();
+        return showSwitchModelMenu(ctx);
+    }
+
+    if (choice === 'remove') {
+        const saved = readSavedModels(agent.config);
+        const { target } = await inquirer.prompt([{
+            type: 'list',
+            name: 'target',
+            message: 'Remove which saved model?',
+            choices: [
+                ...saved.map(e => ({
+                    name: e.label ? `${e.label} ${dim(e.model)}` : e.model,
+                    value: e.label || e.model,
+                })),
+                { name: dim('← Cancel'), value: '__cancel__' },
+            ],
+        }]);
+
+        if (target !== '__cancel__') {
+            const removed = removeSavedModel(agent.config, target);
+            console.log(removed
+                ? yellow(`\n  Removed ${removed.model} from the shortlist.`)
+                : red('\n  That entry was no longer present.'));
+            await waitKeyPress();
+        }
+        return showSwitchModelMenu(ctx);
+    }
+
+    if (typeof choice === 'string' && choice.startsWith('use:')) {
+        // Re-resolve against the list rather than trusting the encoded value.
+        const model = choice.slice(choice.indexOf('::') + 2);
+        const match = findModelEntry(entries, model);
+        const entry = match.entry;
+
+        if (!entry) {
+            console.log(red(`\n  Could not resolve "${model}".`));
+            await waitKeyPress();
+            return showSwitchModelMenu(ctx);
+        }
+
+        const applied = switchToModel(agent.config, { model: entry.model, provider: entry.provider });
+        console.log(green(`\n  Active model is now ${bold(applied.model)} via ${applied.provider || `${entry.effectiveProvider} (inferred)`}.`));
+
+        if (!entry.hasCredentials) {
+            console.log(yellow(`  Warning: no credentials are configured for ${entry.effectiveProvider}; calls will fail until you add a key.`));
+        }
+
+        await waitKeyPress();
+        return showSwitchModelMenu(ctx);
+    }
+
+    return showModelsMenu(ctx);
+}
 
 /**
  * Root AI Models & Providers screen controller.
@@ -42,6 +200,7 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
     const ollamaHelper = new OllamaHelper(ollamaUrl);
     const hasOllama = await ollamaHelper.isRunning();
     const piAiEnabled = agent.config.get('usePiAI') !== false; // true by default
+    const configuredCount = listConfiguredModels(agent.config).length;
 
     console.log('');
     const piTuiStatus = isPiTuiAvailable() ? green('installed') : gray('not installed');
@@ -72,6 +231,7 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
             name: 'provider',
             message: cyan('Select provider to configure:'),
             choices: [
+                { name: `   ${bold('Switch Model')} ${dim(`(${configuredCount} configured)`)}`, value: 'switch' },
                 { name: `   ${bold('Model & Provider Setup')} ${dim(`(current: ${currentProvider} · 15+ providers)`)}`, value: 'pi_ai' },
                 new inquirer.Separator(dim('  ─── Per-Provider Config ──────────')),
                 { name: `  ${statusDot(hasOpenAI, '')} OpenAI ${dim('(GPT-4, etc.)')}`, value: 'openai' },
@@ -89,7 +249,9 @@ export async function showModelsMenu(context?: CliContext): Promise<void> {
 
     if (provider === 'back') return showMainMenu();
 
-    if (provider === 'pi_ai') {
+    if (provider === 'switch') {
+        await showSwitchModelMenu(ctx);
+    } else if (provider === 'pi_ai') {
         await showPiAIConfig(ctx);
     } else if (provider === 'openai') {
         await showOpenAIConfig(ctx);

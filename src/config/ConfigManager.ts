@@ -459,8 +459,66 @@ export class ConfigManager {
         // Apply requested change first
         (this.config as any)[key] = value;
 
-        // Keep model/provider relationship coherent across provider switches.
-        const providers = new Set(['openai', 'google', 'openrouter', 'nvidia', 'anthropic', 'bedrock']);
+        this.applyModelProviderCoupling(key, value);
+
+        this.saveConfig();
+        this.syncEnvForKey(key, value);
+        // Emit event for components to react to config changes
+        eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
+        logger.info(`ConfigManager: Config key '${key}' updated and config:changed event emitted`);
+    }
+
+    /**
+     * Apply several keys as a single transaction: one file write, one cross-path sync, one
+     * `config:changed` event.
+     *
+     * Switching model and provider via two `set()` calls writes the config file twice, mirrors it
+     * to three locations twice and makes the agent rebuild MultiLLM twice. Worse, the intermediate
+     * state is wrong: setting `llmProvider` on its own rewrites `modelName` from
+     * `providerModelNames`, so for one event the agent sees the new provider paired with the
+     * previously remembered model. Callers changing both must use this method.
+     */
+    public setMany(updates: Record<string, any>) {
+        const entries = Object.entries(updates);
+        if (entries.length === 0) return;
+
+        const changed = entries.filter(([key, value]) => !isDeepEqual((this.config as any)[key], value));
+        if (changed.length === 0) return;
+
+        const oldConfig = { ...this.config };
+
+        // `llmProvider` must land first. Its coupling rewrites `modelName` from the remembered
+        // per-provider map, so an explicit `modelName` in the same batch has to be applied after
+        // it in order to win.
+        const ordered = [
+            ...changed.filter(([key]) => key === 'llmProvider'),
+            ...changed.filter(([key]) => key !== 'llmProvider'),
+        ];
+
+        for (const [key, value] of ordered) {
+            (this.config as any)[key] = value;
+            this.applyModelProviderCoupling(key, value);
+        }
+
+        this.saveConfig();
+        for (const [key, value] of ordered) {
+            this.syncEnvForKey(key, value);
+        }
+        eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
+        logger.info(`ConfigManager: Config keys [${ordered.map(([key]) => key).join(', ')}] updated and config:changed event emitted`);
+    }
+
+    /**
+     * Keep the model/provider relationship coherent across provider switches.
+     *
+     * `ollama` is in the provider set deliberately. It was absent, so a locally selected model was
+     * never recorded in `providerModelNames` and switching away from Ollama and back silently lost
+     * the choice.
+     */
+    private applyModelProviderCoupling(key: string, value: any) {
+        const providers = new Set([
+            'openai', 'google', 'openrouter', 'nvidia', 'anthropic', 'bedrock', 'ollama',
+        ]);
         const currentProvider = String((this.config as any).llmProvider || '').toLowerCase();
 
         // Ensure providerModelNames is always an object
@@ -484,12 +542,6 @@ export class ConfigManager {
                 }
             }
         }
-
-        this.saveConfig();
-        this.syncEnvForKey(key, value);
-        // Emit event for components to react to config changes
-        eventBus.emit('config:changed', { oldConfig, newConfig: this.config });
-        logger.info(`ConfigManager: Config key '${key}' updated and config:changed event emitted`);
     }
 
     public saveConfig() {

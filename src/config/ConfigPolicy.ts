@@ -37,6 +37,14 @@ export class ConfigPolicy {
             reason: 'Agents can switch providers based on availability and task requirements',
             validation: (value: any) => ['openai', 'google', 'bedrock', 'openrouter', 'nvidia', 'anthropic', 'ollama'].includes(value)
         }],
+        ['savedModels', {
+            key: 'savedModels',
+            level: ConfigChangeLevel.SAFE,
+            description: 'User-curated model shortlist for the Switch Model picker',
+            reason: 'Only a list of model ids the user can already reach; changes cannot grant new access',
+            validation: (value: any) => Array.isArray(value)
+                && value.every((e: any) => e && typeof e === 'object' && typeof e.model === 'string' && e.model.length > 0)
+        }],
         ['ollamaApiUrl', {
             key: 'ollamaApiUrl',
             level: ConfigChangeLevel.SAFE,
