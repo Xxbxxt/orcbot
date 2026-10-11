@@ -14719,7 +14719,33 @@ Respond with a single actionable task description (one sentence). Be specific ab
             startupTasks.push({ name: 'email', promise: this.email.start() });
         }
 
-        const results = await Promise.allSettled(startupTasks.map(t => t.promise));
+        // Start each channel with a bounded wait. A channel whose start() never settles
+        // (e.g. Telegram bot.launch() hanging on a 409 conflict or a network stall) must not
+        // block the agent loop from ever starting its worker pool.
+        const channelStartTimeoutMs = Math.max(5000, Number(this.config.get('channelStartTimeoutMs') ?? 30000));
+        const startChannel = async (name: string, promise: Promise<void>): Promise<string> => {
+            const startedAt = Date.now();
+            let timer: NodeJS.Timeout | undefined;
+            try {
+                await Promise.race([
+                    promise,
+                    new Promise<void>((_, reject) => {
+                        timer = setTimeout(
+                            () => reject(new Error(`channel start timed out after ${channelStartTimeoutMs}ms`)),
+                            channelStartTimeoutMs
+                        );
+                    })
+                ]);
+                logger.info(`Agent: ${name} channel started in ${Date.now() - startedAt}ms`);
+                return name;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
+        };
+
+        const results = await Promise.allSettled(
+            startupTasks.map(t => startChannel(t.name, t.promise))
+        );
         results.forEach((result, index) => {
             if (result.status === 'rejected') {
                 const name = startupTasks[index]?.name || 'unknown';

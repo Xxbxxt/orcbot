@@ -26,8 +26,22 @@ export class WhatsAppChannel implements IChannel {
     private sock: any;
     private sessionPath: string;
     private store: any;
+    private isStarting = false;
+    private shuttingDown = false;
+    private reconnectTimer: NodeJS.Timeout | null = null;
     private contactJids: Set<string> = new Set();
     private contactNames: Map<string, string> = new Map();
+    // WhatsApp Linked-ID (@lid) -> phone-number (@s.whatsapp.net) mapping learned from inbound
+    // message metadata. LIDs are not phone numbers, so they cannot be converted by digits alone.
+    private lidToPn: Map<string, string> = new Map();
+    // The account's own Linked-ID (e.g. 189915333693595@lid), used to recognise self-chat.
+    private ownerLid: string | null = null;
+
+    private static toLid(raw?: string | null): string | null {
+        if (!raw) return null;
+        const local = String(raw).split('@')[0].split(':')[0];
+        return local ? `${local}@lid` : null;
+    }
     // Cache of recent status metadata so replies can preserve WhatsApp quote preview context
     // Key: participant JID, Value: latest status metadata
     private statusRepliesByParticipant: Map<string, { key: any; message: any; timestamp?: number; cachedAtMs: number; contentType: string; hasMedia: boolean }> = new Map();
@@ -123,11 +137,13 @@ export class WhatsAppChannel implements IChannel {
         }
 
         if (jid.endsWith('@lid')) {
-            const local = jid.split('@')[0] || '';
-            const digits = local.replace(/\D/g, '');
-            if (digits.length > 0) {
-                return `${digits}@s.whatsapp.net`;
-            }
+            // Prefer a real phone-number JID learned from inbound message metadata. Never
+            // fabricate one from the LID digits — a LID is not a phone number, so doing so
+            // produces a non-existent recipient and the reply is silently dropped.
+            const mapped = this.lidToPn.get(jid);
+            if (mapped) return mapped;
+            // Fall back to addressing the LID directly (supported by modern Baileys).
+            return jid;
         }
 
         return jid;
@@ -253,39 +269,61 @@ export class WhatsAppChannel implements IChannel {
     }
 
     public async start(): Promise<void> {
-        // Reset sync phase timer whenever we start
-        this.channelStartedAt = Date.now();
-        this.isInitialSyncPhase = true;
+        // Guard against concurrent/duplicate starts. The 'connection.update' close handler
+        // below reconnects, so an unguarded start() can spawn overlapping sockets that fight
+        // over the same credentials and produce a tight open/close loop.
+        if (this.isStarting) {
+            logger.debug('WhatsAppChannel: start() ignored — already starting');
+            return;
+        }
+        this.isStarting = true;
+        this.shuttingDown = false;
 
-        logger.info('WhatsAppChannel: Starting...');
-        if (this.sock) {
-            try {
-                logger.info('WhatsAppChannel: Closing existing socket...');
-                await this.sock.end();
-            } catch (e) {
-                // Ignore
+        try {
+            // Reset sync phase timer whenever we start
+            this.channelStartedAt = Date.now();
+            this.isInitialSyncPhase = true;
+
+            logger.info('WhatsAppChannel: Starting...');
+            if (this.sock) {
+                try {
+                    logger.info('WhatsAppChannel: Closing existing socket...');
+                    // Detach listeners first so a late 'close' from the old socket cannot
+                    // trigger another reconnect while we are already starting a new one.
+                    this.sock.ev?.removeAllListeners?.();
+                    await this.sock.end();
+                } catch (e) {
+                    // Ignore
+                }
+                this.sock = undefined;
             }
+            if (!fs.existsSync(this.sessionPath)) {
+                fs.mkdirSync(this.sessionPath, { recursive: true });
+            }
+
+            logger.info(`WhatsAppChannel: Loading auth state from ${this.sessionPath}...`);
+            const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
+            this.ownerLid = WhatsAppChannel.toLid((state as any)?.creds?.me?.lid) || this.ownerLid;
+
+            logger.info('WhatsAppChannel: Fetching latest version...');
+            const { version, isLatest } = await fetchLatestBaileysVersion();
+
+            logger.info(`WhatsAppChannel: Version ${version.join('.')} (latest: ${isLatest}). Creating socket...`);
+
+            const sock = makeWASocket({
+                version,
+                auth: state,
+                logger: pino({ level: 'silent' }) as any
+            });
+            this.sock = sock;
+
+            sock.ev.on('creds.update', saveCreds);
+            this.store?.bind(sock.ev);
+        } catch (error) {
+            this.isStarting = false;
+            throw error;
         }
-        if (!fs.existsSync(this.sessionPath)) {
-            fs.mkdirSync(this.sessionPath, { recursive: true });
-        }
-
-        logger.info(`WhatsAppChannel: Loading auth state from ${this.sessionPath}...`);
-        const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
-
-        logger.info('WhatsAppChannel: Fetching latest version...');
-        const { version, isLatest } = await fetchLatestBaileysVersion();
-
-        logger.info(`WhatsAppChannel: Version ${version.join('.')} (latest: ${isLatest}). Creating socket...`);
-
-        this.sock = makeWASocket({
-            version,
-            auth: state,
-            logger: pino({ level: 'silent' }) as any
-        });
-
-        this.sock.ev.on('creds.update', saveCreds);
-        this.store?.bind(this.sock.ev);
+        this.isStarting = false;
 
         this.sock.ev.on('contacts.upsert', (contacts: any[]) => {
             this.recordContacts(contacts || []);
@@ -298,7 +336,8 @@ export class WhatsAppChannel implements IChannel {
             logger.info(`WhatsApp: Contacts set (${contacts.length})`);
         });
 
-        this.sock.ev.on('connection.update', (update: any) => {
+        const evSock = this.sock;
+        evSock.ev.on('connection.update', (update: any) => {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
@@ -308,17 +347,40 @@ export class WhatsAppChannel implements IChannel {
             }
 
             if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-                logger.warn(`WhatsApp: Connection closed. Reconnecting: ${shouldReconnect}`);
-                if (shouldReconnect) {
-                    this.start();
+                const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+                const reasonText = (lastDisconnect?.error as any)?.message || String(lastDisconnect?.error || 'unknown');
+                const loggedOut = statusCode === DisconnectReason.loggedOut;
+                logger.warn(`WhatsApp: Connection closed (statusCode=${statusCode ?? 'n/a'}, reason="${reasonText}"). Reconnecting: ${!loggedOut}`);
+
+                // Ignore closes from a socket that is no longer the active one, so a late
+                // 'close' from an old socket cannot spawn a second concurrent reconnect.
+                if (this.sock !== evSock || this.shuttingDown) {
+                    logger.debug('WhatsAppChannel: Ignoring close from stale socket');
+                    return;
                 }
+                if (loggedOut) {
+                    logger.error('WhatsApp: Logged out. Re-link the device (Connections → WhatsApp → Show QR) to continue.');
+                    eventBus.emit('whatsapp:status', 'logged_out');
+                    return;
+                }
+                if (this.reconnectTimer) return; // a reconnect is already scheduled
+                const delayMs = statusCode === DisconnectReason.connectionReplaced ? 5000 : 3000;
+                this.reconnectTimer = setTimeout(() => {
+                    this.reconnectTimer = null;
+                    this.start().catch((e) => logger.error(`WhatsAppChannel: Reconnect failed: ${e}`));
+                }, delayMs);
             } else if (connection === 'open') {
-                const ownerJid = this.sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                const ownerJid = evSock.user.id.split(':')[0] + '@s.whatsapp.net';
                 if (this.agent.config.get('whatsappOwnerJID') !== ownerJid) {
                     this.agent.config.set('whatsappOwnerJID', ownerJid);
                 }
-                logger.info(`WhatsApp: Connection opened successfully. Owner: ${ownerJid}`);
+                // Capture the account's own LID and map it to the phone JID so self-chat
+                // messages are recognised and replies are addressed correctly.
+                this.ownerLid = WhatsAppChannel.toLid((evSock.user as any)?.lid) || this.ownerLid;
+                if (this.ownerLid) {
+                    this.lidToPn.set(this.ownerLid, ownerJid);
+                }
+                logger.info(`WhatsApp: Connection opened successfully. Owner: ${ownerJid}${this.ownerLid ? ` (lid: ${this.ownerLid})` : ''}`);
                 eventBus.emit('whatsapp:status', 'connected');
                 // Exit initial sync phase after 30 seconds
                 setTimeout(() => {
@@ -339,9 +401,21 @@ export class WhatsAppChannel implements IChannel {
                 const now = Date.now();
                 for (const msg of m.messages) {
                     const senderId = msg.key.remoteJid;
+                    // Learn LID -> phone-number mappings from the alternate JID Baileys attaches
+                    // to LID-addressed messages, so outbound replies target a real recipient.
+                    if (senderId && String(senderId).endsWith('@lid')) {
+                        const alt = (msg.key as any).remoteJidAlt
+                            || (msg.key as any).participantAlt
+                            || (msg.key as any).senderPn
+                            || (msg.key as any).participantPn;
+                        const altStr = alt ? String(alt) : '';
+                        if (altStr.endsWith('@s.whatsapp.net')) {
+                            this.lidToPn.set(String(senderId), altStr);
+                        }
+                    }
                     const ownerJid = this.agent.config.get('whatsappOwnerJID');
                     const isFromMe = msg.key.fromMe;
-                    const isSelfChat = senderId === ownerJid;
+                    const isSelfChat = senderId === ownerJid || (!!this.ownerLid && senderId === this.ownerLid);
                     const messageTimestamp = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp * 1000 : Date.now();
                     const messageAge = now - messageTimestamp;
 
@@ -683,8 +757,20 @@ export class WhatsAppChannel implements IChannel {
     }
 
     public async stop(): Promise<void> {
+        this.shuttingDown = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         if (this.sock) {
-            await this.sock.end();
+            const sock = this.sock;
+            this.sock = undefined;
+            try {
+                sock.ev?.removeAllListeners?.();
+                await sock.end();
+            } catch {
+                // ignore
+            }
             logger.info('WhatsAppChannel: Stopped');
         }
     }
