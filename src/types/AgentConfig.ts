@@ -128,6 +128,12 @@ export const AgentConfigSchema = z.object({
     whatsappContactAccessMode: withEmptyAsUndefined(z.enum(['all', 'allowlist', 'blocklist']).default('all')),
     whatsappAllowedContacts: z.array(z.string()).default([]),
     whatsappBlockedContacts: z.array(z.string()).default([]),
+    // Persona used when replying to allowed non-owner contacts: 'assistant' (a chatbot) or
+    // 'owner' (reply in the owner's voice). Per-contact overrides in whatsappContactPersonas.
+    whatsappExternalPersona: withEmptyAsUndefined(z.enum(['assistant', 'owner']).default('assistant')),
+    whatsappContactPersonas: z.record(z.string(), z.enum(['assistant', 'owner'])).default({}),
+    // Allow non-owner contacts to have the agent relay a message/request to the owner.
+    notifyOwnerEnabled: coerceBool.default(true),
     whatsappGroupsEnabled: coerceBool.default(false),
     whatsappGroupPolicy: withEmptyAsUndefined(z.enum(['all', 'mention_only', 'owner_only', 'allowlist']).default('mention_only')),
     whatsappAllowedGroups: z.array(z.string()).default([]),

@@ -3,8 +3,8 @@ import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
 import {
     ALL_PROVIDERS,
-    hasConfiguredProvider as hasProviderCredentials,
-    getConfiguredProviders as getConfiguredProviderIds,
+    hasConfiguredProvider,
+    getConfiguredProviders,
 } from '../config/providerCredentials';
 import { MultiLLM, type LLMProvider, type LLMToolDefinition } from '../core/MultiLLM';
 import { __test__ as piAiAdapterTestHooks, isPiAiLinked } from '../core/PiAIAdapter';
@@ -112,13 +112,7 @@ function isLoopbackHost(host: string): boolean {
     return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1';
 }
 
-function hasConfiguredProvider(config: ConfigManager, provider: string): boolean {
-    return hasProviderCredentials(config, provider);
-}
 
-function getConfiguredProviders(config: ConfigManager): string[] {
-    return getConfiguredProviderIds(config);
-}
 
 function getConfiguredChannels(config: ConfigManager): string[] {
     const configured: string[] = [];
@@ -543,7 +537,7 @@ function hasConfiguredProviderOrOAuth(config: ConfigManager, provider: string): 
         default:
             // API-key providers (groq, mistral, deepseek, xai, perplexity, cerebras, custom, ...)
             // all share one readiness rule: a populated credential/base URL.
-            return hasProviderCredentials(config, provider)
+            return hasConfiguredProvider(config, provider)
                 ? { ready: true, authMode: 'api-key', notes }
                 : { ready: false, authMode: 'none', notes };
     }

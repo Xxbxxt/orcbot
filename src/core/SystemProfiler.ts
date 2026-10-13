@@ -4,6 +4,7 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { MemoryManager } from '../memory/MemoryManager';
 import { DEFAULT_MODEL_IDS } from '../config/modelDefaults';
+import { getConfiguredProviders } from '../config/providerCredentials';
 
 /**
  * Profiles the system the agent is running on and caches knowledge
@@ -134,21 +135,10 @@ export class SystemProfiler {
             const provider = config.get?.('llmProvider');
             if (provider) configuredProviders.add(provider);
             
-            // Check for provider-specific API keys
-            if (config.get?.('openaiApiKey')) configuredProviders.add('openai');
-            if (config.get?.('googleApiKey')) configuredProviders.add('gemini');
-            if (config.get?.('anthropicApiKey')) configuredProviders.add('anthropic');
-            if (config.get?.('nvidiaApiKey')) configuredProviders.add('nvidia');
-            if (config.get?.('openrouterApiKey')) configuredProviders.add('openrouter');
-            if (config.get?.('bedrockRegion')) configuredProviders.add('bedrock');
-            if (config.get?.('ollamaUrl')) configuredProviders.add('ollama');
-            if (config.get?.('groqApiKey')) configuredProviders.add('groq');
-            if (config.get?.('mistralApiKey')) configuredProviders.add('mistral');
-            if (config.get?.('deepseekApiKey')) configuredProviders.add('deepseek');
-            if (config.get?.('xaiApiKey')) configuredProviders.add('xai');
-            if (config.get?.('perplexityApiKey')) configuredProviders.add('perplexity');
-            if (config.get?.('cerebrasApiKey')) configuredProviders.add('cerebras');
-            if (config.get?.('customBaseUrl')) configuredProviders.add('custom');
+            for (const p of getConfiguredProviders(config)) {
+                configuredProviders.add(p);
+                if (p === 'google') configuredProviders.add('gemini');
+            }
         }
 
         // Detect available skills

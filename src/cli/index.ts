@@ -93,6 +93,7 @@ import {
     showGitHubCliMenu,
     showGatewayMenu,
     showWebDashboardMenu,
+    openDashboardInBrowser,
 } from './screens/ToolingScreen';
 
 dotenv.config(); // Local .env
@@ -1411,19 +1412,7 @@ program
         });
     });
 
-function openDashboardInBrowser(url: string): void {
-    try {
-        if (process.platform === 'win32') {
-            spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' });
-        } else if (process.platform === 'darwin') {
-            spawnSync('open', [url], { stdio: 'ignore' });
-        } else {
-            spawnSync('xdg-open', [url], { stdio: 'ignore' });
-        }
-    } catch (error: any) {
-        logger.warn(`Could not open browser automatically: ${error?.message || error}`);
-    }
-}
+
 
 program
     .command('mcp')

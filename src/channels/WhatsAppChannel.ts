@@ -29,6 +29,8 @@ export class WhatsAppChannel implements IChannel {
     private isStarting = false;
     private shuttingDown = false;
     private reconnectTimer: NodeJS.Timeout | null = null;
+    /** Live socket state: true only while the connection is open. */
+    private connected = false;
     private contactJids: Set<string> = new Set();
     private contactNames: Map<string, string> = new Map();
     // WhatsApp Linked-ID (@lid) -> phone-number (@s.whatsapp.net) mapping learned from inbound
@@ -197,9 +199,43 @@ export class WhatsAppChannel implements IChannel {
         return jid;
     }
 
+    /** Candidate JID forms (phone JID + LID) for policy and persona matching. */
+    private policyCandidates(jid?: string): Set<string> {
+        const normalized = this.normalizePolicyJid(jid);
+        const candidates = new Set<string>([normalized]);
+        if (normalized.endsWith('@lid')) {
+            const mapped = this.lidToPn.get(normalized);
+            if (mapped) candidates.add(this.normalizePolicyJid(mapped));
+        } else {
+            for (const [lid, pn] of this.lidToPn.entries()) {
+                if (this.normalizePolicyJid(pn) === normalized) candidates.add(lid);
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Resolve the reply persona for an external (non-owner) contact: 'assistant' (chatbot) or
+     * 'owner' (reply in the owner's voice). Per-contact overrides win over the global default.
+     */
+    private resolveExternalPersona(jid?: string): 'assistant' | 'owner' {
+        const candidates = this.policyCandidates(jid);
+        const personas = (this.agent.config.get('whatsappContactPersonas') || {}) as Record<string, string>;
+        for (const [key, value] of Object.entries(personas)) {
+            if (candidates.has(this.normalizePolicyJid(key))) {
+                return value === 'owner' ? 'owner' : 'assistant';
+            }
+        }
+        const fallback = String(this.agent.config.get('whatsappExternalPersona') || 'assistant').toLowerCase();
+        return fallback === 'owner' ? 'owner' : 'assistant';
+    }
+
     private canProcessContact(jid?: string): { allowed: boolean; reason?: string } {
         const normalized = this.normalizePolicyJid(jid);
         if (!normalized) return { allowed: false, reason: 'missing_jid' };
+
+        // Match policy entries against both the phone-JID and LID forms when the mapping is known.
+        const candidates = this.policyCandidates(jid);
 
         const mode = String(this.agent.config.get('whatsappContactAccessMode') || 'all').toLowerCase();
         const allowlist = ((this.agent.config.get('whatsappAllowedContacts') || []) as string[])
@@ -209,11 +245,13 @@ export class WhatsAppChannel implements IChannel {
             .map((entry) => this.normalizePolicyJid(entry))
             .filter(Boolean);
 
-        if (blocklist.includes(normalized)) {
+        const matches = (list: string[]) => list.some((entry) => candidates.has(entry));
+
+        if (matches(blocklist)) {
             return { allowed: false, reason: 'blocked_contact' };
         }
 
-        if (mode === 'allowlist' && !allowlist.includes(normalized)) {
+        if (mode === 'allowlist' && !matches(allowlist)) {
             return { allowed: false, reason: 'not_in_allowlist' };
         }
 
@@ -302,8 +340,17 @@ export class WhatsAppChannel implements IChannel {
             }
 
             logger.info(`WhatsAppChannel: Loading auth state from ${this.sessionPath}...`);
+            const hadCredentials = this.hasStoredCredentials();
             const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
             this.ownerLid = WhatsAppChannel.toLid((state as any)?.creds?.me?.lid) || this.ownerLid;
+            // If the credentials were removed, clear the stale "linked account" so the UI does not
+            // keep reporting a connection that no longer exists.
+            if (!hadCredentials) {
+                if (this.agent.config.get('whatsappOwnerJID')) {
+                    this.agent.config.set('whatsappOwnerJID', undefined);
+                }
+                logger.info('WhatsAppChannel: No stored credentials found. A new QR scan is required to link.');
+            }
 
             logger.info('WhatsAppChannel: Fetching latest version...');
             const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -347,6 +394,7 @@ export class WhatsAppChannel implements IChannel {
             }
 
             if (connection === 'close') {
+                this.connected = false;
                 const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
                 const reasonText = (lastDisconnect?.error as any)?.message || String(lastDisconnect?.error || 'unknown');
                 const loggedOut = statusCode === DisconnectReason.loggedOut;
@@ -370,6 +418,7 @@ export class WhatsAppChannel implements IChannel {
                     this.start().catch((e) => logger.error(`WhatsAppChannel: Reconnect failed: ${e}`));
                 }, delayMs);
             } else if (connection === 'open') {
+                this.connected = true;
                 const ownerJid = evSock.user.id.split(':')[0] + '@s.whatsapp.net';
                 if (this.agent.config.get('whatsappOwnerJID') !== ownerJid) {
                     this.agent.config.set('whatsappOwnerJID', ownerJid);
@@ -570,10 +619,17 @@ export class WhatsAppChannel implements IChannel {
                                 continue;
                             }
                         } else {
-                            const policy = this.canProcessContact(senderId);
-                            if (!policy.allowed) {
-                                logger.info(`WhatsApp: Skipping message from ${senderId} due to contact policy (${policy.reason})`);
-                                continue;
+                            // The owner's own self-chat is always allowed, regardless of the
+                            // contact allowlist, so you can still command the agent.
+                            const isOwnerSender = isSelfChat
+                                || senderId === ownerJid
+                                || (!!this.ownerLid && senderId === this.ownerLid);
+                            if (!isOwnerSender) {
+                                const policy = this.canProcessContact(senderId);
+                                if (!policy.allowed) {
+                                    logger.info(`WhatsApp: Skipping message from ${senderId} due to contact policy (${policy.reason})`);
+                                    continue;
+                                }
                             }
                         }
 
@@ -721,6 +777,7 @@ export class WhatsAppChannel implements IChannel {
                                     isSelfChat,
                                     isGroup,
                                     groupParticipant: isGroup ? this.normalizePolicyJid(msg.key.participant) : undefined,
+                                    externalPersona: (!isSelfChat && !isGroup) ? this.resolveExternalPersona(senderId) : undefined,
                                     suppressReply: true, // Suppress auto-reply during initial sync
                                     autoReact: this.autoReactEnabled,
                                     profiling: this.profilingEnabled
@@ -744,6 +801,7 @@ export class WhatsAppChannel implements IChannel {
                                     isSelfChat,
                                     isGroup,
                                     groupParticipant: isGroup ? this.normalizePolicyJid(msg.key.participant) : undefined,
+                                    externalPersona: (!isSelfChat && !isGroup) ? this.resolveExternalPersona(senderId) : undefined,
                                     autoReact: this.autoReactEnabled,
                                     profiling: this.profilingEnabled
                                 }
@@ -758,6 +816,7 @@ export class WhatsAppChannel implements IChannel {
 
     public async stop(): Promise<void> {
         this.shuttingDown = true;
+        this.connected = false;
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -772,6 +831,62 @@ export class WhatsAppChannel implements IChannel {
                 // ignore
             }
             logger.info('WhatsAppChannel: Stopped');
+        }
+    }
+
+    /**
+     * Unlink and revoke this WhatsApp connection. Performs a server-side logout (which revokes the
+     * linked device on WhatsApp) and clears the stored session, so the next start requires a fresh
+     * QR scan. Safe to call when not connected.
+     */
+    public async logout(): Promise<void> {
+        this.shuttingDown = true;
+        this.connected = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        const sock = this.sock;
+        this.sock = undefined;
+        try {
+            if (sock) {
+                sock.ev?.removeAllListeners?.();
+                await sock.logout(); // revoke the linked device on WhatsApp's servers
+            }
+        } catch (e) {
+            logger.warn(`WhatsAppChannel: Socket logout failed (continuing to clear session): ${e}`);
+        }
+
+        try {
+            if (fs.existsSync(this.sessionPath)) {
+                fs.rmSync(this.sessionPath, { recursive: true, force: true });
+                logger.info(`WhatsAppChannel: Cleared session at ${this.sessionPath}`);
+            }
+        } catch (e) {
+            logger.warn(`WhatsAppChannel: Failed to clear session directory: ${e}`);
+        }
+
+        this.ownerLid = null;
+        this.lidToPn.clear();
+        if (this.agent.config.get('whatsappOwnerJID')) {
+            this.agent.config.set('whatsappOwnerJID', undefined);
+        }
+        eventBus.emit('whatsapp:status', 'logged_out');
+        logger.info('WhatsAppChannel: Unlinked and revoked.');
+    }
+
+    /** True only while the WhatsApp socket is actually open. */
+    public isConnected(): boolean {
+        return this.connected && !!this.sock;
+    }
+
+    /** True when a stored session (creds) exists on disk. */
+    public hasStoredCredentials(): boolean {
+        try {
+            return fs.existsSync(path.join(this.sessionPath, 'creds.json'));
+        } catch {
+            return false;
         }
     }
 

@@ -14,6 +14,8 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { Agent } from '../core/Agent';
 import { ConfigManager } from '../config/ConfigManager';
+import { hasConfiguredProvider } from '../config/providerCredentials';
+import { inferProviderFromModel } from '../config/providerInference';
 import { collectDoctorReport } from '../cli/Doctor';
 import { logger } from '../utils/logger';
 import { eventBus } from '../core/EventBus';
@@ -592,6 +594,7 @@ export class GatewayServer {
             },
             whatsapp: {
                 configured: !!byId.get('whatsapp')?.configured,
+                connected: this.agent.whatsapp?.isConnected?.() ?? false,
                 autoReply: toggleValue('whatsapp', 'whatsappAutoReplyEnabled'),
                 statusReply: toggleValue('whatsapp', 'whatsappStatusReplyEnabled'),
                 autoReact: toggleValue('whatsapp', 'whatsappAutoReactEnabled'),
@@ -2045,7 +2048,8 @@ export class GatewayServer {
             configuredProviders: this.getConfiguredProviders(),
             channels: {
                 telegram: !!this.config.get('telegramToken'),
-                whatsapp: this.config.get('whatsappEnabled') || false
+                whatsapp: this.config.get('whatsappEnabled') || false,
+                whatsappConnected: this.agent.whatsapp?.isConnected?.() ?? false
             },
             safeMode: this.config.get('safeMode') || false,
             skillCount: this.agent.skills.getAllSkills().length,
@@ -2091,34 +2095,21 @@ export class GatewayServer {
     }
 
     private getConfiguredProviders(): { name: string; configured: boolean; isActive?: boolean }[] {
-        const modelName = (this.config.get('modelName') || '').toLowerCase();
+        const modelName = this.config.get('modelName') || '';
         const explicitProvider = this.config.get('llmProvider');
-        
-        // Infer which provider would be used for current model
-        let inferredProvider = 'openai'; // default
-        if (modelName.startsWith('ollama:') || modelName.startsWith('local:')) inferredProvider = 'ollama';
-        else if (modelName.includes('gemini')) inferredProvider = 'google';
-        else if (modelName.includes('claude')) inferredProvider = 'anthropic';
-        else if (modelName.includes('llama') || modelName.includes('mixtral')) inferredProvider = 'openrouter';
-        else if (modelName.includes('gpt') || modelName.includes('o1') || modelName.includes('o3')) inferredProvider = 'openai';
-        
-        const activeProvider = explicitProvider || inferredProvider;
+        const activeProvider = explicitProvider || inferProviderFromModel(modelName);
 
-        return [
-            { name: 'openai', configured: !!this.config.get('openaiApiKey'), isActive: activeProvider === 'openai' },
-            { name: 'google', configured: !!this.config.get('googleApiKey'), isActive: activeProvider === 'google' },
-            { name: 'anthropic', configured: !!this.config.get('anthropicApiKey'), isActive: activeProvider === 'anthropic' },
-            { name: 'openrouter', configured: !!this.config.get('openrouterApiKey'), isActive: activeProvider === 'openrouter' },
-            { name: 'nvidia', configured: !!this.config.get('nvidiaApiKey'), isActive: activeProvider === 'nvidia' },
-            { name: 'groq', configured: !!this.config.get('groqApiKey'), isActive: activeProvider === 'groq' },
-            { name: 'mistral', configured: !!this.config.get('mistralApiKey'), isActive: activeProvider === 'mistral' },
-            { name: 'deepseek', configured: !!this.config.get('deepseekApiKey'), isActive: activeProvider === 'deepseek' },
-            { name: 'xai', configured: !!this.config.get('xaiApiKey'), isActive: activeProvider === 'xai' },
-            { name: 'perplexity', configured: !!this.config.get('perplexityApiKey'), isActive: activeProvider === 'perplexity' },
-            { name: 'cerebras', configured: !!this.config.get('cerebrasApiKey'), isActive: activeProvider === 'cerebras' },
-            { name: 'custom', configured: !!this.config.get('customBaseUrl'), isActive: activeProvider === 'custom' },
-            { name: 'bedrock', configured: !!this.config.get('bedrockAccessKeyId'), isActive: activeProvider === 'bedrock' }
+        const providers = [
+            'openai', 'google', 'anthropic', 'openrouter', 'nvidia',
+            'groq', 'mistral', 'deepseek', 'xai', 'perplexity',
+            'cerebras', 'custom', 'bedrock'
         ];
+
+        return providers.map(name => ({
+            name,
+            configured: hasConfiguredProvider(this.config, name),
+            isActive: activeProvider === name
+        }));
     }
 
     private isSensitiveKey(key: string): boolean {

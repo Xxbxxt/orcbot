@@ -1740,7 +1740,7 @@ export async function showGatewayMenu(context?: CliContext): Promise<void> {
 
 let managedGateway: { instance: any; port: number; host: string } | null = null;
 
-function openDashboardInBrowser(url: string): void {
+export function openDashboardInBrowser(url: string): void {
     try {
         if (process.platform === 'win32') {
             spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' });

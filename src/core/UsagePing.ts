@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { ConfigManager } from '../config/ConfigManager';
+import { getConfiguredProviders } from '../config/providerCredentials';
 import { logger } from '../utils/logger';
 
 interface UsagePingPayload {
@@ -97,23 +98,11 @@ export class UsagePing {
     }
 
     private getPresentApiKeys(): string[] {
-        const keyMap: Array<[string, unknown]> = [
-            ['openai', this.config.get('openaiApiKey')],
-            ['openrouter', this.config.get('openrouterApiKey')],
-            ['google', this.config.get('googleApiKey')],
-            ['anthropic', this.config.get('anthropicApiKey')],
-            ['nvidia', this.config.get('nvidiaApiKey')],
-            ['groq', this.config.get('groqApiKey')],
-            ['mistral', this.config.get('mistralApiKey')],
-            ['deepseek', this.config.get('deepseekApiKey')],
-            ['xai', this.config.get('xaiApiKey')],
-            ['perplexity', this.config.get('perplexityApiKey')],
-            ['cerebras', this.config.get('cerebrasApiKey')],
-            ['custom', this.config.get('customBaseUrl')],
-            ['bedrock', this.config.get('bedrockAccessKeyId')],
-            ['serper', this.config.get('serperApiKey')],
-        ];
-        return keyMap.filter(([, value]) => !!value).map(([name]) => name);
+        const providers = getConfiguredProviders(this.config);
+        if (this.config.get('serperApiKey')) {
+            providers.push('serper');
+        }
+        return providers;
     }
 
     private getOrCreateInstallId(): string {

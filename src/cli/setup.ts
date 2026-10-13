@@ -88,7 +88,7 @@ export async function runSetup() {
     const openaiApiKey = checkCancel(await p.password({ message: `OpenAI API Key ${maskHint('OPENAI_API_KEY')}:` }));
     const googleApiKey = checkCancel(await p.password({ message: `Google (Gemini) API Key ${maskHint('GOOGLE_API_KEY')}:` }));
 
-    let openrouterApiKey;
+    let openrouterApiKey: string | undefined;
     if (llmProvider === 'openrouter' || !llmProvider) {
         openrouterApiKey = checkCancel(await p.password({ message: `OpenRouter API Key ${maskHint('OPENROUTER_API_KEY')}:` }));
     }
@@ -96,7 +96,9 @@ export async function runSetup() {
     const nvidiaApiKey = checkCancel(await p.password({ message: `NVIDIA API Key ${maskHint('NVIDIA_API_KEY')}:` }));
     const anthropicApiKey = checkCancel(await p.password({ message: `Anthropic (Claude) API Key ${maskHint('ANTHROPIC_API_KEY')}:` }));
 
-    let bedrockRegion, bedrockAccessKeyId, bedrockSecretAccessKey;
+    let bedrockRegion: string | undefined;
+    let bedrockAccessKeyId: string | undefined;
+    let bedrockSecretAccessKey: string | undefined;
     if (llmProvider === 'bedrock') {
         bedrockRegion = checkCancel(await p.text({ message: 'AWS Bedrock Region (e.g., us-east-1):' }));
         bedrockAccessKeyId = checkCancel(await p.password({ message: `Bedrock Access Key ID ${maskHint('BEDROCK_ACCESS_KEY_ID')}:` }));
@@ -105,38 +107,40 @@ export async function runSetup() {
 
     const serperApiKey = checkCancel(await p.password({ message: `Serper.dev API Key (web search) ${maskHint('SERPER_API_KEY')}:` }));
 
-    let groqApiKey;
+    let groqApiKey: string | undefined;
     if (llmProvider === 'groq' || !llmProvider) {
         groqApiKey = checkCancel(await p.password({ message: `Groq API Key ${maskHint('GROQ_API_KEY')}:` }));
     }
 
-    let mistralApiKey;
+    let mistralApiKey: string | undefined;
     if (llmProvider === 'mistral' || !llmProvider) {
         mistralApiKey = checkCancel(await p.password({ message: `Mistral AI API Key ${maskHint('MISTRAL_API_KEY')}:` }));
     }
 
-    let cerebrasApiKey;
+    let cerebrasApiKey: string | undefined;
     if (llmProvider === 'cerebras') {
         cerebrasApiKey = checkCancel(await p.password({ message: `Cerebras API Key ${maskHint('CEREBRAS_API_KEY')}:` }));
     }
 
-    let xaiApiKey;
+    let xaiApiKey: string | undefined;
     if (llmProvider === 'xai') {
         xaiApiKey = checkCancel(await p.password({ message: `xAI (Grok) API Key ${maskHint('XAI_API_KEY')}:` }));
     }
 
-    let deepseekApiKey;
+    let deepseekApiKey: string | undefined;
     if (llmProvider === 'deepseek' || !llmProvider) {
         deepseekApiKey = checkCancel(await p.password({ message: `DeepSeek API Key ${maskHint('DEEPSEEK_API_KEY')}:` }));
     }
 
-    let perplexityApiKey;
+    let perplexityApiKey: string | undefined;
     if (llmProvider === 'perplexity') {
         perplexityApiKey = checkCancel(await p.password({ message: `Perplexity API Key ${maskHint('PERPLEXITY_API_KEY')}:` }));
     }
 
     // Custom OpenAI-compatible endpoint
-    let customBaseUrl, customApiKey, customModelName;
+    let customBaseUrl: string | undefined;
+    let customApiKey: string | undefined;
+    let customModelName: string | undefined;
     if (llmProvider === 'custom') {
         customBaseUrl = checkCancel(await p.text({ message: `Custom Base URL ${maskHint('CUSTOM_BASE_URL')} (e.g. https://api.deepseek.com/v1):` }));
         customApiKey = checkCancel(await p.password({ message: `Custom API Key ${maskHint('CUSTOM_API_KEY')} (optional):` }));
@@ -329,10 +333,7 @@ export async function runSetup() {
         ...(gatewayEnabled ? { gatewayPort: gatewayPort || 3100 } : {}),
         // Bedrock (non-secret)
         ...(bedrockRegion ? { bedrockRegion } : {}),
-        // Explicit provider keys are persisted so ConfigManager can hot-reload them; the
-        // secret values themselves also go to .env below.
-        ...(deepseekApiKey ? { deepseekApiKey } : {}),
-        ...(perplexityApiKey ? { perplexityApiKey } : {}),
+        // Custom endpoint configuration (non-secret settings)
         ...(customBaseUrl ? { customBaseUrl } : {}),
         ...(customModelName ? { customModelName } : {})
     };
